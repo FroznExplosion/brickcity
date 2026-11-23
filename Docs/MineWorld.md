@@ -977,3 +977,79 @@ headless runs of other chats went on through it and it started near 81 C.
 Baseline GPU 6.06 ms on foot, 4.02 ms 25 m up (section 18: 5.48 / 3.89,
 quiet, 62 C); the chamfered near mesh's own share 0.57 ms; 0.69M triangles
 on foot against 0.64M with it hidden. Retake it quiet and cool.
+
+## 20. The ground's bricks, checked against its data (2026-11-22)
+
+An audit of what a tile draws and collides against what the field holds
+(`BrickTerrain.audit_tile`, run by `tools/probes/terrain_audit_probe.gd`,
+headless, over 30 tiles of generator 1, with and without the deep tier, and
+again after shots). Six faults, from the user's list:
+
+**Invisible walls.** A column top's collider box reached down through a cave
+under a roof one or two bricks thick: 7,158 open-air cells inside boxes over
+30 tiles. A box now stops where its column stops being solid (`WHERE EACH
+COLUMN'S TOP STOPS BEING SOLID`, brick_terrain.cpp); the gaps where tiles
+meet the deep sections are closed too. Now 0, and no exposed ground lost its
+collider.
+
+**See-through faces.** A top brick's side facing a cave or an overhang was
+drawn by nothing, nor were a brick's sides under the tile or plate laid on
+it: 213 faces missing, 687 after shots. Each piece now notes which of its
+sides another piece draws (`sides_drawn`) and draws the rest. Now 0.
+
+**Studs.** 24 % of surface cells had studs, and 5,373 of 5,487 bricks with a
+brick standing on them were smooth. The user's rule: any brick with a brick
+on it has studs. A top brick whose bond footprint reaches under a higher
+column is HELD: a studded brick, and if it takes a second course, a studded
+plate, never a smooth tile. The surface is now 54 % studded, still a mix.
+Cave floors had none; the deep sections' floors now take them
+(`CAVE_STUD_CHANCE`, 0.9), drawn by their TerrainTile like a surface tile's.
+
+**Cave studs go dark with the floor.** With sky light on (section 18) a stud
+carries its cell's sky and block light in its MultiMesh custom data (stride
+20, `stud_stride`), and `TerrainTile.sky_stud_material` (printed.gdshader
+with `#define INSTANCE_SKY`, printed_core's curve and light) draws it as dark
+as the floor it stands on.
+
+**The underside.** A cave roof or an overhang is the bottoms of the bricks
+over it, and drew as flat plastic. terrain.gdshader now draws a falling
+brick's open bottom there -- rim, ribs, the hollow with parallax -- from
+`shaders/print_underside.gdshaderinc`, the uniforms and `ps_under_sd` split
+out of print_surface so both shaders share them (print_surface still has
+`ps_underside`; terrain has its own copy, with no print_surface in it: the
+two share print-line uniform names).
+
+**The flashes as ground breaks or falls.** `-- --gate=handover` notes, after
+every drawn frame, which tiles have swapped and what is out:
+
+- the break flash: a brick across a tile edge was in one tile and out of
+  the other for a frame, its studs with it. Every tile one edit names is now
+  one batch and swaps in the same frame (`TerrainStreamer._batch_of`;
+  `TerrainDeep` the same for sections);
+- the sand flash: sand had a frame with its ground swapped and nothing drawn.
+  What falls HOLDS the tiles that still draw it (`hold_tiles`) until its own
+  mesh is made, then swaps them and lets it go in one call (`swap_ready`);
+- stray studs as a block started to fall: physics interpolation drew a
+  pooled stud halfway between its old and new buffer slot for a tick.
+  TerrainTile is not interpolated.
+
+Run on the fixes: 0 frames half swapped, 0 gaps, 0 drawn twice, for the
+break, a falling piece and falling sand. The break check also checks the
+shot brick's cells are empty. Its pictures (`user://dev/handover/`) never
+showed the hole a break leaves, though the cells, the rebuilt tiles' meshes
+and the game all have it, so the check is the swap count, not the pictures.
+The gate aims with `_aim_eye`, which corrects for where the walker's eye
+really lands.
+
+**The chamfer's edge test stays main's.** This work also had the near
+tier's chamfer test every cell along a merged face's edge (one probe at its
+first cell, the thought was, could bevel an edge whose far half was
+coplanar). Merged with section 19's fix of which bit is which edge, it
+opened 927 magenta pixels in `-- --gate=seams` (0 with one probe), and
+`bevel_gap_probe` showed no slit with one probe either; so one probe it is.
+
+**Probes.** `terrain_audit_probe` (above), `terrain_probe`,
+`terrain_collapse_probe`, `mine_world_probe`; `-- --gate=handover`.
+`terrain_probe`'s two smooth-terrain checks ("turning it off gives the
+packer its cells back", "every cell has exactly one top surface") fail on
+main too, from before this work.

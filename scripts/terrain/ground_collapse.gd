@@ -67,8 +67,10 @@ var _survey_in := 0.0
 var _job := -1
 var _holder := [null]
 ## What a survey let go, held until the tiles over it are rebuilt without it
-## (the old tile draws it till then): {rect, born, kind, ...}.
+## (the old tile draws it till then): {rect, lo, hi, owner, born, kind, ...}.
+## It holds those tiles (mine_world.hold_ground) so they wait for it too.
 var _waiting: Array = []
+var _owners := 0
 ## Falling columns: {x, z, y (metres, bottom), v, mats, drop}.
 var _sand: Array = []
 var _sand_mm: MultiMeshInstance3D = null
@@ -157,6 +159,8 @@ func reset() -> void:
 		_job = -1
 	_boxes.clear()
 	for w in _waiting:
+		if w.has("owner"):
+			world.unhold_ground(w.rect, w.owner)
 		if w.kind == "piece" and int(w.chunk) >= 0:
 			bricks.release_chunk(int(w.chunk))
 	_waiting.clear()
@@ -348,8 +352,7 @@ func _let_sand_go(cols: PackedInt32Array, mats: PackedByteArray) -> void:
 		return
 	columns_fell += out.size()
 	world.terrain_edited(res)
-	_waiting.append({"kind": "sand", "rect": _tiles_rect(res), "born": Time.get_ticks_msec(),
-			"cols": out})
+	_wait({"kind": "sand", "cols": out}, res)
 
 
 func _fall_sand(delta: float) -> void:
@@ -578,8 +581,21 @@ func _let_group_go(g: PackedInt32Array) -> void:
 	bricks.bake_chunk_async(chunk)
 	groups_let_go += 1
 	bricks_let_go += n
-	_waiting.append({"kind": "piece", "rect": _tiles_rect(res), "born": Time.get_ticks_msec(),
-			"chunk": chunk, "job": []})
+	_wait({"kind": "piece", "chunk": chunk, "job": []}, res)
+
+
+## Wait for the ground: `w` holds the tiles and sections its cells were
+## cleared from (`res`, clear_runs') until it can be drawn in the same frame
+## they stop drawing it (_release; Docs/MineWorld.md 20).
+func _wait(w: Dictionary, res: Dictionary) -> void:
+	_owners += 1
+	w["owner"] = "fall%d" % _owners
+	w["rect"] = _tiles_rect(res)
+	w["lo"] = res.get("box_lo")
+	w["hi"] = res.get("box_hi")
+	w["born"] = Time.get_ticks_msec()
+	world.hold_ground(w.rect, w.lo, w.hi, w.owner)
+	_waiting.append(w)
 
 
 static func _part(sx: int, sz: int) -> String:
@@ -592,8 +608,10 @@ static func _part(sx: int, sz: int) -> String:
 	return "brick_1x1"
 
 
-## What waits for its tiles: let go once they are rebuilt (and a piece's mesh
-## made), so the old tile and the falling thing never draw together.
+## What waits for its tiles: let go in the frame they are swapped in without
+## it, once its own mesh is made -- it holds them till then, they hold it till
+## they are built (Docs/MineWorld.md 20) -- so the old tile and the falling
+## thing never draw together, and never neither.
 func _release() -> void:
 	var now := Time.get_ticks_msec()
 	var i := 0
@@ -602,10 +620,12 @@ func _release() -> void:
 		if w.kind == "piece" and not _mesh_ready(w):
 			i += 1
 			continue
-		var fresh: bool = world.tiles_fresh(w.rect)
-		if not fresh and now - int(w.born) < WAIT_MAX_MS:
+		var ready: bool = world.ground_ready(w.rect, w.lo, w.hi, w.owner)
+		if not ready and now - int(w.born) < WAIT_MAX_MS:
 			i += 1
 			continue
+		world.unhold_ground(w.rect, w.owner)
+		world.swap_ground(w.rect, w.lo, w.hi)
 		_waiting.remove_at(i)
 		if w.kind == "sand":
 			_sand.append_array(w.cols)

@@ -1,6 +1,7 @@
 shader_type spatial;
 render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 #include "res://shaders/weather.gdshaderinc"
+#include "res://shaders/print_underside.gdshaderinc"
 
 // L in heightfield_test: tint every piece of ground by its LOD level. 0 is
 // the detailed tiles; a coarse block says its own level per instance.
@@ -430,6 +431,93 @@ void fragment() {
         }
     }
 
+    // --- the underside (Docs/MineWorld.md 20) -----------------------------
+    //
+    // A brick's bottom is OPEN: its rim, the ribs that stand in for tubes and
+    // the hollow between them (print_surface's ps_underside), as a falling
+    // brick draws it (brick.gdshader). A cave roof or an overhang is the
+    // bottoms of the bricks over it, and drew as flat plastic. UV is the
+    // place in the brick's bottom and UV2 that bottom (the mesher's), so the
+    // pattern is the brick's own, across tile edges too.
+    const float UNDER_BEAD = 0.020;  // print_surface bottom_bead_width
+    float under_solid = 1.0;
+    float under_occ = 1.0;
+    if (underside_hollow && !no_piece && v_flat_normal.y < -0.95) {
+        vec2 fsize = v_face;
+        float usd = ps_under_sd(cell, fsize);
+        under_solid = clamp(0.5 - usd / max(fwidth(usd), 1e-5), 0.0, 1.0);
+        if (under_solid < 0.99) {
+            float shade = mix(under_wall, under_cavity, 0.5);
+            if (dist < under_depth_range) {
+                const float SD_STEP = 0.003;
+                // The view ray walked up into the hollow by the distance to
+                // the nearest rim or rib (brick.gdshader's sphere trace), so
+                // the rim and ribs hide what is behind them as the eye moves.
+                vec2 hp = cell;
+                float hs = under_depth;
+                bool on_wall = false;
+                float pfade = 1.0 - smoothstep(under_parallax_range * 0.6, under_parallax_range, dist);
+                if (pfade > 0.0) {
+                    vec3 dv = transpose(mat3(MODEL_MATRIX)) * (mat3(INV_VIEW_MATRIX) * normalize(VERTEX));
+                    if (dv.y > 0.02) {
+                        vec2 run = dv.xz / dv.y * pfade;
+                        float rl = max(length(run), 1e-4);
+                        hs = 0.0;
+                        for (int i = 0; i < 16; i++) {
+                            float sd = ps_under_sd(hp, fsize);
+                            if (sd < 0.001) {
+                                on_wall = true;
+                                break;
+                            }
+                            float st = sd / rl;
+                            if (hs + st >= under_depth) {
+                                hp += run * (under_depth - hs);
+                                hs = under_depth;
+                                break;
+                            }
+                            hs += st;
+                            hp += run * st;
+                        }
+                        if (!on_wall && hs < under_depth) {
+                            hs = under_depth;
+                        }
+                    }
+                }
+                float near = 1.0 - smoothstep(under_depth_range * 0.6, under_depth_range, dist);
+                float upk = hs / under_depth;
+                vec3 ax_u = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[0].xyz);
+                vec3 ax_v = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[2].xyz);
+                if (on_wall) {
+                    float s0 = ps_under_sd(hp, fsize);
+                    vec2 g = vec2(ps_under_sd(hp + vec2(SD_STEP, 0.0), fsize) - s0,
+                                  ps_under_sd(hp + vec2(0.0, SD_STEP), fsize) - s0);
+                    float gl = length(g);
+                    if (gl > 1e-7) {
+                        vec2 dir = g / gl;
+                        vec3 wall_n = normalize(ax_u * dir.x * 0.25 + ax_v * dir.y * 0.25 + NORMAL);
+                        NORMAL = normalize(mix(NORMAL, wall_n, near));
+                    }
+                }
+                // The walls' lines a layer apart up them, the roof's a bead
+                // apart across it.
+                float lt = on_wall ? hs / layer_height : hp.x / UNDER_BEAD;
+                float laa = max(fwidth(lt), 1e-5);
+                float lres = 1.0 - smoothstep(resolve_begin, resolve_end, laa);
+                float ink = (1.0 - smoothstep(0.0, max(laa * 1.4, 0.18), abs(fract(lt) - 0.5)))
+                        * lres * near;
+                shade = mix(under_wall, under_cavity, near * (on_wall ? upk : 1.0) + (1.0 - near) * 0.5);
+                if (on_wall) {
+                    shade *= mix(1.0, 0.8, upk * near);
+                }
+                albedo *= mix(1.0, 0.82, ink * (1.0 - under_solid));
+            }
+            // What the hollow loses is sky (AO, below), and a little of its
+            // own light, so it reads as going up into the brick.
+            under_occ = mix(shade, 1.0, under_solid);
+            albedo *= mix(mix(1.0, shade, 0.6), 1.0, under_solid);
+        }
+    }
+
     // --- printed surface -------------------------------------------------
     float print_rough = 0.0;
     if (print_lines_enabled) {
@@ -548,8 +636,10 @@ void fragment() {
             float groove = max(aa * 1.4, bead_groove);
             float ink = (1.0 - smoothstep(0.0, groove, abs(ph - 0.5))) * resolved;
             // Not on top of the stud's contact shadow: two dark patterns
-            // multiplied in the same pixels is noise.
+            // multiplied in the same pixels is noise. Nor in an underside's
+            // hollow, which has its own lines.
             ink *= 1.0 - 0.7 * stud_shade;
+            ink *= under_solid;
             if (curve_top) {
                 ink *= 0.7;
             }
@@ -617,8 +707,8 @@ void fragment() {
     if (lod_debug) {
         albedo = mix(albedo, lod_colour(lod_level), 0.65);
     }
-    float out_rough = clamp(surface_roughness * surface_gloss * mtl.x + print_rough,
-            0.0, 1.0);
+    float out_rough = clamp(surface_roughness * surface_gloss * mtl.x + print_rough
+            + (1.0 - under_solid) * 0.25, 0.0, 1.0);
     float out_spec = surface_specular * mtl.y;
     // Rain (weather.gdshaderinc): the ground darkens more than a wall does.
     vec3 wet_normal = NORMAL;
@@ -635,6 +725,7 @@ void fragment() {
     SPECULAR = out_spec;
     RIM = surface_rim * mtl.z;
     RIM_TINT = 0.4;
+    AO = under_occ;
 #ifdef SKY_LIGHT
     float sky_k0 = pow(sky_light_curve, 15.0);
     // Clamped: at level 0 the difference rounds a hair under zero, and pow()
@@ -643,7 +734,7 @@ void fragment() {
             / (1.0 - sky_k0), 0.0, 1.0);
     float blk_b = clamp((pow(sky_light_curve, 15.0 - 15.0 * clamp(v_block, 0.0, 1.0)) - sky_k0)
             / (1.0 - sky_k0), 0.0, 1.0);
-    AO = mix(sky_light_floor, 1.0, max(sky_b, blk_b * block_light_ao));
+    AO = mix(sky_light_floor, 1.0, max(sky_b, blk_b * block_light_ao)) * under_occ;
     EMISSION += block_light_colour * albedo * (blk_b * block_light_energy);
     // The sky's REFLECTIONS ignore AO (--gate=deep --light-sweep: a level-0
     // cave 0.033 without them, 0.079 with). They scale with f0 = 0.16 x

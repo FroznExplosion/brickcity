@@ -310,6 +310,8 @@ func _ready() -> void:
 			_run_deep_gate()
 		elif "--gate=mouth" in OS.get_cmdline_user_args():
 			_run_mouth_gate()
+		elif "--gate=handover" in OS.get_cmdline_user_args():
+			_run_handover_gate()
 		elif "--gate=skylit" in OS.get_cmdline_user_args():
 			_run_skylit_gate()
 		elif "--gate=seams" in OS.get_cmdline_user_args():
@@ -430,8 +432,15 @@ func generate(s: Dictionary) -> void:
 	if _prewarm_on:
 		var e := _eye_render()
 		var tw := Time.get_ticks_usec()
+		var kinds: Dictionary = PREWARM_PER_KIND.duplicate()
+		if _sky_light_on:
+			# The ground's studs carry their light (TerrainTile sky studs).
+			kinds["StudsSky"] = kinds["Studs"]
+			kinds["StudsSkyFar"] = kinds["StudsFar"]
+			kinds.erase("Studs")
+			kinds.erase("StudsFar")
 		_warm = TerrainTile.prewarm_begin(_streamer, e - _eye_camera().global_transform.basis.z * 1.5,
-				PREWARM_PER_KIND)
+				kinds)
 		prewarm_ms = float(Time.get_ticks_usec() - tw) / 1000.0
 		_warm_frame_ms = 0.0
 		_warm_frames = 3
@@ -732,6 +741,47 @@ func tiles_fresh(rect: Rect2i) -> bool:
 	if _pending_tiles.has_area() and rect.has_area() and _pending_tiles.intersects(rect):
 		return false
 	return _streamer.fresh(rect)
+
+
+## WHAT FALLS FROM THE GROUND, AND THE GROUND (Docs/MineWorld.md 20). A
+## falling piece or sand column holds the near tiles over `rect` and the deep
+## sections over its plate box (`lo`..`hi`, null for none) from the moment its
+## cells are cleared: built and collided, they are not swapped in until it
+## can be drawn too (ground_ready, then swap_ground and its release, in one
+## call). Released the moment the tiles stopped drawing it, it showed a frame
+## or more of nothing while its mesh was made, or drew twice.
+func hold_ground(rect: Rect2i, lo, hi, owner) -> void:
+	if _streamer != null:
+		_streamer.hold_tiles(rect, owner)
+	if _deep != null and lo != null:
+		_deep.hold_box(lo, hi, owner)
+
+
+func unhold_ground(rect: Rect2i, owner) -> void:
+	if _streamer != null:
+		_streamer.unhold(rect, owner)
+	if _deep != null:
+		_deep.unhold(owner)
+
+
+## Could the ground over it swap now, holds by others aside: every tile and
+## section rebuilt without it, the edits all flushed.
+func ground_ready(rect: Rect2i, lo, hi, owner) -> bool:
+	if _streamer == null:
+		return true
+	if _pending_tiles.has_area() and rect.has_area() and _pending_tiles.intersects(rect):
+		return false
+	if not _streamer.tiles_ready(rect, owner):
+		return false
+	return _deep == null or lo == null or _deep.ready_box(lo, hi, owner)
+
+
+## Swap the ground over it now (after ground_ready and unhold_ground).
+func swap_ground(rect: Rect2i, lo, hi) -> void:
+	if _streamer != null:
+		_streamer.swap_ready(rect)
+	if _deep != null and lo != null:
+		_deep.swap_ready_box(lo, hi)
 
 
 ## Is tile `t` in the near-detail tier (LOD 0)? Settled pieces elsewhere are
@@ -3161,7 +3211,7 @@ func _run_spawn_gate() -> void:
 				if notes.size() < 8:
 					notes.append("f%d %.0f ms (near %.1f)" % [i, ms, _ptimes.get("near", 0.0)])
 	var nodes := []
-	for k in ["Studs", "StudsFar", "Tufts", "Pebbles", "Bricks"]:
+	for k in ["Studs", "StudsFar", "StudsSky", "StudsSkyFar", "Tufts", "Pebbles", "Bricks"]:
 		nodes.append("%s %d new / %d reused" % [k, int(TerrainTile.instance_ms.get(k + " new", 0.0)),
 				int(TerrainTile.instance_ms.get(k + " reused", 0.0))])
 	print("[mine-spawn] 600 frames at 30 m/s from the spawn: worst %.0f ms, %d over 33 ms; %s; %s"
@@ -3525,6 +3575,204 @@ func _deep_lava(found: Vector3, dark_luma: float) -> void:
 			BrickFluid.remove(Vector3i(fx + dx, b, fz + dz), -1)
 	water.step(1)
 	water.manual = false
+
+
+## -- --gate=handover (Docs/MineWorld.md 20): what the ground draws and what
+## leaves it change in the SAME frame. After every drawn frame
+## (RenderingServer.frame_post_draw) it notes which tiles are the ones from
+## before an edit and whether what fell is out:
+##   1. a shot breaks a top brick that crosses a tile edge: frames with one
+##      tile swapped and the other not are frames where half the brick (and
+##      its studs) is drawn -- the stud flash;
+##   2. a floating dirt block across a tile edge falls as a piece, and a sand
+##      column pair as columns: a frame with the tiles swapped and nothing out
+##      is a gap (the flash as it starts to fall); one with it out and a tile
+##      not swapped draws it twice.
+## Pictures of the frames round each change go to user://dev/handover/.
+func _run_handover_gate() -> void:
+	await _frames(30)
+	var dev := UserPaths.DEV.path_join("handover/")
+	DirAccess.make_dir_recursive_absolute(dev)
+	var fails := 0
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var tile := BrickTerrain.get_tile_studs()
+	_time = 0.42
+	set_on_foot(false)
+	# Pictures of the ground, not of the gun, the readout or a tree.
+	view.process_mode = Node.PROCESS_MODE_DISABLED
+	view.rig.visible = false
+	if view.arms != null:
+		view.arms.visible = false
+	_hud_layer.visible = false
+	if _trees != null:
+		_trees.visible = false
+	var e := _eye()
+	var edge_x := (floori(e.x / stud / tile) + 1) * tile
+	var ez := floori(e.z / stud)
+	var tile_of := func(x: int, z: int) -> Vector2i:
+		return Vector2i(floori(float(x) / tile), floori(float(z) / tile))
+	# 1. A top brick across the tile edge.
+	var target := {}
+	for dz in range(0, 40):
+		for sgn in [1, -1]:
+			var z: int = ez + dz * sgn
+			var x0 := edge_x - 1
+			var top := BrickTerrain.surface_plate(x0, z)
+			var p := Vector3((x0 + 0.5) * stud, (top + 1) * plate - 0.03, (z + 0.5) * stud)
+			var found: Dictionary = BrickTerrain.find_brick(p, Vector3.UP)
+			var runs: PackedInt32Array = found.get("runs", PackedInt32Array())
+			var lo_x := 1 << 30
+			var hi_x := -(1 << 30)
+			for i in range(0, runs.size(), 4):
+				lo_x = mini(lo_x, runs[i])
+				hi_x = maxi(hi_x, runs[i])
+			if not runs.is_empty() and lo_x < edge_x and hi_x >= edge_x:
+				target = {"p": p, "z": z, "top": top, "runs": runs}
+				break
+		if not target.is_empty():
+			break
+	if target.is_empty():
+		print("[handover] FAIL  no top brick across a tile edge near x=%d" % edge_x)
+		get_tree().quit()
+		return
+	var tz: int = target.z
+	var aim := Vector3(edge_x * stud, (int(target.top) + 1) * plate, (tz + 0.5) * stud)
+	await _aim_eye(aim + Vector3(0.3, 1.5, -1.6), aim)
+	await _frames(120)
+	_streamer.settle(Vector2(aim.x, aim.z))
+	await _frames(20)
+	var runs: PackedInt32Array = target.runs
+	var tiles := {}
+	for i in range(0, runs.size(), 4):
+		tiles[tile_of.call(runs[i], runs[i + 1])] = true
+	var old := {}
+	for c in tiles:
+		old[c] = _streamer._tiles.get(c)
+	var on_screen := _eye_camera().unproject_position(to_global(aim))
+	print("[handover] the brick is at %.0f, %.0f on screen when shot" % [on_screen.x, on_screen.y])
+	_mine(target.p, Vector3.DOWN, null)
+	var seq: Array[int] = []
+	var flash := 0
+	var shots := 0
+	var last := 0
+	for f in 90:
+		await RenderingServer.frame_post_draw
+		var n := 0
+		for c in tiles:
+			if _streamer._tiles.get(c) != old[c]:
+				n += 1
+		seq.append(n)
+		if n > 0 and n < tiles.size():
+			flash += 1
+		# Pictures for a look only: 2026-11-22 these never showed the hole a
+		# break leaves (the game does), so the check is the swap count above
+		# and the cells below, not the pictures.
+		if shots < 14:
+			_shot(dev + "break_f%02d_%dof%d.png" % [f, n, tiles.size()])
+			shots += 1
+		last = n
+		if n == tiles.size() and f > 4 and seq[f - 4] == n:
+			break
+	# And the brick really went: a swap of tiles still holding it is no break.
+	var left := 0
+	for i in range(0, runs.size(), 4):
+		for yp in range(runs[i + 2], runs[i + 3] + 1):
+			if BrickTerrain.solid_at(runs[i], yp, runs[i + 1]) != 0:
+				left += 1
+	var ok := flash == 0 and last == tiles.size() and left == 0
+	print("[handover] %s  a brick across a tile edge (%d tiles) leaves in one frame: %d frame(s) half swapped, %d cell(s) of it left; swapped per frame %s" % [
+			"ok  " if ok else "FAIL", tiles.size(), flash, left, seq])
+	fails += 0 if ok else 1
+	# 2. A floating dirt block, then sand, across the edge, over the ground.
+	var hi_top := -(1 << 30)
+	for dz in range(-1, 3):
+		for dx in range(-2, 2):
+			hi_top = maxi(hi_top, BrickTerrain.surface_plate(edge_x + dx, tz + 8 + dz))
+	var b := (floori(float(hi_top + 1) / 3.0) + 3) * 3
+	var aim2 := Vector3(edge_x * stud, b * plate, (tz + 8.5) * stud)
+	await _aim_eye(aim2 + Vector3(0.4, 0.6, -3.2), aim2 + Vector3(0, -0.6, 0))
+	await _frames(60)
+	for kind in ["piece", "sand"]:
+		var p0: int = collapse.pieces.pieces.size()
+		var w0: int = collapse._waiting.size()
+		var mat := 2 if kind == "piece" else 3
+		var lo := Vector3i(edge_x - 1, b, tz + 8)
+		var hi := lo + (Vector3i(1, 2, 1) if kind == "piece" else Vector3i(1, 8, 0))
+		terrain_edited(BrickTerrain.fill_box(lo, hi, mat, true))
+		var entry: Dictionary = {}
+		var rect_tiles := {}
+		var olds := {}
+		var gap := 0
+		var twice := 0
+		var seen_out := false
+		var trace: Array[String] = []
+		var shots2 := 0
+		var prev := ""
+		for f in 400:
+			await RenderingServer.frame_post_draw
+			if entry.is_empty():
+				for w in collapse._waiting:
+					if w.kind == kind:
+						entry = w
+				if entry.is_empty():
+					continue
+				var r: Rect2i = entry.rect
+				for c in _streamer._tiles:
+					if r.has_point(c):
+						rect_tiles[c] = true
+						olds[c] = _streamer._tiles[c]
+			var n := 0
+			for c in rect_tiles:
+				if _streamer._tiles.get(c) != olds[c]:
+					n += 1
+			var out: bool = (collapse.pieces.pieces.size() > p0) if kind == "piece" \
+					else not collapse._sand.is_empty()
+			var all := n == rect_tiles.size()
+			# Once out, sand lands and is ground again: only frames before.
+			if not out and n > 0 and not seen_out:
+				gap += 1
+			seen_out = seen_out or out
+			if out and not all:
+				twice += 1
+			var st := "%d/%d%s" % [n, rect_tiles.size(), "+out" if out else ""]
+			if st != prev:
+				trace.append("f%d %s" % [f, st])
+				prev = st
+			if shots2 < 16:
+				_shot(dev + "%s_f%03d_%s.png" % [kind, f, st.replace("/", "of").replace("+", "_")])
+				shots2 += 1
+			if out and all and shots2 >= 16:
+				break
+		ok = not entry.is_empty() and gap == 0 and twice == 0
+		print("[handover] %s  falling %s: %d gap frame(s) (ground swapped, nothing out), %d drawn twice; %s" % [
+				"ok  " if ok else "FAIL", kind, gap, twice, ", ".join(trace)])
+		fails += 0 if ok else 1
+		await _collapse_quiet(300)
+		await _frames(30)
+	print("[handover] %s (%d failures)" % ["PASS" if fails == 0 else "FAIL", fails])
+	get_tree().quit()
+
+## The eye at `from` (terrain frame) looking at `at`: placed, then moved by
+## however far the eye landed from `from` (the walker's eye is not a fixed
+## height over the feet it is placed by), and the pitch set from where the eye
+## really is. Prints where `at` falls on the screen, so a gate's pictures can
+## be trusted to show it.
+func _aim_eye(from: Vector3, at: Vector3) -> void:
+	var facing := ((at - from) * Vector3(1, 0, 1)).normalized()
+	_fly_to(from - Vector3(0, 1.6, 0), facing)
+	await _frames(2)
+	_fly_to(from - Vector3(0, 1.6, 0) - (_eye() - from), facing)
+	await _frames(2)
+	var e := _eye()
+	var d := at - e
+	walker.pitch = atan2(d.y, Vector2(d.x, d.z).length())
+	await _frames(2)
+	var c := _eye_camera()
+	var px := c.unproject_position(to_global(at))
+	var size := get_viewport().get_visible_rect().size
+	print("[gate] eye %s off by %.2f m; aim on screen at %.0f, %.0f of %.0f x %.0f" % [
+			e, (_eye() - from).length(), px.x, px.y, size.x, size.y])
 
 
 ## -- --gate=cave: only the cave landing (below).

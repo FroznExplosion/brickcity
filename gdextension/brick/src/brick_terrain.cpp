@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <functional>
 #include <memory>
 #include <unordered_map>
 #include <set>
@@ -1064,6 +1065,9 @@ bool g_slope_pieces = false;
 // The top course on the bond, not the packer's ladder (Docs/TerrainBond.md).
 bool g_bond_top = false;
 
+/// Sky light in the cells (Docs/MineWorld.md 18); set_sky_light.
+static std::atomic<bool> g_sky_light{ false };
+
 bool g_deep_tier = false;
 
 /// A surface tile's mask floor from the generator alone (never from edits):
@@ -1619,7 +1623,7 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
     const int gz0 = s.tz * TILE;
 
     auto emit = [&](int ox, int oz, int sx, int sz, int kind, int ramp,
-            int brx = 0, int brz = 0, int brsx = 0, int brsz = 0) {
+            int brx = 0, int brz = 0, int brsx = 0, int brsz = 0, bool held = false) {
         const int i = TileSample::idx(ox, oz);
         Piece pc;
         pc.ox = (int16_t)ox;
@@ -1644,8 +1648,11 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
         // Some flat pieces are laid smooth. A tile takes no studs and nothing
         // clips to it, so this is also a BUILD rule, not only a look: you
         // cannot build on a tiled patch (section 7.6).
-        // By the BRICK's corner: both tiles' parts of a brick agree.
-        if (pc.studded && hashf(gx0 + pc.brick_x(), gz0 + pc.brick_z(), (int32_t)(seed ^ 0x7113U))
+        // By the BRICK's corner: both tiles' parts of a brick agree. Never a
+        // brick something stands on (`held`): it holds that by its studs.
+        pc.held = held ? 1 : 0;
+        if (pc.studded && !held
+                && hashf(gx0 + pc.brick_x(), gz0 + pc.brick_z(), (int32_t)(seed ^ 0x7113U))
                 < TILE_CHANCE) {
             pc.kind = (uint8_t)PIECE_TILE;
             pc.studded = 0;
@@ -1864,6 +1871,16 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
             }
             return t;
         };
+        // Solid at plate yp of column (x, z), absolute studs: the sample where
+        // it has the cell, the field past it.
+        auto solid_g = [&](int x, int yp, int z) -> bool {
+            const int lx = x - gx0, lz = z - gz0;
+            if (lx >= -MARGIN && lz >= -MARGIN && lx < TILE + MARGIN && lz < TILE + MARGIN
+                    && s.in_y(yp)) {
+                return s.solid(lx, yp, lz);
+            }
+            return f.solid_at(x, yp, z) != MAT_AIR;
+        };
         for (int lz = 0; lz < TILE; ++lz) {
             for (int lx = 0; lx < TILE; ++lx) {
                 if (owner[lx + TILE * lz] >= 0) {
@@ -1917,8 +1934,29 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
                         plate = plate && s.plate[TileSample::idx(x, z)] == 1;
                     }
                 }
-                emit(cx0, cz0, cx1 - cx0, cz1 - cz0, plate ? PIECE_BRICK : PIECE_TILE, 255,
-                        r.x - gx0, r.z - gz0, r.sx, r.sz);
+                // HELD (Docs/MineWorld.md 20): the user's rule, "any brick with
+                // a brick on top of it must always have studs". The bond cuts
+                // a top brick out of its course's 4 x 2 footprint; where that
+                // footprint reaches under a higher column -- the foot of every
+                // step, a wall standing on the course -- the brick is what the
+                // course above stands on, so it is a studded brick, never a
+                // smooth tile (a tile only had to be one because its column
+                // was not level with all four neighbours).
+                bool held = false;
+                if (!q_placed) {
+                    const BondRect fp = bond_rect(gx0 + lx, qc, gz0 + lz,
+                            [](int, int) { return BOND_STRONG; });
+                    const int above = (qc + 1) * PLATES_PER_CELL;
+                    for (int z = fp.z; z < fp.z + fp.sz && !held; ++z) {
+                        for (int x = fp.x; x < fp.x + fp.sx && !held; ++x) {
+                            const TopCell &t = top_at(x - gx0, z - gz0);
+                            held = t.tp >= above && solid_g(x, above, z)
+                                    && solid_g(x, above - 1, z);
+                        }
+                    }
+                }
+                emit(cx0, cz0, cx1 - cx0, cz1 - cz0, (plate || held) ? PIECE_BRICK : PIECE_TILE, 255,
+                        r.x - gx0, r.z - gz0, r.sx, r.sz, held);
             }
         }
     } else {
@@ -1943,7 +1981,9 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
         if (hashf(gx, gz, (int32_t)(seed ^ 0x0A11U)) >= g_overlay_chance) {
             continue;
         }
-        const bool smooth = hashf(gx, gz, (int32_t)(seed ^ 0x71E5U)) < OVERLAY_TILE_SHARE;
+        // A held brick may take a studded plate, never a smooth tile.
+        const bool smooth = pc.held == 0
+                && hashf(gx, gz, (int32_t)(seed ^ 0x71E5U)) < OVERLAY_TILE_SHARE;
         pc.overlay = smooth ? 1 : 2;
         // A smooth tile has nothing to clip to, so it takes no studs and
         // cannot be built on -- the same rule PIECE_TILE follows, and the
@@ -3952,8 +3992,10 @@ Color piece_colour(const TileSample &s, int ox, int oz, int mat, bool studded) {
 /// already known to render, the packer's top quad -- and every quad emitted
 /// anywhere in this file has to obey it. `_check_winding` in the probe now
 /// asserts it for every triangle of a tile.
+void push_stud(PackedFloat32Array &buf, float px, float py, float pz, const Color &c);
+
 void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &owner,
-        const std::vector<Piece> &pieces, uint32_t seed) {
+        const std::vector<Piece> &pieces, uint32_t seed, PackedFloat32Array &studs, int &stud_count) {
     static const int DIRS[6][3] = {
         { -1, 0, 0 }, { 1, 0, 0 }, { 0, -1, 0 }, { 0, 1, 0 }, { 0, 0, -1 }, { 0, 0, 1 }
     };
@@ -4068,6 +4110,45 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
         return yp == pieces[o].top;
     };
 
+    // WHICH SIDES A PIECE DRAWS ITSELF (build_tile): a plain brick or tile only
+    // where the ground beside it DROPS (its lo_* edges), an overlay's brick
+    // none, a slope every face of its column. Everything else of a piece's
+    // brick that air can see -- a side against a cave or an overhang under a
+    // higher column, an overlay brick's sides, its underside -- is drawn here,
+    // keyed by the piece. Skipping every face inside a piece left those
+    // see-through (terrain_audit_probe, Docs/MineWorld.md 20).
+    std::vector<uint8_t> sides_drawn(pieces.size(), 0);
+    for (size_t i = 0; i < pieces.size(); ++i) {
+        const Piece &p = pieces[i];
+        if (p.kind == PIECE_SLOPE) {
+            sides_drawn[i] = 0xF;
+            continue;
+        }
+        if (p.kind == PIECE_RAMP || p.overlay != 0) {
+            continue;
+        }
+        uint8_t f = 0;
+        for (int k = 0; k < p.sx; ++k) {
+            if (s.tp[TileSample::idx(p.ox + k, p.oz - 1)] < p.top) f |= 4u;
+            if (s.tp[TileSample::idx(p.ox + k, p.oz + p.sz)] < p.top) f |= 8u;
+        }
+        for (int k = 0; k < p.sz; ++k) {
+            if (s.tp[TileSample::idx(p.ox - 1, p.oz + k)] < p.top) f |= 1u;
+            if (s.tp[TileSample::idx(p.ox + p.sx, p.oz + k)] < p.top) f |= 2u;
+        }
+        sides_drawn[i] = f;
+    }
+    auto side_bit = [](int dx, int dz) -> uint8_t {
+        return dx < 0 ? 1u : (dx > 0 ? 2u : (dz < 0 ? 4u : 8u));
+    };
+    // A face keyed by a piece (bit 63) is part of that piece's brick: its
+    // rectangle, absolute studs.
+    auto piece_rect = [&](int64_t key) -> BondRect {
+        const Piece &p = pieces[(size_t)(key & 0x7FFFFFFF)];
+        return BondRect{ s.tx * TILE + p.brick_x(), s.tz * TILE + p.brick_z(),
+            p.brick_sx(), p.brick_sz() };
+    };
+
     for (int d = 0; d < 6; ++d) {
         const int dx = DIRS[d][0], dy = DIRS[d][1], dz = DIRS[d][2];
 
@@ -4129,31 +4210,25 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                             && s.smooth[TileSample::idx(lx, lz)]) {
                         continue;
                     }
-                    if (dy < 0 && in_piece_solid(lx, yp, lz)) {
-                        // ...except its UNDERSIDE, which the piece never
-                        // draws: a top course over open air -- a built roof
-                        // or a carved slab one course thick -- was see-through
-                        // from below, its studs hanging over the sky
-                        // (MineWorld.md 18). Keyed by the piece (bit 63, which
-                        // no bond_key sets), so the underside outlines the
-                        // same brick as its top.
-                        face[(size_t)u + su * v] = (uint8_t)s.voxel(lx, yp, lz);
-                        fkey[(size_t)u + su * v] = INT64_MIN
-                                | (int64_t)owner[(size_t)lx + TILE * lz];
-                        continue;
-                    }
                     if (in_piece_solid(lx, yp, lz)) {
-                        // A piece owns EVERY face of its own brick, not just
-                        // the top — and this is true whether it is bevelled
-                        // or not.
-                        //
-                        // The mask merges walls on its own lattice, which has
-                        // nothing to do with where the packer put the piece
-                        // boundaries above. So a 2x4 on top had its side
-                        // divided somewhere else entirely, and the seams did
-                        // not line up from the top to the side of the same
-                        // brick. Letting the piece draw its own sides makes
-                        // them the same brick by construction.
+                        // A piece draws its own top and, where the ground
+                        // beside it drops, its own sides, so the seams on them
+                        // are the same brick as its top (sides_drawn above).
+                        // Every OTHER face of its brick is drawn here, keyed by
+                        // the piece (bit 63, which no bond_key sets) so it
+                        // outlines that brick too: its UNDERSIDE over open air
+                        // -- a built roof or a carved slab one course thick was
+                        // see-through from below (MineWorld.md 18) -- and a side
+                        // the piece does not draw.
+                        const int32_t o = owner[(size_t)lx + TILE * lz];
+                        if (dy == 0 && (sides_drawn[(size_t)o] & side_bit(dx, dz)) != 0) {
+                            continue;
+                        }
+                        if (dy >= 0 && pieces[(size_t)o].kind == PIECE_SLOPE) {
+                            continue;
+                        }
+                        face[(size_t)u + su * v] = (uint8_t)s.voxel(lx, yp, lz);
+                        fkey[(size_t)u + su * v] = INT64_MIN | (int64_t)o;
                         continue;
                     }
                     if (dy == 0 && ramp_covers(lx, yp, lz, dx, dz)) {
@@ -4222,7 +4297,32 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                     } else {
                         lx = u; lz = w; yp = y0 + v;
                     }
-                    const Color col = cell_colour(lx, yp, lz);
+                    Color col = cell_colour(lx, yp, lz);
+                    // The brick this face is part of: a piece's (bit 63), or
+                    // the bond's.
+                    const bool of_piece = key < 0;
+                    const BondRect br = of_piece ? piece_rect(key) : brick_rect(lx, yp, lz);
+                    // STUDS ON THE TOPMOST BRICKS OF A CAVE (Docs/MineWorld.md
+                    // 19), in the mine world's look (the bond's top course):
+                    // a cave floor or ledge is a brick's top as much as the
+                    // surface is, and drew none at all. More often studded
+                    // than the surface, smooth otherwise, by the brick's corner
+                    // and course, so every face of one brick agrees.
+                    bool studded = false;
+                    if (dy > 0 && g_bond_top && material_studded(mat)) {
+                        const int c = floor_div(yp, PLATES_PER_CELL);
+                        studded = hashf(br.x, br.z, (int32_t)(seed ^ 0xCA5EU) + c) < CAVE_STUD_CHANCE;
+                    }
+                    if (studded) {
+                        col.a = 1.0f;
+                        for (int b = 0; b < hgt; ++b) {
+                            for (int a = 0; a < wdt; ++a) {
+                                push_stud(studs, ((float)(lx + a) + 0.5f) * STUD_M,
+                                        (float)(yp + 1) * PLATE_M, ((float)(lz + b) + 0.5f) * STUD_M, col);
+                                ++stud_count;
+                            }
+                        }
+                    }
 
                     const float X = (float)lx * STUD_M;
                     const float Z = (float)lz * STUD_M;
@@ -4284,16 +4384,27 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                         const int uz = (dx != 0) ? 1 : 0;
                         const int vy = (dy != 0) ? 0 : 1;
                         const int vz = (dy != 0) ? 1 : 0;
+                        // Two tests give all three states:
+                        //   neighbour air                  -> convex
+                        //   neighbour solid, ITS n-face air -> coplanar
+                        //   neighbour solid and covered     -> square
+                        // A solid piece beside butts square against this face;
+                        // its own bottom is square too, so neither bevels the
+                        // join.
+                        //
+                        // Along the WHOLE edge, every cell of it: one probe at
+                        // its first cell gave a merged face one state where
+                        // the cells along it differed, and a convex edge whose
+                        // far half was really coplanar left a slit there. An
+                        // edge whose cells disagree is SQUARE: the face then
+                        // reaches its full extent and whatever meets it can
+                        // only overlap it, never open a gap.
                         const int probe[4][3] = {
                             { 0, -vy, -vz },
                             { ux * wdt, 0, uz * wdt },
                             { 0, vy * hgt, vz * hgt },
                             { -ux, 0, -uz },
                         };
-                        // Two tests give all three states:
-                        //   neighbour air                  -> convex
-                        //   neighbour solid, ITS n-face air -> coplanar
-                        //   neighbour solid and covered     -> square
                         for (int k = 0; k < 4; ++k) {
                             const int nx2 = lx + probe[k][0];
                             const int ny2 = yp + probe[k][1];
@@ -4304,9 +4415,6 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                                 square |= (uint8_t)(1u << k);
                                 covered |= (uint8_t)(1u << k);
                             }
-                            // A solid piece above butts square against this
-                            // wall; its own bottom is square too, so neither
-                            // side bevels the join.
                             if (g_face_bevel > 0.0f && in_piece_solid(nx2, ny2, nz2)) {
                                 convex &= (uint8_t)~(1u << k);
                                 square |= (uint8_t)(1u << k);
@@ -4344,10 +4452,14 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                     // once. `ua` is the brick-side coordinate of corner a0
                     // along the quad's U (a0 -> b0).
                     {
-                        const BondRect br = brick_rect(lx, yp, lz);
                         const int ax = s.tx * TILE + lx, az = s.tz * TILE + lz;
                         const int c = floor_div(yp, PLATES_PER_CELL);
-                        const float va_y = (float)(yp - c * PLATES_PER_CELL) * PLATE_M;
+                        // Up the brick's side from its foot: a piece's brick
+                        // stands on the plate under its top course.
+                        const int foot = of_piece
+                                ? pieces[(size_t)(key & 0x7FFFFFFF)].top - (PLATES_PER_CELL - 1)
+                                : c * PLATES_PER_CELL;
+                        const float va_y = (float)(yp - foot) * PLATE_M;
                         float ua = 0.0f, va = 0.0f;
                         Vector2 bf;
                         if (dx != 0) {
@@ -4490,6 +4602,24 @@ void push_instance(PackedFloat32Array &buf, float px, float py, float pz,
     buf.push_back(0.0f); buf.push_back(scale_y); buf.push_back(0.0f); buf.push_back(py);
     buf.push_back(-sn);  buf.push_back(0.0f); buf.push_back(cs);  buf.push_back(pz);
     buf.push_back(c.r);  buf.push_back(c.g);  buf.push_back(c.b); buf.push_back(c.a);
+}
+
+/// Floats a stud takes in the "studs" buffer: 16 (transform, colour), or 20
+/// with the sky light on -- then four of custom data after the colour, the
+/// cell's sky and block light (sky_light_pass fills them; full sky until it
+/// does), so a stud in a cave is as dark as the floor it stands on
+/// (TerrainTile's sky studs, printed_core INSTANCE_SKY; Docs/MineWorld.md 20).
+int stud_stride() {
+    return g_sky_light.load(std::memory_order_relaxed) ? 20 : 16;
+}
+
+void push_stud(PackedFloat32Array &buf, float px, float py, float pz, const Color &c) {
+    Color k = c;
+    k.a = 1.0f;
+    push_instance(buf, px, py, pz, 0.0f, k);
+    if (stud_stride() == 20) {
+        buf.push_back(1.0f); buf.push_back(0.0f); buf.push_back(0.0f); buf.push_back(0.0f);
+    }
 }
 
 } // namespace
@@ -5110,7 +5240,8 @@ static void emit_slope(MeshBuf &m, const TileSample &s, const Piece &p, const Co
 // boxes that may grow through any cell that is not open air. A surface tile
 // leaves out what its column-top boxes cover; a deep `section` collides all it
 // owns. Returns how many boxes it added.
-static int add_cave_boxes(const TileSample &s, PackedFloat32Array &boxes, bool section) {
+static int add_cave_boxes(const TileSample &s, PackedFloat32Array &boxes, bool section,
+        const std::vector<int16_t> *cov) {
     int cave_boxes = 0;
     const int lo = s.lo_owned();
     const int hi = s.hi_owned();
@@ -5120,8 +5251,13 @@ static int add_cave_boxes(const TileSample &s, PackedFloat32Array &boxes, bool s
     bool any = false;
     for (int lz = -1; lz <= TILE; ++lz) {
         for (int lx = -1; lx <= TILE; ++lx) {
-            const int top = section ? hi - 1 : std::min<int>(s.tp[TileSample::idx(lx, lz)], hi - 1);
-            for (int yp = lo; yp <= top; ++yp) {
+            // From the guard plate under the owned ones to the one over them
+            // (a deep-tier sample): a cave wholly in the next sample still has
+            // its ceiling or floor here, and it went uncollided
+            // (terrain_audit_probe).
+            const int top = section ? std::min(hi, s.y0 + s.ysize - 1)
+                    : std::min<int>(s.tp[TileSample::idx(lx, lz)], hi - 1);
+            for (int yp = std::max(lo - 1, s.y0); yp <= top; ++yp) {
                 if (s.open[s.vidx(lx, yp, lz)]) {
                     col_open[(size_t)(lx + 1) + CS * (lz + 1)] = 1;
                     any = true;
@@ -5151,9 +5287,11 @@ static int add_cave_boxes(const TileSample &s, PackedFloat32Array &boxes, bool s
                 if (!near_open) {
                     continue;
                 }
-                // The top box surely covers tp - 2 .. tp (a section has none).
+                // The plates the column's top box covers, from its top down
+                // (a section has none): build_tile says how many (`cov`).
+                const int covered = cov != nullptr ? (*cov)[(size_t)lx + TILE * lz] : PLATES_PER_CELL;
                 const int top = section ? hi - 1
-                        : std::min<int>(s.tp[TileSample::idx(lx, lz)] - PLATES_PER_CELL, hi - 1);
+                        : std::min<int>(s.tp[TileSample::idx(lx, lz)] - covered, hi - 1);
                 for (int yp = lo; yp <= top; ++yp) {
                     if (s.vox[s.vidx(lx, yp, lz)] == MAT_AIR) {
                         continue;
@@ -5370,8 +5508,6 @@ static bool sample_section(int tx, int sy, int tz, TileSample &out) {
 }
 
 // --- sky light in the cells (Docs/MineWorld.md 18) ----------------------------------
-
-static std::atomic<bool> g_sky_light{ false };
 
 namespace {
 
@@ -5695,7 +5831,10 @@ struct SkyGrid {
 /// half a cell out along its normal, blended over the eight cell centres round
 /// that point, opaque cells left out. Vertex positions are tile-local in X and
 /// Z (the tile's origin is stud gx0, gz0), absolute in Y.
-static void sky_light_pass(MeshBuf &m, const TileSample &s, bool surface, Dictionary &out) {
+/// `studs` (stud_stride 20): each stud's custom data gets the light of the
+/// cell it stands in, as a vertex facing up there would (Docs/MineWorld.md 20).
+static void sky_light_pass(MeshBuf &m, const TileSample &s, bool surface, Dictionary &out,
+        PackedFloat32Array *studs = nullptr) {
     if (!g_sky_light.load(std::memory_order_relaxed) || m.verts.is_empty()) {
         return;
     }
@@ -5716,9 +5855,19 @@ static void sky_light_pass(MeshBuf &m, const TileSample &s, bool surface, Dictio
     g.init(gx0 - 1 - SKY_PAD, gz0 - 1 - SKY_PAD, cl - SKY_PAD, TILE + 2 + 2 * SKY_PAD,
             TILE + 2 + 2 * SKY_PAD, ch - cl + 1 + 2 * SKY_PAD);
 
-    // The eight cells round a vertex's sample point, and their weights.
-    auto corners = [&](int i, int &ix, int &iy, int &iz, float &fx, float &fy, float &fz) {
-        const Vector3 q = v[i] + Vector3(nr[i].x * STUD_M, nr[i].y * BRICK_M, nr[i].z * STUD_M) * 0.5f;
+    // A stud is a point facing up at its foot (12 floats of transform, its
+    // origin at 3, 7, 11).
+    const int SS = 20;
+    const int ns = (studs != nullptr && stud_stride() == SS) ? studs->size() / SS : 0;
+    auto stud_at = [&](int k) -> Vector3 {
+        const float *b = studs->ptr() + (size_t)k * SS;
+        return Vector3(b[3], b[7], b[11]);
+    };
+    const Vector3 UP(0.0f, 1.0f, 0.0f);
+    // The eight cells round a point's sample point, and their weights.
+    auto corners_at = [&](const Vector3 &pos, const Vector3 &nrm, int &ix, int &iy, int &iz,
+            float &fx, float &fy, float &fz) {
+        const Vector3 q = pos + Vector3(nrm.x * STUD_M, nrm.y * BRICK_M, nrm.z * STUD_M) * 0.5f;
         const float cx = q.x / STUD_M + (float)gx0 - 0.5f;
         const float cy = q.y / BRICK_M - 0.5f;
         const float cz = q.z / STUD_M + (float)gz0 - 0.5f;
@@ -5729,16 +5878,23 @@ static void sky_light_pass(MeshBuf &m, const TileSample &s, bool surface, Dictio
         fy = cy - (float)iy;
         fz = cz - (float)iz;
     };
+    auto corners = [&](int i, int &ix, int &iy, int &iz, float &fx, float &fy, float &fz) {
+        corners_at(v[i], nr[i], ix, iy, iz, fx, fy, fz);
+    };
     // Which of those cells are under their column's sky floor and open: the
     // ones the fill must answer for.
     Vector3i lo(INT_MAX, INT_MAX, INT_MAX), hi(INT_MIN, INT_MIN, INT_MIN);
     // Block light answers for every open cell a vertex reads, sky or not.
     Vector3i blo(INT_MAX, INT_MAX, INT_MAX), bhi(INT_MIN, INT_MIN, INT_MIN);
     bool dark = false;
-    for (int i = 0; i < n; ++i) {
+    for (int i = 0; i < n + ns; ++i) {
         int ix, iy, iz;
         float fx, fy, fz;
-        corners(i, ix, iy, iz, fx, fy, fz);
+        if (i < n) {
+            corners(i, ix, iy, iz, fx, fy, fz);
+        } else {
+            corners_at(stud_at(i - n), UP, ix, iy, iz, fx, fy, fz);
+        }
         for (int k = 0; k < 8; ++k) {
             const int x = ix + (k & 1), c = iy + ((k >> 1) & 1), z = iz + ((k >> 2) & 1);
             if (g.opaque(x, c, z) && !g.sky(x, c, z)) {
@@ -5818,6 +5974,29 @@ static void sky_light_pass(MeshBuf &m, const TileSample &s, bool surface, Dictio
         }
         const float bl = bw > 1e-5f ? bs / bw : 0.0f;
         cu[(size_t)i * 4 + 1] = (uint8_t)std::lround(std::clamp(bl / (float)SKY_MAX, 0.0f, 1.0f) * (float)BLOCK_BYTE);
+    }
+    // The studs: the same blend, into their custom data (sky, block; 0..1).
+    for (int k = 0; k < ns; ++k) {
+        int ix, iy, iz;
+        float fx, fy, fz;
+        corners_at(stud_at(k), UP, ix, iy, iz, fx, fy, fz);
+        float sum = 0.0f, wsum = 0.0f, bs = 0.0f;
+        for (int c8 = 0; c8 < 8; ++c8) {
+            const int x = ix + (c8 & 1), c = iy + ((c8 >> 1) & 1), z = iz + ((c8 >> 2) & 1);
+            if (g.opaque(x, c, z) && !g.sky(x, c, z)) {
+                continue;
+            }
+            const float w = ((c8 & 1) ? fx : 1.0f - fx) * (((c8 >> 1) & 1) ? fy : 1.0f - fy)
+                    * (((c8 >> 2) & 1) ? fz : 1.0f - fz);
+            sum += w * (float)g.light(x, c, z);
+            if (lit) {
+                bs += w * (float)g.block_light(x, c, z);
+            }
+            wsum += w;
+        }
+        float *b = studs->ptrw() + (size_t)k * SS;
+        b[16] = wsum > 1e-5f ? std::clamp(sum / wsum / (float)SKY_MAX, 0.0f, 1.0f) : 1.0f;
+        b[17] = wsum > 1e-5f ? std::clamp(bs / wsum / (float)SKY_MAX, 0.0f, 1.0f) : 0.0f;
     }
     out["sky_ms"] = (double)(Time::get_singleton()->get_ticks_usec() - t0) / 1000.0;
     out["sky_filled"] = g.cells_filled;
@@ -5918,12 +6097,14 @@ Dictionary BrickTerrain::build_section(int tx, int sy, int tz) {
     MeshBuf m;
     PackedFloat32Array boxes;
     int cave_boxes = 0;
+    PackedFloat32Array studs;
+    int stud_count = 0;
     if (sample_section(tx, sy, tz, s)) {
         const std::vector<int32_t> owner((size_t)TILE * TILE, -1);
         const std::vector<Piece> pieces;
-        mask_faces(m, s, owner, pieces, g_field.seed);
-        cave_boxes = add_cave_boxes(s, boxes, true);
-        sky_light_pass(m, s, false, out);
+        mask_faces(m, s, owner, pieces, g_field.seed, studs, stud_count);
+        cave_boxes = add_cave_boxes(s, boxes, true, nullptr);
+        sky_light_pass(m, s, false, out, &studs);
         out["own_lo"] = s.own_lo;
         out["own_hi"] = s.own_hi;
     }
@@ -5940,7 +6121,10 @@ Dictionary BrickTerrain::build_section(int tx, int sy, int tz) {
     }
     // The keys TerrainTile reads, so a section is drawn by the same node.
     out["mesh"] = mesh;
-    out["studs"] = PackedFloat32Array();
+    // Studs on the cave floors (Docs/MineWorld.md 20), drawn by the section's
+    // TerrainTile like a surface tile's.
+    out["studs"] = studs;
+    out["stud_stride"] = stud_stride();
     out["tufts"] = PackedFloat32Array();
     out["pebbles"] = PackedFloat32Array();
     out["bricks"] = PackedFloat32Array();
@@ -5950,7 +6134,7 @@ Dictionary BrickTerrain::build_section(int tx, int sy, int tz) {
     out["cave_box_count"] = cave_boxes;
     out["piece_count"] = 0;
     out["triangle_count"] = m.indices.size() / 3;
-    out["stud_count"] = 0;
+    out["stud_count"] = stud_count;
     out["scatter_count"] = 0;
     out["build_ms"] = (double)(Time::get_singleton()->get_ticks_usec() - t0) / 1000.0;
     return out;
@@ -6178,61 +6362,137 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
         }
     }
 
-    std::vector<uint8_t> done((size_t)TILE * TILE, 0);
+    // WHERE EACH COLUMN'S TOP STOPS BEING SOLID (Docs/MineWorld.md 20): the
+    // lowest plate of the solid run down from its top, or INT16_MIN past
+    // RUN_CAP plates. A top box reached down to the lowest neighbouring column
+    // whatever was under the top, so over a cave under a roof -- a course or
+    // two thick, beside lower ground -- it filled the cave with a wall you
+    // walked into and could not break, drawn open (terrain_audit_probe: 7,158
+    // open-air cells inside top boxes over 30 tiles). A merged box that would
+    // reach into air under one of its columns is merged again inside itself,
+    // over columns that stop alike, and each part stops at its first air; a
+    // part over solid ground still reaches its lowest neighbour, so a terrace
+    // face keeps its box.
+    constexpr int RUN_CAP = 96;
+    std::vector<int16_t> sbot((size_t)TILE * TILE, INT16_MIN);
     for (int lz = 0; lz < TILE; ++lz) {
         for (int lx = 0; lx < TILE; ++lx) {
-            if (done[(size_t)lx + TILE * lz]) {
-                continue;
+            int yp = s.tp[TileSample::idx(lx, lz)];
+            int n = 0;
+            while (n < RUN_CAP && s.solid(lx, yp, lz)) {
+                --yp;
+                ++n;
             }
-            const float t = ctop[(size_t)lx + TILE * lz];
-            int w = 1;
-            while (lx + w < TILE && !done[(size_t)(lx + w) + TILE * lz] &&
-                    ctop[(size_t)(lx + w) + TILE * lz] == t) {
-                ++w;
+            if (n < RUN_CAP) {
+                sbot[(size_t)lx + TILE * lz] = (int16_t)(yp + 1);
             }
-            int d = 1;
-            while (lz + d < TILE) {
-                bool row_ok = true;
-                for (int k = 0; k < w; ++k) {
-                    if (done[(size_t)(lx + k) + TILE * (lz + d)] ||
-                            ctop[(size_t)(lx + k) + TILE * (lz + d)] != t) {
-                        row_ok = false;
-                        break;
-                    }
-                }
-                if (!row_ok) {
-                    break;
-                }
-                ++d;
-            }
-            for (int dz = 0; dz < d; ++dz) {
-                for (int dx = 0; dx < w; ++dx) {
-                    done[(size_t)(lx + dx) + TILE * (lz + dz)] = 1;
-                }
-            }
-
-            // Down to the lowest neighbouring column, so a terrace face has
-            // no gap under it. Clamped: a cliff does not need a box to the
-            // seabed, only far enough that nothing walks through the face.
-            int lowest_p = s.tp[TileSample::idx(lx, lz)];
-            for (int dz = -1; dz <= d; ++dz) {
-                for (int dx = -1; dx <= w; ++dx) {
-                    if (dx >= 0 && dx < w && dz >= 0 && dz < d) {
-                        continue;
-                    }
-                    lowest_p = std::min<int>(lowest_p, s.tp[TileSample::idx(lx + dx, lz + dz)]);
-                }
-            }
-            const float floor_y = (float)(lowest_p + 1) * PLATE_M;
-            const float depth = std::max(t - floor_y, BRICK_M);
-            boxes.push_back(((float)lx + (float)w * 0.5f) * STUD_M);
-            boxes.push_back(t - depth * 0.5f);
-            boxes.push_back(((float)lz + (float)d * 0.5f) * STUD_M);
-            boxes.push_back((float)w * STUD_M);
-            boxes.push_back(depth);
-            boxes.push_back((float)d * STUD_M);
         }
     }
+    // Plates of each column its top box covers, from the top down: the cave
+    // colliders take the rest (add_cave_boxes).
+    std::vector<int16_t> cov((size_t)TILE * TILE, (int16_t)PLATES_PER_CELL);
+    // Down to the lowest neighbouring column, so a terrace face has no gap
+    // under it. Clamped: a cliff does not need a box to the seabed, only far
+    // enough that nothing walks through the face.
+    auto box_depth = [&](int x0, int z0, int w, int d, float t) -> float {
+        int lowest_p = s.tp[TileSample::idx(x0, z0)];
+        for (int dz = -1; dz <= d; ++dz) {
+            for (int dx = -1; dx <= w; ++dx) {
+                if (dx >= 0 && dx < w && dz >= 0 && dz < d) {
+                    continue;
+                }
+                lowest_p = std::min<int>(lowest_p, s.tp[TileSample::idx(x0 + dx, z0 + dz)]);
+            }
+        }
+        const float floor_y = (float)(lowest_p + 1) * PLATE_M;
+        return std::max(t - floor_y, BRICK_M);
+    };
+    auto emit_box = [&](int x0, int z0, int w, int d, float t, int cap) {
+        float depth = box_depth(x0, z0, w, d, t);
+        if (cap != INT16_MIN) {
+            depth = std::max(std::min(depth, t - (float)cap * PLATE_M), 0.02f);
+        }
+        const int bottom = (int)std::ceil((t - depth) / PLATE_M - 1e-3f);
+        for (int dz = 0; dz < d; ++dz) {
+            for (int dx = 0; dx < w; ++dx) {
+                const int tp = s.tp[TileSample::idx(x0 + dx, z0 + dz)];
+                cov[(size_t)(x0 + dx) + TILE * (z0 + dz)] = (int16_t)std::max(tp - bottom + 1, 0);
+            }
+        }
+        boxes.push_back(((float)x0 + (float)w * 0.5f) * STUD_M);
+        boxes.push_back(t - depth * 0.5f);
+        boxes.push_back(((float)z0 + (float)d * 0.5f) * STUD_M);
+        boxes.push_back((float)w * STUD_M);
+        boxes.push_back(depth);
+        boxes.push_back((float)d * STUD_M);
+    };
+    // Greedy rectangles of equal collision height (and equal `key`) over a
+    // region of the tile, handed to `on_rect(x0, z0, w, d)`.
+    std::vector<uint8_t> done((size_t)TILE * TILE, 0);
+    std::vector<int16_t> key((size_t)TILE * TILE, INT16_MIN);
+    auto greedy = [&](int rx, int rz, int rw, int rd,
+            const std::function<void(int, int, int, int)> &on_rect) {
+        for (int lz = rz; lz < rz + rd; ++lz) {
+            for (int lx = rx; lx < rx + rw; ++lx) {
+                if (done[(size_t)lx + TILE * lz]) {
+                    continue;
+                }
+                const float t = ctop[(size_t)lx + TILE * lz];
+                const int16_t kk = key[(size_t)lx + TILE * lz];
+                auto same = [&](int x, int z) {
+                    const size_t i = (size_t)x + TILE * z;
+                    return !done[i] && ctop[i] == t && key[i] == kk;
+                };
+                int w = 1;
+                while (lx + w < rx + rw && same(lx + w, lz)) {
+                    ++w;
+                }
+                int d = 1;
+                while (lz + d < rz + rd) {
+                    bool row_ok = true;
+                    for (int k = 0; k < w && row_ok; ++k) {
+                        row_ok = same(lx + k, lz + d);
+                    }
+                    if (!row_ok) {
+                        break;
+                    }
+                    ++d;
+                }
+                for (int dz = 0; dz < d; ++dz) {
+                    for (int dx = 0; dx < w; ++dx) {
+                        done[(size_t)(lx + dx) + TILE * (lz + dz)] = 1;
+                    }
+                }
+                on_rect(lx, lz, w, d);
+            }
+        }
+    };
+    greedy(0, 0, TILE, TILE, [&](int x0, int z0, int w, int d) {
+        const float t = ctop[(size_t)x0 + TILE * z0];
+        const float bottom = t - box_depth(x0, z0, w, d, t);
+        bool through_air = false;
+        for (int dz = 0; dz < d; ++dz) {
+            for (int dx = 0; dx < w; ++dx) {
+                const size_t i = (size_t)(x0 + dx) + TILE * (z0 + dz);
+                if (sbot[i] != INT16_MIN && (float)sbot[i] * PLATE_M > bottom + 1e-4f) {
+                    through_air = true;
+                    key[i] = sbot[i];
+                }
+            }
+        }
+        if (!through_air) {
+            emit_box(x0, z0, w, d, t, INT16_MIN);
+            return;
+        }
+        for (int dz = 0; dz < d; ++dz) {
+            for (int dx = 0; dx < w; ++dx) {
+                done[(size_t)(x0 + dx) + TILE * (z0 + dz)] = 0;
+            }
+        }
+        greedy(x0, z0, w, d, [&](int ax, int az, int aw, int ad) {
+            emit_box(ax, az, aw, ad, t, key[(size_t)ax + TILE * az]);
+        });
+    });
 
     // --- cave colliders -----------------------------------------------------
     //
@@ -6251,7 +6511,7 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
     //
     // Cheap where there are no caves: a column only looks at its cells when
     // it, or a neighbour, has open air under its top.
-    int cave_boxes = add_cave_boxes(s, boxes, false);
+    int cave_boxes = add_cave_boxes(s, boxes, false, &cov);
 
     int curve_cells = 0;
     if (g_smooth_terrain) {
@@ -6774,7 +7034,9 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
     // Every face the surface packer did not draw: terrace sides, cave roofs,
     // overhang undersides, crater walls. Section 17.2 -- this is the pass
     // that makes the world volumetric rather than a skin.
-    mask_faces(m, s, owner, pieces, g_field.seed);
+    PackedFloat32Array cave_studs;
+    int cave_stud_count = 0;
+    mask_faces(m, s, owner, pieces, g_field.seed, cave_studs, cave_stud_count);
 
     // --- scatter (section 8), then studs (section 7.2 tier 0) -------------
     //
@@ -6828,8 +7090,8 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                     (float)w, (top - bottom) / BRICK_M, (float)d);
             for (int dz = 0; dz < d; ++dz) {
                 for (int dx = 0; dx < w; ++dx) {
-                    push_instance(studs, ((float)(lx + dx) + 0.5f) * STUD_M, top,
-                            ((float)(lz + dz) + 0.5f) * STUD_M, 0.0f, c);
+                    push_stud(studs, ((float)(lx + dx) + 0.5f) * STUD_M, top,
+                            ((float)(lz + dz) + 0.5f) * STUD_M, c);
                     ++stud_count;
                 }
             }
@@ -7026,9 +7288,9 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                     // half a plate away from it now that the curve follows
                     // the unquantised field, and a stud floating 7 cm over
                     // the ground is the first thing anyone would notice.
-                    push_instance(studs, ((float)lx + 0.5f) * STUD_M,
+                    push_stud(studs, ((float)lx + 0.5f) * STUD_M,
                         cell_surface(lx, lz),
-                        ((float)lz + 0.5f) * STUD_M, 0.0f, c);
+                        ((float)lz + 0.5f) * STUD_M, c);
                     ++stud_count;
                 }
                 continue;
@@ -7045,14 +7307,16 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
             // disagree with its brick (section 7.3).
             Color c = piece_colour(s, pieces[o].ox, pieces[o].oz, pieces[o].mat, true);
             c.a = 1.0f;
-            push_instance(studs, ((float)lx + 0.5f) * STUD_M, y,
-                ((float)lz + 0.5f) * STUD_M, 0.0f, c);
+            push_stud(studs, ((float)lx + 0.5f) * STUD_M, y,
+                ((float)lz + 0.5f) * STUD_M, c);
             ++stud_count;
         }
     }
 
+    studs.append_array(cave_studs);
+    stud_count += cave_stud_count;
     Dictionary sky;
-    sky_light_pass(m, s, true, sky);
+    sky_light_pass(m, s, true, sky, &studs);
 
     // No edge skirt on the detail tiles (19.18): the detail square always
     // surrounds the camera, so a skirt facing out of it is never seen, and
@@ -7073,6 +7337,7 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
     Dictionary out = sky;
     out["mesh"] = mesh;
     out["studs"] = studs;
+    out["stud_stride"] = stud_stride();
     out["tufts"] = tufts;
     out["pebbles"] = pebbles;
     out["bricks"] = bricks;
@@ -7101,7 +7366,305 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
     return out;
 }
 
+// --- the audit (probes; Docs/MineWorld.md 20) ----------------------------------------
+//
+// Is every face of an owned solid cell that open air can see covered by a
+// triangle of the FLAT mesh (the far one; the chamfered one is
+// bevel_gap_probe's), and does no collider box hold open air? Both are the
+// field against what build_tile hands out, so a mesher or collider shortcut
+// that leaves a face out ("see-through") or collides where nothing is drawn
+// ("an invisible wall") shows as a count.
+Dictionary BrickTerrain::audit_tile(int tx, int tz, int sy) {
+    TileSample s;
+    Dictionary d;
+    const bool section = sy != INT32_MIN;
+    t_bevel_override = 0.0f;
+    if (section) {
+        if (!sample_section(tx, sy, tz, s)) {
+            t_bevel_override = -1.0f;
+            return Dictionary();
+        }
+        d = build_section(tx, sy, tz);
+    } else {
+        sample_tile(g_field, tx, tz, s);
+        d = build_tile(tx, tz);
+    }
+    t_bevel_override = -1.0f;
+
+    // Unit faces the mesh covers: (axis, sign, plane, u, v) in cells.
+    auto fkey = [](int axis, int sgn, int plane, int u, int v) -> int64_t {
+        return ((int64_t)(axis * 2 + (sgn > 0 ? 1 : 0)) << 56)
+                | ((int64_t)(plane + 4096) << 40) | ((int64_t)(u + 4096) << 24)
+                | (int64_t)(v + (1 << 23));
+    };
+    std::set<int64_t> covered;
+    const Array mesh = d.get("mesh", Array());
+    if (mesh.size() > Mesh::ARRAY_INDEX) {
+        const PackedVector3Array verts = mesh[Mesh::ARRAY_VERTEX];
+        const PackedVector3Array norms = mesh[Mesh::ARRAY_NORMAL];
+        const PackedInt32Array idx = mesh[Mesh::ARRAY_INDEX];
+        for (int t = 0; t + 2 < idx.size(); t += 3) {
+            const Vector3 a = verts[idx[t]], b = verts[idx[t + 1]], c = verts[idx[t + 2]];
+            const Vector3 n = norms[idx[t]];
+            int axis = 0;
+            float big = std::fabs(n.x);
+            if (std::fabs(n.y) > big) { axis = 1; big = std::fabs(n.y); }
+            if (std::fabs(n.z) > big) { axis = 2; big = std::fabs(n.z); }
+            if (big < 0.99f) {
+                continue;
+            }
+            const int sgn = n[axis] > 0.0f ? 1 : -1;
+            const int ua = axis == 0 ? 2 : 0;
+            const int va = axis == 1 ? 2 : 1;
+            const float ps = axis == 1 ? PLATE_M : STUD_M;
+            const float us = STUD_M;
+            const float vs = axis == 1 ? STUD_M : PLATE_M;
+            const float pf = a[axis] / ps;
+            const int plane = (int)std::lround(pf);
+            if (std::fabs(pf - (float)plane) > 1e-3f) {
+                continue;   // off the grid (a skirt, a lip's foot)
+            }
+            const float au = a[ua] / us, av = a[va] / vs;
+            const float bu = b[ua] / us, bv = b[va] / vs;
+            const float cu = c[ua] / us, cv = c[va] / vs;
+            const int u0 = (int)std::floor(std::min({ au, bu, cu }));
+            const int u1 = (int)std::ceil(std::max({ au, bu, cu }));
+            const int v0 = (int)std::floor(std::min({ av, bv, cv }));
+            const int v1 = (int)std::ceil(std::max({ av, bv, cv }));
+            const float area = (bu - au) * (cv - av) - (cu - au) * (bv - av);
+            if (std::fabs(area) < 1e-6f) {
+                continue;
+            }
+            for (int v = v0; v < v1; ++v) {
+                for (int u = u0; u < u1; ++u) {
+                    const float pu = (float)u + 0.5f, pv = (float)v + 0.5f;
+                    const float w0 = ((bu - pu) * (cv - pv) - (cu - pu) * (bv - pv)) / area;
+                    const float w1 = ((cu - pu) * (av - pv) - (au - pu) * (cv - pv)) / area;
+                    const float w2 = 1.0f - w0 - w1;
+                    if (w0 >= -1e-4f && w1 >= -1e-4f && w2 >= -1e-4f) {
+                        covered.insert(fkey(axis, sgn, plane, u, v));
+                    }
+                }
+            }
+        }
+    }
+
+    static const int DIRS[6][3] = {
+        { -1, 0, 0 }, { 1, 0, 0 }, { 0, -1, 0 }, { 0, 1, 0 }, { 0, 0, -1 }, { 0, 0, 1 }
+    };
+    int exposed = 0, undrawn = 0;
+    PackedInt32Array undrawn_dir;
+    undrawn_dir.resize(6);
+    for (int k = 0; k < 6; ++k) {
+        undrawn_dir[k] = 0;
+    }
+    Array examples;
+    const int lo = s.lo_owned(), hi = s.hi_owned();
+    for (int lz = 0; lz < TILE; ++lz) {
+        for (int lx = 0; lx < TILE; ++lx) {
+            for (int yp = lo; yp < hi; ++yp) {
+                if (!s.solid(lx, yp, lz)) {
+                    continue;
+                }
+                for (int k = 0; k < 6; ++k) {
+                    const int dx = DIRS[k][0], dy = DIRS[k][1], dz = DIRS[k][2];
+                    if (s.solid(lx + dx, yp + dy, lz + dz) || !s.open_air(lx + dx, yp + dy, lz + dz)) {
+                        continue;
+                    }
+                    ++exposed;
+                    bool ok;
+                    if (dx != 0) {
+                        ok = covered.count(fkey(0, dx, lx + (dx > 0 ? 1 : 0), lz, yp)) > 0;
+                    } else if (dz != 0) {
+                        ok = covered.count(fkey(2, dz, lz + (dz > 0 ? 1 : 0), lx, yp)) > 0;
+                    } else if (dy < 0) {
+                        ok = covered.count(fkey(1, -1, yp, lx, lz)) > 0;
+                    } else {
+                        // An overlay is drawn a plate up, over its brick.
+                        ok = covered.count(fkey(1, 1, yp + 1, lx, lz)) > 0
+                                || covered.count(fkey(1, 1, yp + 2, lx, lz)) > 0;
+                    }
+                    if (!ok) {
+                        ++undrawn;
+                        undrawn_dir[k] = undrawn_dir[k] + 1;
+                        if (examples.size() < 12) {
+                            examples.push_back(Vector4i(tx * TILE + lx, yp, tz * TILE + lz, k));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    const PackedFloat32Array boxes = d.get("boxes", PackedFloat32Array());
+    const int nbox = boxes.size() / 6;
+    const int ncave = (int)d.get("cave_box_count", 0);
+    const int ntop = nbox - ncave;
+    int air_top = 0, air_cave = 0;
+    Array air_examples;
+    for (int b = 0; b < nbox; ++b) {
+        const int o = b * 6;
+        const float cx = boxes[o], cyy = boxes[o + 1], cz = boxes[o + 2];
+        const float hx = boxes[o + 3] * 0.5f, hy = boxes[o + 4] * 0.5f, hz = boxes[o + 5] * 0.5f;
+        const int x0 = (int)std::ceil((cx - hx) / STUD_M - 0.5f + 1e-3f);
+        const int x1 = (int)std::floor((cx + hx) / STUD_M - 0.5f - 1e-3f);
+        const int z0 = (int)std::ceil((cz - hz) / STUD_M - 0.5f + 1e-3f);
+        const int z1 = (int)std::floor((cz + hz) / STUD_M - 0.5f - 1e-3f);
+        const int y0p = (int)std::ceil((cyy - hy) / PLATE_M - 0.5f + 1e-3f);
+        const int y1p = (int)std::floor((cyy + hy) / PLATE_M - 0.5f - 1e-3f);
+        for (int lz = z0; lz <= z1; ++lz) {
+            for (int lx = x0; lx <= x1; ++lx) {
+                if (lx < -MARGIN || lz < -MARGIN || lx >= TILE + MARGIN || lz >= TILE + MARGIN) {
+                    continue;
+                }
+                // Over the column's top is the sky (a lip or an overlay's
+                // box reaching a plate up); under it is what a cave is.
+                const int top = s.tp[TileSample::idx(lx, lz)];
+                for (int yp = y0p; yp <= y1p && yp < top; ++yp) {
+                    if (!s.in_y(yp) || s.solid(lx, yp, lz) || !s.open_air(lx, yp, lz)) {
+                        continue;
+                    }
+                    if (b < ntop) {
+                        ++air_top;
+                    } else {
+                        ++air_cave;
+                    }
+                    if (air_examples.size() < 12) {
+                        air_examples.push_back(Vector4i(tx * TILE + lx, yp, tz * TILE + lz,
+                                b < ntop ? 0 : 1));
+                    }
+                }
+            }
+        }
+    }
+    // ...and the other way round: every owned solid cell open air touches is
+    // inside some box, or a walker falls through what is drawn.
+    const int ny = std::max(hi - lo, 1);
+    std::vector<uint8_t> inbox((size_t)TILE * ny * TILE, 0);
+    for (int b = 0; b < nbox; ++b) {
+        const int o = b * 6;
+        const float cx = boxes[o], cyy = boxes[o + 1], cz = boxes[o + 2];
+        const float hx = boxes[o + 3] * 0.5f, hy = boxes[o + 4] * 0.5f, hz = boxes[o + 5] * 0.5f;
+        const int x0 = std::max((int)std::ceil((cx - hx) / STUD_M - 0.5f - 1e-3f), 0);
+        const int x1 = std::min((int)std::floor((cx + hx) / STUD_M - 0.5f + 1e-3f), TILE - 1);
+        const int z0 = std::max((int)std::ceil((cz - hz) / STUD_M - 0.5f - 1e-3f), 0);
+        const int z1 = std::min((int)std::floor((cz + hz) / STUD_M - 0.5f + 1e-3f), TILE - 1);
+        const int y0p = std::max((int)std::ceil((cyy - hy) / PLATE_M - 0.5f - 1e-3f), lo);
+        const int y1p = std::min((int)std::floor((cyy + hy) / PLATE_M - 0.5f + 1e-3f), hi - 1);
+        for (int lz = z0; lz <= z1; ++lz) {
+            for (int yp = y0p; yp <= y1p; ++yp) {
+                for (int lx = x0; lx <= x1; ++lx) {
+                    inbox[(size_t)lx + TILE * ((size_t)(yp - lo) + (size_t)ny * lz)] = 1;
+                }
+            }
+        }
+    }
+    int uncollided = 0;
+    Array bare_examples;
+    for (int lz = 0; lz < TILE; ++lz) {
+        for (int lx = 0; lx < TILE; ++lx) {
+            for (int yp = lo; yp < hi; ++yp) {
+                if (!s.solid(lx, yp, lz) || inbox[(size_t)lx + TILE * ((size_t)(yp - lo) + (size_t)ny * lz)]) {
+                    continue;
+                }
+                bool open = false;
+                for (int k = 0; k < 6 && !open; ++k) {
+                    const int dx = DIRS[k][0], dy = DIRS[k][1], dz = DIRS[k][2];
+                    open = !s.solid(lx + dx, yp + dy, lz + dz) && s.open_air(lx + dx, yp + dy, lz + dz);
+                }
+                if (open) {
+                    ++uncollided;
+                    if (bare_examples.size() < 12) {
+                        bare_examples.push_back(Vector3i(tx * TILE + lx, yp, tz * TILE + lz));
+                    }
+                }
+            }
+        }
+    }
+    // STUDS (Docs/MineWorld.md 20). The top course: how many of its cells
+    // show studs (a studded brick, or a studded plate laid on one), and the
+    // held bricks -- something stands on their footprint -- that show none.
+    // The caves: their topmost bricks' cells (a +Y face the packer did not
+    // draw) and how many have a stud instance on them.
+    int top_cells = 0, top_studded = 0, held = 0, held_bare = 0;
+    std::set<int64_t> cave_cells;
+    {
+        std::vector<Piece> pieces;
+        std::vector<int32_t> owner((size_t)TILE * TILE, -1);
+        if (!section) {
+            brick::pack_tile(g_field, s, pieces, owner);
+        }
+        for (const Piece &p : pieces) {
+            if (p.kind == PIECE_RAMP || p.kind == PIECE_SLOPE) {
+                continue;
+            }
+            const int n = p.sx * p.sz;
+            const bool shows = p.studded != 0 && p.overlay != 1;
+            top_cells += n;
+            top_studded += shows ? n : 0;
+            if (p.held && material_studded(p.mat)) {
+                ++held;
+                held_bare += shows ? 0 : 1;
+            }
+        }
+        for (int lz = 0; lz < TILE; ++lz) {
+            for (int lx = 0; lx < TILE; ++lx) {
+                const int32_t o = owner[(size_t)lx + TILE * lz];
+                for (int yp = lo; yp < hi; ++yp) {
+                    if (!s.solid(lx, yp, lz) || s.solid(lx, yp + 1, lz) || !s.open_air(lx, yp + 1, lz)) {
+                        continue;
+                    }
+                    if (o >= 0 && pieces[(size_t)o].top == yp) {
+                        continue;   // the top course's
+                    }
+                    if (!material_studded(s.voxel(lx, yp, lz))) {
+                        continue;
+                    }
+                    cave_cells.insert(((int64_t)lx << 40) | ((int64_t)lz << 24) | (int64_t)(yp + (1 << 23)));
+                }
+            }
+        }
+    }
+    int cave_studded = 0;
+    {
+        const PackedFloat32Array st = d.get("studs", PackedFloat32Array());
+        const int stride = (int)d.get("stud_stride", 16);
+        for (int i = 0; i + stride <= st.size(); i += stride) {
+            const int lx = (int)std::floor(st[i + 3] / STUD_M);
+            const int lz = (int)std::floor(st[i + 11] / STUD_M);
+            const int yp = (int)std::lround(st[i + 7] / PLATE_M) - 1;
+            if (lx < 0 || lz < 0) {
+                continue;
+            }
+            if (cave_cells.count(((int64_t)lx << 40) | ((int64_t)lz << 24) | (int64_t)(yp + (1 << 23)))) {
+                ++cave_studded;
+            }
+        }
+    }
+    Dictionary out;
+    out["top_cells"] = top_cells;
+    out["top_studded"] = top_studded;
+    out["held"] = held;
+    out["held_bare"] = held_bare;
+    out["cave_cells"] = (int)cave_cells.size();
+    out["cave_studded"] = cave_studded;
+    out["uncollided"] = uncollided;
+    out["bare_examples"] = bare_examples;
+    out["exposed"] = exposed;
+    out["undrawn"] = undrawn;
+    out["undrawn_dir"] = undrawn_dir;
+    out["examples"] = examples;
+    out["box_air_top"] = air_top;
+    out["box_air_cave"] = air_cave;
+    out["air_examples"] = air_examples;
+    out["boxes"] = nbox;
+    out["cave_boxes"] = ncave;
+    return out;
+}
+
 void BrickTerrain::_bind_methods() {
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("audit_tile", "tx", "tz", "sy"),
+        &BrickTerrain::audit_tile);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("configure", "world_seed"),
         &BrickTerrain::configure);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_field_version"),

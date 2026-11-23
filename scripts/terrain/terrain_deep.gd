@@ -51,6 +51,15 @@ var _collide_pending := {}
 ## does not take the floor away.
 var _out_since := {}
 const LINGER_MS := 600
+## REFRESHES SWAP TOGETHER, as the surface tiles' do (TerrainStreamer,
+## Docs/MineWorld.md 20): a refreshed section is built hidden and collided
+## (`_swaps`, key -> the new TerrainTile or null for none), and the sections
+## one edit named (a batch) swap in one frame once all are built; a held
+## section (hold_box, ground_collapse.gd) waits for its holder.
+var _swaps := {}
+var _batch_of := {}
+var _holds := {}
+const BATCH_WAIT_MS := 300
 
 
 func setup(material: Material) -> void:
@@ -85,6 +94,10 @@ func follow(eye: Vector3) -> void:
 		_centre = c
 		_plan()
 	_land(t0)
+	# A batch waiting on a straggler swaps once its wait is over.
+	for k in _swaps.keys():
+		if _swaps.has(k):
+			_swap_batch(k)
 	if active and not hold:
 		_start()
 	_drop()
@@ -140,27 +153,36 @@ func _land(t0: int) -> void:
 			_dirty[k] = true
 			continue
 		var data: Dictionary = job[1][0]
-		var old = _secs.get(k)
-		if old != null:
-			(old as TerrainTile).recycle()
-			(old as TerrainTile).queue_free()
-		if not data.has("own_lo") or (data.mesh as Array).is_empty() and (data.boxes as PackedFloat32Array).is_empty():
-			_secs[k] = null
+		var refresh := _secs.has(k)
+		var tile: TerrainTile = null
+		if data.has("own_lo") and not ((data.mesh as Array).is_empty() and (data.boxes as PackedFloat32Array).is_empty()):
+			tile = TerrainTile.new()
+			tile.name = "Deep_%d_%d_%d" % [k.x, k.y, k.z]
+			tile.phases = true
+			add_child(tile)
+			tile.build(k.x, k.z, _material, data)
+			tile.set_casts_shadow(false)
+			# Studs on its cave floors (Docs/MineWorld.md 20).
+			tile.set_near(true)
+			built += 1
+		if refresh:
+			# A refresh: hidden and collided now (ground just rebuilt under
+			# the player must not go a frame without collision), swapped with
+			# its batch.
+			if _swaps.has(k) and _swaps[k] != null:
+				(_swaps[k] as TerrainTile).recycle()
+				(_swaps[k] as TerrainTile).queue_free()
+			if tile != null:
+				tile.visible = false
+				if _near(k):
+					tile.add_collision()
+			_swaps[k] = tile
+			_swap_batch(k)
 			continue
-		var tile := TerrainTile.new()
-		tile.name = "Deep_%d_%d_%d" % [k.x, k.y, k.z]
-		tile.phases = true
-		add_child(tile)
-		tile.build(k.x, k.z, _material, data)
-		tile.set_casts_shadow(false)
 		_secs[k] = tile
-		built += 1
-		if _near(k):
-			# Ground just rebuilt under the player must not go a frame
-			# without collision (as TerrainStreamer does for refreshes).
-			if old != null:
-				tile.add_collision()
-			else:
+		if tile != null:
+			tile.add_instances()
+			if _near(k):
 				_collide_pending[k] = true
 
 
@@ -192,6 +214,9 @@ func _drop() -> void:
 		var tile = _secs[k]
 		_secs.erase(k)
 		_dirty.erase(k)
+		_drop_swap(k)
+		_batch_of.erase(k)
+		_holds.erase(k)
 		if tile != null:
 			(tile as TerrainTile).recycle()
 			(tile as TerrainTile).queue_free()
@@ -204,19 +229,152 @@ func _drop() -> void:
 ## An edit's plate box (fill_box, clear_runs, carve: box_lo / box_hi, cells):
 ## the sections it touches are baked again, behind the drawn ones.
 func refresh_box(lo: Vector3i, hi: Vector3i) -> void:
+	var batch := {"keys": {}, "since": 0}
+	for k in _box_keys(lo, hi):
+		if _tasks.has(k):
+			_stale[k] = true
+		elif _secs.has(k):
+			_dirty[k] = true
+		else:
+			continue
+		if not _secs.has(k):
+			continue   # a first bake: nothing to swap
+		batch.keys[k] = true
+		var old = _batch_of.get(k)
+		if old != null and old != batch:
+			for t in old.keys:
+				batch.keys[t] = true
+	for t in batch.keys:
+		_batch_of[t] = batch
+
+
+## The sections an edit's plate box touches, one cell out: a face on a
+## section's edge is decided by its neighbour.
+func _box_keys(lo: Vector3i, hi: Vector3i) -> Array[Vector3i]:
 	var tile := BrickTerrain.get_tile_studs()
 	var sec := BrickTerrain.get_deep_section_plates()
-	# One cell out: a face on a section's edge is decided by its neighbour.
 	var a := Vector3i(floori(float(lo.x - 1) / tile), floori(float(lo.y - 1) / sec), floori(float(lo.z - 1) / tile))
 	var b := Vector3i(floori(float(hi.x + 1) / tile), floori(float(hi.y + 1) / sec), floori(float(hi.z + 1) / tile))
+	var out: Array[Vector3i] = []
 	for z in range(a.z, b.z + 1):
 		for y in range(a.y, b.y + 1):
 			for x in range(a.x, b.x + 1):
-				var k := Vector3i(x, y, z)
-				if _tasks.has(k):
-					_stale[k] = true
-				elif _secs.has(k):
-					_dirty[k] = true
+				out.append(Vector3i(x, y, z))
+	return out
+
+
+## Hold the sections over an edit's box for `owner` (TerrainStreamer.hold_tiles).
+func hold_box(lo: Vector3i, hi: Vector3i, owner) -> void:
+	for k in _box_keys(lo, hi):
+		if _secs.has(k):
+			if not _holds.has(k):
+				_holds[k] = {}
+			_holds[k][owner] = true
+
+
+func unhold(owner) -> void:
+	for k in _holds.keys():
+		(_holds[k] as Dictionary).erase(owner)
+		if (_holds[k] as Dictionary).is_empty():
+			_holds.erase(k)
+
+
+## Could every refresh over the box, and the rest of each one's batch, swap
+## now (holds by anyone but `owner` aside)? Nothing waiting: true. An
+## inactive tier bakes nothing: what it holds stays as drawn (true).
+func ready_box(lo: Vector3i, hi: Vector3i, owner = null) -> bool:
+	if not active:
+		return true
+	for k in _batch_keys(lo, hi):
+		if not _sec_ready(k, owner):
+			return false
+	return true
+
+
+## Swap every batch over the box that is ready, now.
+func swap_ready_box(lo: Vector3i, hi: Vector3i) -> void:
+	for k in _batch_keys(lo, hi):
+		if _swaps.has(k):
+			_swap_batch(k, true)
+
+
+func _batch_keys(lo: Vector3i, hi: Vector3i) -> Array:
+	var out := {}
+	for k in _box_keys(lo, hi):
+		if not _secs.has(k):
+			continue
+		out[k] = true
+		var b = _batch_of.get(k)
+		if b != null:
+			for t in b.keys:
+				out[t] = true
+	return out.keys()
+
+
+func _held(k: Vector3i, owner = null) -> bool:
+	var h = _holds.get(k)
+	if h == null:
+		return false
+	for o in h:
+		if o != owner:
+			return true
+	return false
+
+
+func _sec_ready(k: Vector3i, owner = null) -> bool:
+	if not _secs.has(k):
+		return true
+	return not _tasks.has(k) and not _dirty.has(k) and not _stale.has(k) and not _held(k, owner)
+
+
+func _swap_batch(k: Vector3i, force := false) -> void:
+	var b = _batch_of.get(k)
+	var keys: Array = b.keys.keys() if b != null else [k]
+	var all := true
+	for t in keys:
+		if _held(t):
+			return
+		if not _sec_ready(t):
+			all = false
+	if not all:
+		if b == null or force:
+			return
+		var now := Time.get_ticks_msec()
+		if int(b.since) == 0:
+			b.since = now
+		if now - int(b.since) < BATCH_WAIT_MS:
+			return
+	for t in keys:
+		if _swaps.has(t) and _sec_ready(t):
+			_swap_now(t)
+			if b != null and _batch_of.get(t) == b:
+				_batch_of.erase(t)
+	if all and b != null:
+		for t in keys:
+			if _batch_of.get(t) == b:
+				_batch_of.erase(t)
+
+
+func _swap_now(k: Vector3i) -> void:
+	var tile = _swaps[k]
+	_swaps.erase(k)
+	var old = _secs.get(k)
+	if old != null:
+		(old as TerrainTile).recycle()
+		(old as TerrainTile).queue_free()
+	_secs[k] = tile
+	if tile != null:
+		(tile as TerrainTile).add_instances()
+		(tile as TerrainTile).visible = true
+
+
+func _drop_swap(k: Vector3i) -> void:
+	if _swaps.has(k):
+		var t = _swaps[k]
+		if t != null and is_instance_valid(t):
+			(t as TerrainTile).recycle()
+			(t as TerrainTile).queue_free()
+		_swaps.erase(k)
 
 
 func clear() -> void:
@@ -226,7 +384,11 @@ func clear() -> void:
 	for k in _secs:
 		if _secs[k] != null:
 			(_secs[k] as TerrainTile).queue_free()
+	for k in _swaps.keys():
+		_drop_swap(k)
 	_secs.clear()
+	_batch_of.clear()
+	_holds.clear()
 	_dirty.clear()
 	_stale.clear()
 	_collide_pending.clear()

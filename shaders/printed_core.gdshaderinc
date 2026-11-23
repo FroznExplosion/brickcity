@@ -70,6 +70,24 @@ global uniform float lod_zoom;
 // BrickNear's stud_radius (BrickNear._push_radii); scaled through a scope.
 global uniform float near_stud_radius;
 #endif
+#ifdef INSTANCE_SKY
+// THE GROUND'S STUDS IN THE MINE WORLD (Docs/MineWorld.md 20): each stud's
+// sky and block light, from the bake (BrickTerrain sky_light_pass), in its
+// MultiMesh custom data (r sky, g block, 0..1 for levels 0..15) -- the
+// terrain shader's curve and its light() below, so a stud in a cave is as
+// dark as the floor it stands on (TerrainTile.sky_stud_material).
+uniform float sky_light_floor : hint_range(0.0, 0.2) = 0.015;
+uniform float sky_light_curve : hint_range(0.5, 0.95) = 0.8;
+uniform float sky_sun_power : hint_range(1.0, 4.0) = 2.0;
+uniform vec3 block_light_colour : source_color = vec3(1.0, 0.52, 0.22);
+uniform float block_light_energy : hint_range(0.0, 4.0) = 1.0;
+uniform float block_light_ao : hint_range(0.0, 1.0) = 0.5;
+varying float v_sky;
+varying float v_block;
+varying float l_sun;
+varying float l_spec;
+varying float l_rim;
+#endif
 varying vec3 v_local;
 varying vec3 v_colour;
 varying vec3 v_flat_normal;
@@ -102,6 +120,10 @@ void vertex() {
     v_mat = brick_material_id(COLOR.a);
     v_grain = brick_grain_axis(COLOR.a);
     v_set = bm_pbr_set(MAT_TEX[v_mat], v_colour);
+#ifdef INSTANCE_SKY
+    v_sky = INSTANCE_CUSTOM.r;
+    v_block = INSTANCE_CUSTOM.g;
+#endif
     // A stud's corners are softened in the shading (stud_round): each
     // vertex's normal leans out from the axis, so across a flat face the
     // interpolated normal turns a little the way a cylinder's does. The
@@ -276,6 +298,56 @@ void fragment() {
     ps_tangent_frame(NORMAL, aniso_dir, TANGENT, BINORMAL);
     ANISOTROPY = aniso;
     EMISSION = emission;
+#ifdef INSTANCE_SKY
+    float sky_k0 = pow(sky_light_curve, 15.0);
+    float sky_b = clamp((pow(sky_light_curve, 15.0 - 15.0 * clamp(v_sky, 0.0, 1.0)) - sky_k0)
+            / (1.0 - sky_k0), 0.0, 1.0);
+    float blk_b = clamp((pow(sky_light_curve, 15.0 - 15.0 * clamp(v_block, 0.0, 1.0)) - sky_k0)
+            / (1.0 - sky_k0), 0.0, 1.0);
+    AO = mix(sky_light_floor, 1.0, max(sky_b, blk_b * block_light_ao));
+    EMISSION += block_light_colour * albedo * (blk_b * block_light_energy);
+    l_spec = SPECULAR;
+    SPECULAR = SPECULAR * sqrt(AO);
+    l_sun = pow(sky_b, sky_sun_power);
+    l_rim = RIM;
+#endif
     RIM = surface_rim * (1.0 - metal);
     RIM_TINT = 0.4;
 }
+
+#ifdef INSTANCE_SKY
+float sky_schlick(float u) {
+    float m = 1.0 - u;
+    float m2 = m * m;
+    return m2 * m2 * m;
+}
+
+// The terrain shader's light() (SKY_LIGHT): the engine's own lighting, the
+// sun scaled by the sky light; any other light as the engine draws it.
+void light() {
+    float k = LIGHT_IS_DIRECTIONAL ? l_sun : 1.0;
+    float cNdotL = max(dot(NORMAL, LIGHT), 0.0);
+    float cNdotV = max(dot(NORMAL, VIEW), 1e-4);
+    vec3 H = normalize(VIEW + LIGHT);
+    float cLdotH = clamp(dot(LIGHT, H), 0.0, 1.0);
+    float cNdotH = clamp(dot(NORMAL, H), 0.0, 1.0);
+    float rough = ROUGHNESS;
+    float fd90 = 2.0 * cLdotH * cLdotH * rough - 0.5;
+    float fdv = 1.0 + fd90 * sky_schlick(cNdotV);
+    float fdl = 1.0 + fd90 * sky_schlick(cNdotL);
+    DIFFUSE_LIGHT += LIGHT_COLOR * ((1.0 / PI) * fdv * fdl * cNdotL) * ATTENUATION * k;
+    float rim_light = pow(max(1e-4, 1.0 - cNdotV), max(0.0, (1.0 - rough) * 16.0));
+    DIFFUSE_LIGHT += rim_light * l_rim * mix(vec3(1.0), ALBEDO, 0.4) * LIGHT_COLOR * k;
+    if (rough > 0.0) {
+        float a = rough * rough;
+        float dh = cNdotH * a;
+        float dk = a / (1.0 - cNdotH * cNdotH + dh * dh);
+        float d = dk * dk * (1.0 / PI);
+        float g = 0.5 / mix(2.0 * cNdotL * cNdotV, cNdotL + cNdotV, a);
+        float f0 = 0.16 * l_spec * l_spec;
+        float f90 = clamp(f0 * 49.5, 0.0, 1.0);
+        float f = f0 + (f90 - f0) * sky_schlick(cLdotH);
+        SPECULAR_LIGHT += (cNdotL * d * f * g) * LIGHT_COLOR * ATTENUATION * SPECULAR_AMOUNT * k;
+    }
+}
+#endif

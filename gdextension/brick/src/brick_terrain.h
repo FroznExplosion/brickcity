@@ -444,6 +444,10 @@ struct Piece {
     /// overlay covers it exactly, so the quad underneath is culled the same
     /// way a face between two touching blocks is.
     uint8_t overlay;
+    /// Something stands on this brick (the bond's footprint it is cut from
+    /// reaches under a higher column): it keeps its studs, never a tile and
+    /// never a smooth overlay -- a real brick holds the one on it by them.
+    uint8_t held = 0;
     /// The BRICK this piece is part of, tile-local (may reach past the tile):
     /// with the bond's top course (BrickTerrain.set_bond_top, Docs/
     /// TerrainBond.md) a brick can cross a tile edge and each tile draws its
@@ -467,6 +471,11 @@ constexpr float OVERLAY_M = PLATE_M;
 /// How many brick pieces get one, and how many of those are smooth.
 constexpr float OVERLAY_CHANCE = 0.26f;
 constexpr float OVERLAY_TILE_SHARE = 0.62f;
+
+/// Of the bricks topmost in a cave (their top faces drawn by the face mesher,
+/// not packed), how many carry studs: more than the surface's 1 - TILE_CHANCE
+/// (Docs/MineWorld.md 20). The rest are smooth, by the brick's corner.
+constexpr float CAVE_STUD_CHANCE = 0.9f;
 
 /// Is there a piece boundary immediately BEFORE `u` on this row?
 ///
@@ -908,6 +917,15 @@ public:
     static int get_deep_section_plates();
     static int get_bedrock_plate();
     static Dictionary build_section(int tx, int sy, int tz);
+    /// FOR PROBES (Docs/MineWorld.md 20): the flat mesh and colliders of a
+    /// tile (sy = INT32_MIN) or deep section, checked against the field.
+    ///   exposed, undrawn   faces of owned solid cells against OPEN air, and
+    ///                      those no triangle of the mesh covers (by
+    ///                      direction in undrawn_dir, first few in examples)
+    ///   box_air_top, box_air_cave   open-air cells inside a column-top box
+    ///                      or a cave box: a collider where nothing is drawn
+    ///   air_examples       first few of those cells
+    static Dictionary audit_tile(int tx, int tz, int sy);
     /// SKY LIGHT IN THE CELLS (Docs/MineWorld.md 18). On: build_tile and
     /// build_section write each vertex's sky light, 0..255 for levels 0..15,
     /// into CUSTOM0.a (always 255 when off). Only the mine world turns it on.
