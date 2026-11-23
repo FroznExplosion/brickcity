@@ -1116,3 +1116,76 @@ opened 927 magenta pixels in `-- --gate=seams` (0 with one probe), and
 `terrain_probe`'s two smooth-terrain checks ("turning it off gives the
 packer its cells back", "every cell has exactly one top surface") fail on
 main too, from before this work.
+
+## 21. What a broken brick costs, and against Minecraft (audit 2026-11-23)
+
+Probe: `tools/probes/terrain_cost_probe.gd` (headless, a report): each step a
+shot sets off, timed alone on one thread, default preset. Taken hot (93-98 C)
+with another chat's probe running: read the shares, not the last digit.
+
+| step | where it runs | ms |
+|---|---|---|
+| `find_brick` (one piece found) | worker, LOW priority | 5.0 (4.3 with the tile's pack kept) |
+| `clear_runs` | main | 0.02 |
+| `build_tile` (the whole 32x32-stud tile) | worker | 9-10 |
+| `build_tile_chamfered` (the same tile again) | worker | 9-10 |
+| `TerrainCollapse.survey` | worker, 0.1 s after the edit | 0.5 |
+| sky light's share of a bake | in the bakes | ~0.7 |
+
+A tile is ~1,200 vertices, ~600 triangles, 65 collision boxes.
+
+**Where the time is.** `brick::packed_tile` keeps a tile's PACK but always
+SAMPLES it first (`sample_tile`: every column's biome noise and cave noise
+again, plus an edit-table lookup for every plate cell once any edit exists):
+~4.5 ms, paid three times for one brick -- find_brick, build_tile and
+build_tile_chamfered each sample the same tile. About 13 of the ~24 ms of
+worker time a brick costs is regenerating ground that has not changed.
+Minecraft generates a chunk once and keeps its blocks; an edit writes the
+array and remeshes one 16x16x16 section (~0.1-1 ms). Here the unit rebuilt is
+a whole tile -- ~130k plate cells against a section's 4,096 -- and it is
+rebuilt from the noise.
+
+**Why it feels slower in play than in `--gate=breaklag` (37-58 ms).**
+- `find_brick` is added with `high_priority = false`; every streaming tile,
+  chamfer and deep section is high priority. Walking or flying, the shot
+  waits behind the streaming queue before it even knows what it hit.
+- An edit's rebake joins the same FIFO as tiles streaming in (8 tiles + 8
+  chamfers + deep sections in flight), ~9 ms each.
+- Ground let go by an edit: 0.1 s gather (`SURVEY_EVERY`), the survey, a
+  second `clear_runs` and a second whole-tile rebake, the piece's bake and
+  mesh on LOW-priority tasks; the tiles are held until the piece can be
+  drawn (`WAIT_MAX_MS` 2 s worst). A shot near a falling piece waits with it.
+- This machine is an APU: worker heat comes out of the GPU's clocks, and the
+  frame is GPU-bound (section 9: GPU 12.5 of 16.6 ms vsynced).
+
+**Not the problem.** The stress checks: a survey runs per edit (gathered),
+0.5 ms on a worker, and solves only when something hangs near; `_tend` every
+0.5 s over at most 100 pieces; sky light on things 24 asks a frame, 250 us
+budget. The main thread's terrain parts are 1.0-1.4 ms a frame (section 9)
+and an edit's worst main-thread step is 1.1-1.5 ms. On the GPU, near tiles,
+far tier and studs are ~0.5 ms each (section 17); trees, shadows and the sea
+cost more than the ground.
+
+**Budget, 60 fps with guns, explosions and AI on this machine:** terrain on
+the main thread <= 1.5 ms mean and <= 3 ms in any frame; on the GPU <= 3-4 ms
+including its shadows; on workers no more than 2-3 cores sustained (AI,
+physics and the water need the rest); a shot drawn in <= 2 frames (33 ms), an
+explosion's crater in <= 4.
+
+**What would cut it, in order:**
+1. Keep the near tiles' samples resident, as a Minecraft chunk keeps its
+   blocks: sample a tile once per field version, write edits into it, bake
+   from it. find_brick becomes a lookup (could run on the main thread in the
+   shot's own frame) and each bake loses ~4.5 ms. This is also what the
+   planned near-bricks-as-geometry tier needs: the bricks to draw are in it.
+2. `find_brick` high priority (one argument), and edit rebakes ahead of
+   streaming tiles (their own queue, or streaming capped while edits wait).
+3. One task bakes the flat and the chamfered mesh from one sample.
+4. Rebuild part of a tile (16x16 studs, or a height band) for an edit; the
+   tile stays the draw unit. Section 9 found sections cost nothing on the
+   frame; they are about latency and worker load, not frame time.
+5. The collapse: survey in the frame the edit lands (no 0.1 s), its piece
+   bake and mesh high priority.
+6. Distance lighting is not where the ground's GPU time is (sky light ~0.7
+   ms a bake on a worker; far tier ~0.5 ms GPU). If it is wanted: far tier
+   without normal maps or shadow receiving, light baked in the vertex only.
