@@ -916,6 +916,11 @@ public:
     /// The sky light level (0..15) of the cell holding `point` (terrain-local
     /// metres): what the eye's exposure follows.
     static double sky_light_at(Vector3 point);
+    /// The BLOCK light level (0..15) from lava of the cell holding `point`
+    /// (terrain-local metres), as the tile bakes fill it (Docs/MineWorld.md
+    /// 19): lava things in a cave glow by. 0 at once with no lava within
+    /// light's reach.
+    static double block_light_at(Vector3 point);
 
     /// A COARSE block of ground, for distance. Docs/Terrain.md 19.4.
     ///

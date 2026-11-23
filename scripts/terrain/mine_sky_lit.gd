@@ -11,13 +11,27 @@ extends Node
 ## StandardMaterial3Ds. The shared materials are not touched: other scenes,
 ## and the mine world's near trees, draw as before.
 ##
-## The level is BrickTerrain.sky_light_at (~0.15 ms in a dark cave), asked
-## only when a thing is tracked, moves a light cell, or the ground within
-## light's reach of it is edited (`dirty_box`, from terrain_edited); at most
-## ASK_BUDGET_US of asking a frame. Painted with set_instance_shader_parameter
-## on its meshes: nothing read back from the renderer.
+## The level is BrickTerrain.sky_light_at (~0.15 ms in a dark cave), and
+## beside it the lava's BLOCK light, BrickTerrain.block_light_at (nothing to
+## do with no lava near), drawn as the ground's warm glow (`block_level`).
+## Asked only when a thing is tracked, moves a light cell, or the ground or
+## the lava within light's reach of it changes (`dirty_box`, from
+## terrain_edited and the water's lava_light); at most ASK_BUDGET_US of asking
+## a frame. Painted with set_instance_shader_parameter on its meshes: nothing
+## read back from the renderer.
 ##
 ## Made by the mine world only when sky light is on (no `--no-sky-light`).
+
+## The shaders' curve (sky_lit.gdshaderinc; mine_world.gd SKY_LIGHT_CURVE,
+## CAVE_DEEP_LIGHT): a level's brightness, for tint_at.
+const CURVE := 0.8
+const DEEP_LIGHT := 0.015
+
+
+static func _raw(level: float) -> float:
+	var k0 := pow(CURVE, 15.0)
+	return clampf((pow(CURVE, 15.0 - clampf(level, 0.0, 15.0)) - k0) / (1.0 - k0), 0.0, 1.0)
+
 
 ## Things scanned for a new cell each frame (round robin).
 const SCAN_PER_FRAME := 24
@@ -107,6 +121,55 @@ func item_material(std: StandardMaterial3D) -> ShaderMaterial:
 	return _item_mats[key]
 
 
+## The falling sand's material: sky_lit_item.gdshader with SKY_LIT_SAND,
+## its levels per instance (INSTANCE_CUSTOM.r sky, .g block, as 0..1, from
+## `levels_at`) and its colour the instance's.
+static var _sand_mat: ShaderMaterial = null
+
+
+static func sand_material() -> ShaderMaterial:
+	if _sand_mat == null:
+		_sand_mat = ShaderMaterial.new()
+		_sand_mat.shader = _with_define(load("res://shaders/sky_lit_item.gdshader") as Shader, "SKY_LIT_SAND")
+		_sand_mat.set_shader_parameter("roughness", 0.9)
+	return _sand_mat
+
+
+## The sky and block levels (0..15) at `point` (terrain-local metres), timed
+## into this frame's asking budget. A thing tracked here is asked by _ask;
+## this is for what is drawn in bulk (the falling sand, crumbs).
+func levels_at(point: Vector3) -> Vector2:
+	var f := Engine.get_process_frames()
+	if f != _frame:
+		_frame = f
+		_frame_us = 0
+	var t0 := Time.get_ticks_usec()
+	var out := Vector2(BrickTerrain.sky_light_at(point), BrickTerrain.block_light_at(point))
+	var us := Time.get_ticks_usec() - t0
+	_frame_us += us
+	worst_ask_us = maxi(worst_ask_us, us)
+	asked += 1
+	return out
+
+
+## Is there room in this frame's asking budget?
+func has_room() -> bool:
+	return Engine.get_process_frames() != _frame or _frame_us <= ASK_BUDGET_US
+
+
+## The light at `global` as a colour to multiply an albedo by: the sky's
+## brightness (or the lava's ambient share), plus the lava's warm glow. For
+## things too short-lived or too many for their own material (the crumbs a
+## landing throws, PlanetCrumbs.shade): one level a throw, baked into colour.
+func tint_at(global: Vector3) -> Color:
+	var lv := levels_at(world.to_local(global) if world != null else global)
+	var sky := _raw(lv.x)
+	var blk := _raw(lv.y)
+	var k := lerpf(DEEP_LIGHT, 1.0, maxf(sky, blk * 0.5))
+	var warm := Color(1.0, 0.52, 0.22) * blk
+	return Color(minf(k + warm.r, 1.0), minf(k + warm.g, 1.0), minf(k + warm.b, 1.0))
+
+
 ## Every StandardMaterial3D override under `root` swapped for its sky-lit
 ## copy (ItemIcons' models).
 func sky_lit_model(root: Node) -> void:
@@ -126,7 +189,7 @@ func track(root: Node3D) -> void:
 	var e: Dictionary = _entries.get(root.get_instance_id(), {})
 	if e.is_empty():
 		e = {"root": root, "id": root.get_instance_id(), "cell": _cell_of(root), "level": -1.0,
-				"queued": false}
+				"block": 0.0, "queued": false}
 		_entries[e.id] = e
 		_order.append(e)
 		# New: asked now if the frame has room, else drawn at the eye's level
@@ -158,6 +221,12 @@ func dirty_box(lo: Vector3i, hi: Vector3i) -> void:
 		if c.x >= clo.x and c.x <= chi.x and c.y >= clo.y and c.y <= chi.y \
 				and c.z >= clo.z and c.z <= chi.z:
 			_enqueue(e)
+
+
+## Its block light (lava) as last painted (-1 untracked).
+func block_of(root: Node3D) -> float:
+	var e: Dictionary = _entries.get(root.get_instance_id(), {})
+	return -1.0 if e.is_empty() else float(e.block)
 
 
 ## Its level as last painted (-1 untracked): for the gate and the probe.
@@ -236,13 +305,16 @@ func _ask(e: Dictionary, only_if_room: bool) -> bool:
 	if only_if_room and _frame_us > ASK_BUDGET_US:
 		return false
 	var t0 := Time.get_ticks_usec()
-	var level := BrickTerrain.sky_light_at(_point_of(e.root))
+	var at := _point_of(e.root)
+	var level := BrickTerrain.sky_light_at(at)
+	var block := BrickTerrain.block_light_at(at)
 	var us := Time.get_ticks_usec() - t0
 	_frame_us += us
 	worst_ask_us = maxi(worst_ask_us, us)
 	asked += 1
-	if level != float(e.level):
-		_paint(e, level)
+	if level != float(e.level) or block != float(e.block):
+		e.block = block
+		_paint(e, level, true)
 	return true
 
 
@@ -253,11 +325,14 @@ func _paint(e: Dictionary, level: float, always := false) -> void:
 		return
 	e.level = level
 	var shown := force_level if force_level >= 0.0 else level
+	var block: float = 0.0 if force_level >= 0.0 else float(e.get("block", 0.0))
 	var root: Node3D = e.root
+	var geos: Array = root.find_children("*", "GeometryInstance3D", true, false)
 	if root is GeometryInstance3D:
-		(root as GeometryInstance3D).set_instance_shader_parameter(&"sky_level", shown)
-	for n in root.find_children("*", "GeometryInstance3D", true, false):
+		geos.append(root)
+	for n in geos:
 		(n as GeometryInstance3D).set_instance_shader_parameter(&"sky_level", shown)
+		(n as GeometryInstance3D).set_instance_shader_parameter(&"block_level", block)
 	painted += 1
 
 

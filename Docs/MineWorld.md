@@ -853,9 +853,8 @@ a metal's reflections take f0 from its albedo), and a `light()` that writes
 out the engine's Burley diffuse, Schlick-GGX specular (the brick's
 anisotropic form, which the engine takes whenever ANISOTROPY is written) and
 rim, with the SUN scaled by brightness^2. Lamps, the lava's OmniLights and
-the flashlight light them as the engine would: the block light from lava
-reaches things through those lights (there is no per-point block-light
-query; the water keeps its per-tile lava lights partly for this, section 18).
+the flashlight light them as the engine would. The lava's BLOCK light comes
+on top (`block_level`, below).
 
 **When the level is asked** (`MineSkyLit`, a node of the mine world, not of
 the collapse, so a gate that stops the collapse keeps it): a thing is
@@ -895,6 +894,78 @@ brightness), and with `--no-sky-light` for the open numbers;
 `mine_world_probe`, `terrain_collapse_probe`; `-- --gate=gpu` against
 section 17.
 
-**Not in it.** Falling sand (one MultiMesh for every falling column, gone
-in a second or two) and the crumbs a landing throws (PlanetCrumbs, short
-lived) keep the open-air light.
+**Block light from lava on things (2026-11-22, later).**
+`BrickTerrain.block_light_at(point)` mirrors `sky_light_at`: the bake's own
+`SkyGrid::fill_block` over a box light's reach (15 cells) round the point,
+seeded by `BrickFluid::lava_cells_in` of that box; with no lava anywhere
+(`lava_total`) or none in the box it returns 0 without making a grid.
+MineSkyLit asks it beside the sky level and paints `instance uniform float
+block_level`; `sky_lit.gdshaderinc` draws it as the ground does (section
+18): EMISSION of `block_light_colour` x albedo x its brightness x
+`block_light_energy`, and AO lifted to `block_light_ao` of it where that is
+brighter than the sky's. The water's `lava_light` (mine_world.gd
+`lava_relit`) marks things within reach to be asked again, as an edit does.
+The lava's OmniLights stay (they still light pawns, studs, props).
+`--gate=skylit` now ends with a 3 x 3 lava pool on the room's floor behind
+the things (2026-11-22): piece 0.020 -> 0.264 (block level 8), chest 0.014
+-> 0.410 (13), drop 0.012 -> 0.361 (12), each must be at level 5 or more
+and half as bright again as in the dark (`mine_skylit_lava.png`). An ask
+beside lava costs more than one under the sky: worst 0.93 ms (sky and block
+together, the block fill over 31^3 cells); one thing is always asked a
+frame, the rest wait for room.
+
+**Falling sand and crumbs.** The falling sand is one MultiMesh for every
+column; with sky light on it carries each column's levels in
+`INSTANCE_CUSTOM` (r sky, g block, as 0..1) and draws with
+`MineSkyLit.sand_material()` (`sky_lit_item.gdshader` with
+`#define SKY_LIT_SAND`: colour from the instance, levels per instance). A
+column's foot cell is asked when it falls into a new one, inside the same
+0.25 ms a frame; till first asked it takes the eye's level. The crumbs a
+landing throws (PlanetCrumbs, shared with the planets) have no spare
+per-instance channel and last a second: `PlanetCrumbs.shade`, set by the
+collapse to `MineSkyLit.tint_at`, gives one colour a throw (sky brightness,
+or the lava's ambient share, plus its warm glow) that the crumbs' colours
+are multiplied by. Other scenes leave it unset.
+
+**Slits up a dark room's walls (the near tier's chamfer).** The bright
+dotted lines up the inside corners and wall seams of a level-0 room
+(`mine_skylit_cave.png`) were daylight through the near tier's geometry
+chamfer (`MeshBuf::quad` via `mask_faces`), not light. Three faults, in
+`brick_terrain.cpp`:
+
+1. The edge flags were read in the wrong order. `mask_faces` probes each
+   quad's neighbours in slice order (V-, U+, V+, U-), and `quad` reads bit i
+   as the edge from corner i to i+1. The -X and +Z walls are wound along -U
+   and the -Y faces along +V, so on those faces the two upright edges'
+   flags were swapped: a brick at an inside corner bevelled its corner edge
+   (nothing meets it there) and squared its seam edge (its half of the
+   groove missing). Two slits a course tall, up every inside corner.
+   Remapped per face direction.
+2. A groove that ends against a square join (a wall's seams at the floor, a
+   wall's course seams at the other wall) left its end open behind that
+   face. The wall's foot already reached a bevel below the floor for the
+   floor's grooves; now every face reaches a bevel past every edge whose
+   neighbour is solid and covered, in its own plane, behind the face it
+   meets.
+3. Where grooves cross, one brick's edge meets two bricks' edges part way
+   (a T-junction) and the groove's floor cracked to single pixels. Each
+   chamfered face now has a backing quad a bevel and a half behind it,
+   widened under its coplanar neighbours and pulled in from convex and
+   square edges. Two triangles a face, near tier only.
+
+`-- --gate=seams` measures it: the stone room roofed over, an unlit magenta
+box round its outside (a black card across the tunnel), 36 close views at
+14 degrees of the inside corners, the walls, the floor's and roof's edges;
+magenta pixels counted with the chamfer off (the flat tier) and on. Before:
+145,117 px with it on, in 32 of 36 views (the dotted lines). After: 0.
+The flat tier shows a few single pixels (3-14 a run) at seam crossings;
+it has no chamfer and was not changed. The heightfield scene's
+`bevel_gap_probe` still passes (0 magenta, chamfer on and off, wide and
+scoped); terrain_probe's thin-roof underside check needed the skirts kept
+off edges squared only by a piece beside them.
+
+`--gate=gpu` after all this (2026-11-22 23:26) is NOT a clean number: six
+headless runs of other chats went on through it and it started near 81 C.
+Baseline GPU 6.06 ms on foot, 4.02 ms 25 m up (section 18: 5.48 / 3.89,
+quiet, 62 C); the chamfered near mesh's own share 0.57 ms; 0.69M triangles
+on foot against 0.64M with it hidden. Retake it quiet and cool.
