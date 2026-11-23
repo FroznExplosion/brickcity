@@ -4378,6 +4378,9 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                     // only because a piece is beside it): where a face
                     // reaches past its edge (the skirts below).
                     uint8_t covered = 0;
+                    // Square only because this sample stops there (another
+                    // tile or tier draws on, flat): the backing reaches past.
+                    uint8_t bound = 0;
                     {
                         // Unit steps along the slice's U and V axes.
                         const int ux = (dx != 0) ? 0 : 1;
@@ -4419,6 +4422,27 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                                 convex &= (uint8_t)~(1u << k);
                                 square |= (uint8_t)(1u << k);
                             }
+                            // Past this sample's own plates (a surface tile's
+                            // floor, deep_top, where the deep sections start)
+                            // the face goes on in the OTHER tier, which is
+                            // drawn flat: a bevel here was half a groove with
+                            // no other half, a slit the length of every wall
+                            // across that plate (the dashed line along a
+                            // cave's wall seen from afar, --gate=seams --deep
+                            // --at-top). Square: the face runs flat to the
+                            // boundary, and the flat side's overlap closes it.
+                            // The same at the tile's SIDES: the tile beside may
+                            // be drawn flat (a deep section, a tile past the
+                            // chamfer's reach), and a brick across the edge is
+                            // one brick, no groove (--gate=seams --deep
+                            // --at-top: 6,815 px, a slit up the wall and
+                            // across the floor at the tile seam).
+                            if (g_face_bevel > 0.0f && (ny2 < y0 || ny2 >= y1
+                                    || nx2 < 0 || nz2 < 0 || nx2 >= TILE || nz2 >= TILE)) {
+                                convex &= (uint8_t)~(1u << k);
+                                square |= (uint8_t)(1u << k);
+                                bound |= (uint8_t)(1u << k);
+                            }
                         }
                         // The probes above are in slice order (0 V-, 1 U+,
                         // 2 V+, 3 U-); `quad` reads bit i as the edge from
@@ -4445,6 +4469,7 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                         convex = remap(convex);
                         square = remap(square);
                         covered = remap(covered);
+                        bound = remap(bound);
                     }
                     // UNCHAMFERED (the deep sections, the flat tier): each
                     // face overlaps its neighbours by FLAT_OVERLAP past every
@@ -4558,7 +4583,8 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                             if (o.dot((p + q) * 0.5f - centre) < 0.0f) {
                                 o = -o;
                             }
-                            const bool flat = ((convex | square) & (1u << i)) == 0;
+                            const bool flat = ((convex | square) & (1u << i)) == 0
+                                    || (bound & (1u << i)) != 0;
                             grow[i] = flat ? o * r : -o * (r * 0.5f);
                         }
                         Vector3 bk[4];

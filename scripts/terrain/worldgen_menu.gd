@@ -221,6 +221,11 @@ func _build_world_tab() -> void:
 	_button(r, "Random", func() -> void:
 		_seed_box.value = randi() % 2000000000)
 	_int_slider(p, "Full detail radius (tiles)", s, "detail_tiles", 2, 8)
+	# Underground: how far the caves are drawn (the deep tier), past which a
+	# black fade (MineWorld.md 19). Costs bakes and memory as it grows.
+	_int_slider(p, "Cave view distance (tiles)", s, "cave_tiles", 2, 8)
+	# The geometry chamfer on the ground near the camera (TerrainTile).
+	_check(p, "Chamfered brick edges", s, "chamfer")
 	_int_slider(p, "View distance (tiles of far rings)", s, "far_tiles", 16, 192)
 	_float_slider(p, "World height scale", s.gen, "height_scale", 0.2, 3.0, 0.05)
 	_section(p, "Game mode")
