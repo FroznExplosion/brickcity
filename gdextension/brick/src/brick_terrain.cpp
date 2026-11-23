@@ -4446,6 +4446,34 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                         square = remap(square);
                         covered = remap(covered);
                     }
+                    // UNCHAMFERED (the deep sections, the flat tier): each
+                    // face overlaps its neighbours by FLAT_OVERLAP past every
+                    // edge that is not an outside corner. Where one face's
+                    // edge meets two faces' edges part way along (a 1x1
+                    // brick beside a 1x2, a wall's corner against a roof's
+                    // edge) the T-junction cracked to single pixels of
+                    // whatever is behind: the white dots in a dark cave
+                    // (MineWorld.md 19, --gate=seams' flat tier). Overlapped,
+                    // there is no line left between them. No triangles added.
+                    if (g_face_bevel <= 0.0f) {
+                        constexpr float FLAT_OVERLAP = 0.001f;
+                        const Vector3 n((float)dx, (float)dy, (float)dz);
+                        Vector3 *rim[4] = { &a0, &b0, &c0, &d0 };
+                        const Vector3 centre = (a0 + b0 + c0 + d0) * 0.25f;
+                        Vector3 grow[4];
+                        for (int i = 0; i < 4; ++i) {
+                            const Vector3 p = *rim[i];
+                            const Vector3 q = *rim[(i + 1) % 4];
+                            Vector3 o = n.cross(q - p).normalized();
+                            if (o.dot((p + q) * 0.5f - centre) < 0.0f) {
+                                o = -o;
+                            }
+                            grow[i] = (convex & (1u << i)) ? Vector3() : o * FLAT_OVERLAP;
+                        }
+                        for (int i = 0; i < 4; ++i) {
+                            *rim[i] += grow[i] + grow[(i + 3) % 4];
+                        }
+                    }
                     // UV is this quad's place in its BRICK and UV2 the
                     // brick's face (Docs/TerrainBond.md): a brick across a
                     // tile edge is drawn by two tiles and still outlined
@@ -6008,6 +6036,77 @@ static void sky_light_pass(MeshBuf &m, const TileSample &s, bool surface, Dictio
     // this mesh's light (mine_world.gd skips relighting the tile then).
     out["light_lo"] = g.c0 * PLATES_PER_CELL;
     out["light_hi"] = (g.c1() + 1) * PLATES_PER_CELL - 1;
+}
+
+void brick::sky_levels_into(const PackedVector3Array &verts, const PackedVector3Array &norms,
+        PackedColorArray &col) {
+    const int n = verts.size();
+    if (!g_sky_light.load(std::memory_order_relaxed) || n == 0 || col.size() != n || norms.size() != n) {
+        return;
+    }
+    const Vector3 *v = verts.ptr();
+    const Vector3 *nr = norms.ptr();
+    Vector3 lo = v[0], hi = v[0];
+    for (int i = 1; i < n; ++i) {
+        lo = Vector3(std::min(lo.x, v[i].x), std::min(lo.y, v[i].y), std::min(lo.z, v[i].z));
+        hi = Vector3(std::max(hi.x, v[i].x), std::max(hi.y, v[i].y), std::max(hi.z, v[i].z));
+    }
+    const int x0 = (int)std::floor(lo.x / STUD_M) - 1, x1 = (int)std::floor(hi.x / STUD_M) + 1;
+    const int z0 = (int)std::floor(lo.z / STUD_M) - 1, z1 = (int)std::floor(hi.z / STUD_M) + 1;
+    const int c0 = (int)std::floor(lo.y / BRICK_M) - 1, c1 = (int)std::floor(hi.y / BRICK_M) + 1;
+    SkyGrid g;
+    g.init(x0 - SKY_PAD, z0 - SKY_PAD, c0 - SKY_PAD, x1 - x0 + 1 + 2 * SKY_PAD,
+            z1 - z0 + 1 + 2 * SKY_PAD, c1 - c0 + 1 + 2 * SKY_PAD);
+    auto corners = [&](int i, int &ix, int &iy, int &iz, float &fx, float &fy, float &fz) {
+        const Vector3 q = v[i] + Vector3(nr[i].x * STUD_M, nr[i].y * BRICK_M, nr[i].z * STUD_M) * 0.5f;
+        const float cx = q.x / STUD_M - 0.5f;
+        const float cy = q.y / BRICK_M - 0.5f;
+        const float cz = q.z / STUD_M - 0.5f;
+        ix = (int)std::floor(cx);
+        iy = (int)std::floor(cy);
+        iz = (int)std::floor(cz);
+        fx = cx - (float)ix;
+        fy = cy - (float)iy;
+        fz = cz - (float)iz;
+    };
+    Vector3i dlo(INT_MAX, INT_MAX, INT_MAX), dhi(INT_MIN, INT_MIN, INT_MIN);
+    bool dark = false;
+    for (int i = 0; i < n; ++i) {
+        int ix, iy, iz;
+        float fx, fy, fz;
+        corners(i, ix, iy, iz, fx, fy, fz);
+        for (int k = 0; k < 8; ++k) {
+            const int x = ix + (k & 1), c = iy + ((k >> 1) & 1), z = iz + ((k >> 2) & 1);
+            if (g.sky(x, c, z) || g.opaque(x, c, z)) {
+                continue;
+            }
+            dark = true;
+            dlo = Vector3i(std::min(dlo.x, x), std::min(dlo.y, c), std::min(dlo.z, z));
+            dhi = Vector3i(std::max(dhi.x, x), std::max(dhi.y, c), std::max(dhi.z, z));
+        }
+    }
+    if (dark) {
+        g.fill(dlo, dhi);
+    }
+    Color *cw = col.ptrw();
+    for (int i = 0; i < n; ++i) {
+        int ix, iy, iz;
+        float fx, fy, fz;
+        corners(i, ix, iy, iz, fx, fy, fz);
+        float sum = 0.0f, wsum = 0.0f;
+        for (int k = 0; k < 8; ++k) {
+            const int x = ix + (k & 1), c = iy + ((k >> 1) & 1), z = iz + ((k >> 2) & 1);
+            if (g.opaque(x, c, z) && !g.sky(x, c, z)) {
+                continue;
+            }
+            const float w = ((k & 1) ? fx : 1.0f - fx) * (((k >> 1) & 1) ? fy : 1.0f - fy)
+                    * (((k >> 2) & 1) ? fz : 1.0f - fz);
+            sum += w * (float)g.light(x, c, z);
+            wsum += w;
+        }
+        const float lv = wsum > 1e-5f ? sum / wsum : (float)SKY_MAX;
+        cw[i].b = std::clamp(lv / (float)SKY_MAX, 0.0f, 1.0f);
+    }
 }
 
 void BrickTerrain::set_sky_light(bool on) { g_sky_light.store(on); }

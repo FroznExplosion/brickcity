@@ -380,6 +380,9 @@ func generate(s: Dictionary) -> void:
 	# first shore field round the spawn.
 	water.reset_world(sea, clampi(int(settings.get("detail_tiles", 4)), 2, 8),
 			bool(settings.gen.get("water", true)), float(settings.gen.get("wave_scale", 1.0)), cell)
+	# The water's meshes carry each vertex's sky light (COLOR.b): a cave pool
+	# as dark as its cave (MineWorld.md 19).
+	water._water_mat.set_shader_parameter("sky_light", _sky_light_on)
 	# The water's own changes, after the ground's (it reads its solids).
 	var fluid_cells := _load_fluid()
 	_fluid_saved_at = BrickFluid.change_count()
@@ -407,6 +410,9 @@ func generate(s: Dictionary) -> void:
 
 	_deep = TerrainDeep.new()
 	_deep.name = "Deep"
+	# Caves as far as the surface's detail (its 2 was ~25 m: a long cave
+	# ended in nothing while its water, drawn further, hung in the air).
+	_deep.radius = near
 	add_child(_deep)
 	_deep.setup(_mat)
 
@@ -5278,6 +5284,42 @@ func _run_skylit_gate() -> void:
 		fails += 0 if ok else 1
 		print("[mine-skylit] %s  %s in the closed room: %.3f, the floor beside it %.3f, lit by the open air %.3f (level %.0f; open to the sky %.3f)"
 				% ["ok  " if ok else "FAIL", things[i][0], obj, fl, was, lvl, open[i][0]])
+	# WATER in the dark room: its mesh carries the cells' sky light (COLOR.b,
+	# brick::sky_levels_into), so a pool in the closed room is as dark as the
+	# floor round it, not lit as the open sea is.
+	water.manual = true
+	var wpool := []
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			var cell := Vector3i(o.x + 3 + dx, floori(b / 3.0), o.y + 2 + dz)
+			BrickFluid.place(cell, 1, 0, 2)
+			wpool.append(cell)
+	water.step(2)
+	await _frames(60)
+	await RenderingServer.frame_post_draw
+	var wc := get_viewport().get_camera_3d()
+	var wat := Vector3((o.x + 3.5) * stud, b * plate + 2.0 * plate, (o.y + 2.5) * stud)
+	var wq := wc.unproject_position(to_global(wat))
+	var wimg := get_viewport().get_texture().get_image()
+	var wsz := Vector2(wimg.get_width(), wimg.get_height())
+	wimg.resize(256, 144)
+	var wpx := Vector2i(int(wq.x / wsz.x * 256), int(wq.y / wsz.y * 144))
+	var wl := 0.0
+	var wn := 0
+	for y in range(wpx.y - 2, wpx.y + 3):
+		for x in range(wpx.x - 2, wpx.x + 3):
+			if x >= 0 and y >= 0 and x < 256 and y < 144:
+				wl += wimg.get_pixel(x, y).get_luminance()
+				wn += 1
+	wl /= maxf(wn, 1)
+	await _shot(dev + "mine_skylit_water.png")
+	var wok := wl <= 0.08
+	fails += 0 if wok else 1
+	print("[mine-skylit] %s  water in the closed room: %.3f at %s (must be <= 0.08; the floor about 0.04)"
+			% ["ok  " if wok else "FAIL", wl, wq])
+	for cell: Vector3i in wpool:
+		BrickFluid.remove(cell, -1)
+	water.step(2)
 	# LAVA in the dark room (BrickTerrain.block_light_at): a pool of 3 x 3
 	# cells on the floor behind the things, by the back wall (not in front of
 	# any); each must take block light and draw brighter than in the dark.
@@ -5456,7 +5498,9 @@ func _run_seams_gate() -> void:
 	TerrainTile.bevel_enabled = true
 	await settle.call()
 	var on: Array = await count.call("on")
-	var ok: bool = on[0] <= off[0]
+	# Both tiers whole: the chamfer's slits and the flat tier's T-junction
+	# cracks were both seen as dots in a dark cave.
+	var ok: bool = on[0] == 0 and off[0] == 0
 	print("[mine-seams] %s  chamfer on %d px, off %d px" % ["PASS" if ok else "FAIL", on[0], off[0]])
 	get_tree().quit()
 

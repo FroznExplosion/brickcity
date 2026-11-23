@@ -972,6 +972,33 @@ it has no chamfer and was not changed. The heightfield scene's
 scoped); terrain_probe's thin-roof underside check needed the skirts kept
 off edges squared only by a piece beside them.
 
+**The flat tier's dots (2026-11-23).** The deep sections (and the flat
+near and far tiles) are drawn unchamfered, and the user still saw white
+dots at the seams of 1x1 bricks in a dark cave: T-junction cracks, one
+face's edge meeting two faces' edges part way along. Unchamfered, each
+`mask_faces` face now overlaps its neighbours by `FLAT_OVERLAP` (1 mm) past
+every edge that is not an outside corner; no triangles added. `--gate=seams`
+now requires 0 on both tiers: flat 3-14 px -> 0. With the chamfer on, one
+run in three showed 2 px at the top of one view where a wall's seam meets
+the roof; open. mine_world_probe's seam keys round to the cm (the two
+tiles' copies of a vertex now differ by up to 2 mm).
+
+**Caves as far as the surface.** The deep tier loaded 2 tiles round the
+eye (about 25 m) while the surface's detail is 4 (the settings'
+`detail_tiles`): a long cave ended in nothing, its water (drawn further)
+hanging in the air. `TerrainDeep.radius` now follows `detail_tiles`.
+
+**Water in the dark.** `water_fluid.gdshader` read no light of the cells:
+a cave pool was lit as the open sea. BrickFluid's `mesh_tile` now writes
+each water vertex's sky level into COLOR.b (`brick::sky_levels_into`, the
+bake's own sampling over a SkyGrid round the mesh; the flow direction that
+was there is no longer read), the far meshes and sea pieces say open sky;
+the shader includes `sky_lit.gdshaderinc` and, with `sky_light` set (the
+mine world, `_sky_light_on`), scales the ambient, the sky's reflections and
+the sun by it. Lava keeps its glow. Not block light: `lava_cells_in` takes
+the fluid's lock, which `mesh_tile` holds. `--gate=skylit` puts a 3 x 3 pool
+in the closed room: 0.014 against a floor of about 0.03.
+
 `--gate=gpu` after all this (2026-11-22 23:26) is NOT a clean number: six
 headless runs of other chats went on through it and it started near 81 C.
 Baseline GPU 6.06 ms on foot, 4.02 ms 25 m up (section 18: 5.48 / 3.89,

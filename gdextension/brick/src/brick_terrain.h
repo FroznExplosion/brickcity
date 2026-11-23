@@ -557,6 +557,14 @@ std::shared_ptr<const TilePack> packed_tile(int tx, int tz, TileSample &s);
 /// sampling it was ~8 ms.
 std::shared_ptr<const TilePack> packed_tops(int tx, int tz, bool *packed = nullptr);
 
+/// SKY LIGHT for a mesh drawn over the cells but not baked by the terrain
+/// (the water, BrickFluid mesh_tile; Docs/MineWorld.md 19): each vertex's
+/// sky level (0..15) as 0..1 into `col[i].b`, sampled as the ground's bake
+/// does (half a cell out along its normal, the eight cells round that point,
+/// opaque ones left out). Vertices in absolute metres. Nothing when sky light
+/// is off. Any thread: it reads the field only, no lock.
+void sky_levels_into(const PackedVector3Array &v, const PackedVector3Array &n, PackedColorArray &col);
+
 } // namespace brick
 
 // ---------------------------------------------------------------------------

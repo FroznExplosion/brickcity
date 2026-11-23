@@ -1387,7 +1387,7 @@ bool mesh_sea_tops(int tx, int tz, const bool *top, const bool *ocean, MeshBuf &
     // wave at its middle (the shader), and four sides SKIRT_M deep -- the
     // risers between pieces at different heights.
     const float y = (float)(g_sea_b * 3) * PLATE_M - TOP_SINK;
-    const Color cc(1.0f, 0.0f, 0.5f, 0.5f);
+    const Color cc(1.0f, 0.0f, 1.0f, 0.5f);   // b: sky level, open (sky_levels_into)
     const Vector3 dn(0.0f, SKIRT_M, 0.0f);
     for (int lz = 0; lz < SX; ++lz) {
         for (int lx = 0; lx < SX; ++lx) {
@@ -1492,7 +1492,7 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                             if (l > 0.001f) { fx /= l; fz /= l; }
                         }
                         const float kind = c_kind(c) == K_FLOW ? 0.5f : c_kind(c) == K_FALL ? 1.0f : 0.0f;
-                        const Color cc(std::min(1.0f, (float)depth / 12.0f), kind, fx * 0.5f + 0.5f, fz * 0.5f + 0.5f);
+                        const Color cc(std::min(1.0f, (float)depth / 12.0f), kind, 1.0f, fz * 0.5f + 0.5f);   // b: sky level (sky_levels_into)
                         const float x0 = (float)x * STUD_M, x1 = (float)(x + 1) * STUD_M;
                         const float z0 = (float)z * STUD_M, z1 = (float)(z + 1) * STUD_M;
                         const float P = PLATE_M;
@@ -1600,6 +1600,9 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
     } else if (clear_real_marks(tx, tz)) {
         g_out_mask = true;
     }
+    // Its sky light per vertex into COLOR.b (the mine world's water_fluid
+    // reads it, Docs/MineWorld.md 19): a cave pool as dark as its cave.
+    brick::sky_levels_into(buf[F_WATER].v, buf[F_WATER].n, buf[F_WATER].col);
     water = buf[F_WATER].arrays();
     lava = buf[F_LAVA].arrays();
     prev.swap(now);
@@ -1643,7 +1646,7 @@ void mesh_tile_far(int tx, int tz, Array &water, Array &lava) {
                 const float x0 = (float)(tx * SX + bx) * STUD_M, x1 = (float)(tx * SX + bx + FAR_B) * STUD_M;
                 const float z0 = (float)(tz * SX + bz) * STUD_M, z1 = (float)(tz * SX + bz + FAR_B) * STUD_M;
                 const float y = (float)top * PLATE_M - TOP_SINK;
-                const Color cc(std::min(1.0f, (float)(depth + 3) / 12.0f), 0.0f, 0.5f, 0.5f);
+                const Color cc(std::min(1.0f, (float)(depth + 3) / 12.0f), 0.0f, 1.0f, 0.5f);   // b: sky level, open
                 buf[fl].quad(Vector3(x0, y, z0), Vector3(x0, y, z1), Vector3(x1, y, z1), Vector3(x1, y, z0),
                         Vector3(0, 1, 0), cc);
             }

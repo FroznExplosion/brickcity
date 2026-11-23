@@ -18,6 +18,14 @@ shader_type spatial;
 //   g  kind: 0 still or source, 0.5 flowing, 1 falling
 render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 
+// SKY LIGHT (Docs/MineWorld.md 19): the mesher writes each water vertex's
+// sky level into COLOR.b (brick::sky_levels_into); with `sky_light` on (the
+// mine world's sky light) a cave pool takes it as the ground does -- the
+// ambient (AO), the sky's reflections (SPECULAR) and the sun (light(), the
+// shared sky_lit.gdshaderinc) scaled by its brightness. Lava keeps its glow.
+#include "res://shaders/sky_lit.gdshaderinc"
+uniform bool sky_light = false;
+
 uniform bool lava = false;
 // The sea's water (water.gdshader trough_colour .. crest_colour).
 uniform vec3 water_colour : source_color = vec3(0.34, 0.60, 0.67);
@@ -132,6 +140,10 @@ void vertex() {
 	kind = COLOR.g;
 }
 
+// This fragment's sky light: AO, SPECULAR and the sun's share (light()).
+// A macro, as AO and SPECULAR are fragment() outputs.
+#define water_light_level(spec) { 		float wb = sky_light ? sky_lit_raw(15.0 * clamp(COLOR.b, 0.0, 1.0)) : 1.0; 		AO = mix(sky_light ? sky_light_floor : 1.0, 1.0, wb); 		AO_LIGHT_AFFECT = 0.0; 		SPECULAR = spec * sqrt(AO); 		sl_sun = pow(wb, sky_sun_power); 		sl_spec = spec; 		sl_rim = 0.0; 		sl_metal = 0.0; 	}
+
 void fragment() {
 	NORMAL = normalize((VIEW_MATRIX * vec4(v_nrm, 0.0)).xyz);
 	vec3 wn = normalize(v_nrm);
@@ -190,6 +202,7 @@ void fragment() {
 		ROUGHNESS = water_roughness;
 		METALLIC = 0.0;
 		SPECULAR = 0.7;
+		water_light_level(0.7);
 	} else if (lava) {
 		// Crust plates drifting one way over the whole melt, bright cracks
 		// between them, breathing.
@@ -204,6 +217,10 @@ void fragment() {
 		EMISSION = (mix(lava_dark, lava_hot, clamp(heat, 0.0, 1.0)) * (1.0 - crust * 0.85)
 				+ lava_hot * crack * 0.8) * lava_glow * pulse;
 		ROUGHNESS = mix(0.5, 0.95, crust);
+		sl_sun = 1.0;
+		sl_spec = 0.5;
+		sl_rim = 0.0;
+		sl_metal = 0.0;
 	} else {
 		// Ripples that move the same way everywhere, slowly; the light
 		// catches them; the stud grid over it all, as on the sea.
@@ -221,6 +238,7 @@ void fragment() {
 		// Not a mirror: under a dark sky a glossy top read as black.
 		ROUGHNESS = water_roughness + foam * 0.5;
 		SPECULAR = 0.7;
+		water_light_level(0.7);
 		// Ripples tilt the normal a little, the same way everywhere.
 		vec2 e = vec2(0.15, 0.0);
 		float rx = noise((uv + e.xy) * 0.9 + vec2(0.11, 0.07) * TIME) - noise((uv - e.xy) * 0.9 + vec2(0.11, 0.07) * TIME);
