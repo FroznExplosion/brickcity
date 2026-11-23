@@ -7,7 +7,7 @@ extends RefCounted
 ##     {"name": "Default", "seed": 1234,
 ##      "gen": {<BrickTerrain.get_gen_params keys, any subset>},
 ##      "trees": {"<biome name>": 0.0..1.0, ...},
-##      "detail_tiles": 4, "far_tiles": 64}
+##      "detail_tiles": 4, "far_tiles": 64, "cave_tiles": 4, "chamfer": true}
 ##
 ## Shipped ones are content (`worldgen/` in every pack, ContentPacks); the
 ## player's own are saved under user://library/worldgen/ (UserPaths). A
@@ -119,6 +119,8 @@ static func complete(d: Dictionary) -> Dictionary:
 		"trees": trees,
 		"detail_tiles": int(d.get("detail_tiles", 4)),
 		"far_tiles": int(d.get("far_tiles", 64)),
+		"cave_tiles": int(d.get("cave_tiles", d.get("detail_tiles", 4))),
+		"chamfer": bool(d.get("chamfer", true)),
 		"spawn": d.get("spawn", null),
 	}
 

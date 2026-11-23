@@ -393,6 +393,9 @@ func generate(s: Dictionary) -> void:
 	var feet := Vector3(spawn_xz.x, _ground_m(cell.x, cell.y) + 0.05, spawn_xz.y)
 
 	var near := clampi(int(settings.get("detail_tiles", 4)), 2, 8)
+	# The geometry chamfer near the camera (Chamfered brick edges): off, the
+	# near tiles are drawn flat, as the deep sections are.
+	TerrainTile.bevel_enabled = bool(settings.get("chamfer", true))
 	_streamer = TerrainStreamer.new()
 	_streamer.name = "Streamer"
 	_streamer.near_radius = near
@@ -410,9 +413,11 @@ func generate(s: Dictionary) -> void:
 
 	_deep = TerrainDeep.new()
 	_deep.name = "Deep"
-	# Caves as far as the surface's detail (its 2 was ~25 m: a long cave
-	# ended in nothing while its water, drawn further, hung in the air).
-	_deep.radius = near
+	# How far caves are drawn (the settings' Cave view distance, default the
+	# surface's detail; it was 2, ~25 m: a long cave ended in nothing while
+	# its water, drawn further, hung in the air). Past it, a black fade
+	# (_cave_fog).
+	_deep.radius = clampi(int(settings.get("cave_tiles", near)), 2, 8)
 	add_child(_deep)
 	_deep.setup(_mat)
 
@@ -1142,6 +1147,7 @@ func _eye_lights(eye: Vector3, delta: float) -> void:
 		_eye_sky = BrickTerrain.sky_light_at(eye)
 	# Eased: a level is a 20 % step, and the gun would flick at every cell.
 	_cave_light = lerpf(_cave_light, sky_brightness(_eye_sky), 1.0 - exp(-delta / EYE_LIGHT_EASE))
+	_cave_fog()
 	# The sky's reflections stay on: the ground takes them down per pixel
 	# (terrain.gdshader, SPECULAR); the held gun has its own dark box.
 	_held_light(_cave_light, delta)
@@ -1212,6 +1218,42 @@ func _held_light(k: float, delta: float) -> void:
 		for n in root.find_children("*", "VisualInstance3D", true, false):
 			if n is GeometryInstance3D:
 				RenderLayers.set_layers(n as VisualInstance3D, mask)
+
+
+## THE CAVE FADE (MineWorld.md 19): underground the caves are drawn only
+## `_deep.radius` tiles round the eye, and past that a cave ends in nothing
+## (the far tier has no caves). So in the dark the distance fades to black,
+## ending where the drawn caves may end, by how dark the eye's cell is: none
+## in the open, full in a closed cave. Under water or lava their own fog.
+var _cave_fog_on := false
+
+
+func _cave_fog() -> void:
+	if _rig == null or _rig.env == null or _deep == null:
+		return
+	var env: Environment = _rig.env
+	if water != null and int(water.get("_under_mode")) != 0:
+		_cave_fog_on = false
+		return
+	var k := clampf((1.0 - _cave_light) * 1.25 - 0.1, 0.0, 1.0) if _deep.active else 0.0
+	if k <= 0.01:
+		if _cave_fog_on:
+			env.fog_enabled = false
+			_cave_fog_on = false
+		return
+	var reach := float(_deep.radius) * float(BrickTerrain.get_tile_studs()) * BrickWorld.get_stud_metres()
+	env.fog_enabled = true
+	env.fog_mode = Environment.FOG_MODE_DEPTH
+	env.fog_light_color = Color.BLACK
+	env.fog_light_energy = 0.0
+	env.fog_density = k
+	env.fog_depth_begin = reach * 0.55
+	env.fog_depth_end = reach
+	env.fog_depth_curve = 1.0
+	env.fog_sky_affect = 0.0
+	env.fog_sun_scatter = 0.0
+	env.fog_aerial_perspective = 0.0
+	_cave_fog_on = true
 
 
 ## A level's brightness before the floor (0 at level 0, 1 at 15).
@@ -5386,6 +5428,9 @@ func _build_gate_room() -> Array:
 ## lines up a dark room's wall seams, MineWorld.md 19). Counted with the
 ## geometry chamfer off and on; on must add none.
 func _run_seams_gate() -> void:
+	if "--deep" in OS.get_cmdline_user_args():
+		await _run_seams_deep()
+		return
 	await _frames(10)
 	var dev := UserPaths.DEV
 	DirAccess.make_dir_recursive_absolute(dev)
@@ -5502,6 +5547,135 @@ func _run_seams_gate() -> void:
 	# cracks were both seen as dots in a dark cave.
 	var ok: bool = on[0] == 0 and off[0] == 0
 	print("[mine-seams] %s  chamfer on %d px, off %d px" % ["PASS" if ok else "FAIL", on[0], off[0]])
+	get_tree().quit()
+
+
+## -- --gate=seams --deep: the same count in a hall cut deep underground,
+## drawn by the DEEP sections (unchamfered, MineWorld.md 16), seen from
+## across it: 13 x 41 studs inside, 6 courses tall, 60 plates under the
+## lowest ground, a 1-stud shaft up to the sky from its roof's middle (a
+## sealed chamber is not drawn). An unlit magenta box half a stud outside its
+## shell (a black card across the shaft); 36 scoped views from each end at
+## its far corners, wall feet, roof edges. The user's dashed line along a
+## cave's wall foot, seen from a distance, would show here.
+func _run_seams_deep() -> void:
+	await _frames(10)
+	var dev := UserPaths.DEV
+	DirAccess.make_dir_recursive_absolute(dev)
+	_time = 0.42
+	set_on_foot(false)
+	view.process_mode = Node.PROCESS_MODE_DISABLED
+	view.rig.visible = false
+	if view.arms != null:
+		view.arms.visible = false
+	_hud_layer.visible = false
+	if kit != null:
+		for layer: CanvasLayer in [kit.hud, kit._aggro_layer]:
+			if layer != null:
+				layer.visible = false
+	collapse.process_mode = Node.PROCESS_MODE_DISABLED
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var e := _eye()
+	var o := Vector2i(floori(e.x / stud) + 4, floori(e.z / stud) - 20)
+	var t_min := 1 << 30
+	var t_max := -(1 << 30)
+	for dz in range(-2, 44):
+		for dx in range(-2, 17):
+			t_min = mini(t_min, BrickTerrain.surface_plate(o.x + dx, o.y + dz))
+			t_max = maxi(t_max, BrickTerrain.surface_plate(o.x + dx, o.y + dz))
+	var b := (floori(float(t_min - 60) / 3.0)) * 3
+	# --at-top: across the plate where the surface tiles stop and the deep
+	# sections start (BrickTerrain.deep_top), 9 plates up the walls.
+	var tile := BrickTerrain.get_tile_studs()
+	var dtop := BrickTerrain.deep_top(floori(float(o.x + 6) / tile), floori(float(o.y + 20) / tile))
+	if "--at-top" in OS.get_cmdline_user_args():
+		b = floori(float(dtop - 9) / 3.0) * 3
+	print("[mine-seams] deep_top %d, ground %d..%d, hall floor %d" % [dtop, t_min, t_max, b])
+	if "--flat" in OS.get_cmdline_user_args():
+		TerrainTile.bevel_enabled = false
+		_streamer.invalidate(Rect2i(-(1 << 20), -(1 << 20), 1 << 21, 1 << 21))
+	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x - 1, b - 3, o.y - 1), Vector3i(o.x + 14, b + 20, o.y + 42), 4, true))
+	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x, b, o.y), Vector3i(o.x + 13, b + 17, o.y + 41), 0, false))
+	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x + 6, b + 18, o.y + 20), Vector3i(o.x + 6, t_max + 6, o.y + 20), 0, false))
+	_flush_edits()
+	var near_end := Vector3((o.x + 6.5) * stud, b * plate + 0.05, (o.y + 1.5) * stud)
+	_fly_to(near_end, Vector3(0, 0, 1))
+	for f in 900:
+		await get_tree().process_frame
+		if f > 120 and _deep.active and _deep._tasks.is_empty() and _deep._dirty.is_empty() 				and _deep._swaps.is_empty():
+			break
+	await _frames(30)
+	var lo := Vector3((o.x - 1) * stud - stud * 0.5, (b - 3) * plate - 0.2, (o.y - 1) * stud - stud * 0.5)
+	var hi := Vector3((o.x + 15) * stud + stud * 0.5, (b + 21) * plate + 0.2, (o.y + 43) * stud + stud * 0.5)
+	var box := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = hi - lo
+	box.mesh = bm
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(1, 0, 1)
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	box.material_override = mat
+	box.position = (lo + hi) * 0.5
+	add_child(box)
+	var card := MeshInstance3D.new()
+	var cm := BoxMesh.new()
+	cm.size = Vector3(stud + 0.1, 0.01, stud + 0.1)
+	card.mesh = cm
+	var black := StandardMaterial3D.new()
+	black.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	black.albedo_color = Color.BLACK
+	card.material_override = black
+	card.position = Vector3((o.x + 6.5) * stud, (b + 21) * plate + 0.1, (o.y + 20.5) * stud)
+	add_child(card)
+	var views := []
+	for end in [0, 1]:
+		var ez := o.y + 1.5 if end == 0 else o.y + 39.5
+		var fz := o.y + 41 if end == 0 else o.y
+		var from := Vector3((o.x + 6.5) * stud, (b + 9) * plate, ez * stud)
+		for tx in [o.x, o.x + 14]:
+			for h in [b, b + 9, b + 18]:
+				views.append(Transform3D(Basis(), from).looking_at(Vector3(tx * stud, h * plate, fz * stud)))
+		for tz in [0.3, 0.6]:
+			var zz: float = lerpf(ez, fz, tz)
+			for tx in [o.x, o.x + 14]:
+				for h in [b, b + 18]:
+					views.append(Transform3D(Basis(), from).looking_at(Vector3(tx * stud, h * plate, zz * stud)))
+		views.append(Transform3D(Basis(), from).looking_at(Vector3((o.x + 7) * stud, b * plate, fz * stud)))
+		views.append(Transform3D(Basis(), from).looking_at(Vector3((o.x + 7) * stud, (b + 18) * plate, fz * stud)))
+	var cam0 := get_viewport().get_camera_3d()
+	var cam := Camera3D.new()
+	add_child(cam)
+	cam.attributes = cam0.attributes
+	cam.near = 0.02
+	cam.fov = 10.0
+	cam.current = true
+	var total := 0
+	var hit := 0
+	var worst := 0
+	for i in views.size():
+		cam.global_transform = views[i]
+		await _frames(4)
+		await RenderingServer.frame_post_draw
+		var img := get_viewport().get_texture().get_image()
+		var n := 0
+		for y in img.get_height():
+			for x in img.get_width():
+				var c := img.get_pixel(x, y)
+				if c.r > 0.45 and c.b > 0.45 and c.g < 0.6 * minf(c.r, c.b):
+					n += 1
+		total += n
+		hit += 1 if n > 0 else 0
+		if n > 0:
+			img.save_png(dev + "mine_seams_deep_hit%d.png" % i)
+			print("[mine-seams] view %d: %d px, from %s to %s" % [i, n, views[i].origin, views[i].origin - views[i].basis.z])
+		if n > worst:
+			worst = n
+			img.save_png(dev + "mine_seams_deep.png")
+	print("[mine-seams] deep hall: %d sections drawn, floor plate %d (%d under the ground), chamfer %s" % [_deep._secs.size(), b, t_min - b, TerrainTile.bevel_enabled])
+	print("[mine-seams] %s  deep: magenta %d px over %d views (%d views with any, worst %d)"
+			% ["PASS" if total == 0 else "FAIL", total, views.size(), hit, worst])
 	get_tree().quit()
 
 

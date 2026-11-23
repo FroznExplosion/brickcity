@@ -999,6 +999,30 @@ the sun by it. Lava keeps its glow. Not block light: `lava_cells_in` takes
 the fluid's lock, which `mesh_tile` holds. `--gate=skylit` puts a 3 x 3 pool
 in the closed room: 0.014 against a floor of about 0.03.
 
+**The dashed line along a cave's walls, seen from afar (2026-11-23).** Where
+a chamfered near tile met a tile or tier drawn FLAT -- the tile beside it
+past the chamfer's reach, or the deep sections under the tile's floor --
+the chamfered face bevelled its edge there as half of a groove the flat
+side never drew: a slit up the wall and across the floor at every tile
+seam. A brick across a tile seam also took a groove it does not have.
+`mask_faces` now treats an edge whose neighbour is outside the tile's own
+columns or plates as square (`bound`): the face runs flat to the seam, its
+backing reaches past it (hidden behind the neighbour), and the flat side's
+1 mm overlap closes the join. `-- --gate=seams --deep` cuts a 13 x 41 stud
+hall 60 plates under the ground and counts from 32 scoped views down its
+length; `--at-top` puts it across the tile floor (`deep_top`), `--flat`
+turns the chamfer off. Across the floor: 6,815 px -> 88 (one short slit
+where a course seam meets the tile seam; open); chamfer off 0; away from
+the floor 1 px.
+
+**Options (M, world settings).** `Cave view distance (tiles)` (2-8,
+`cave_tiles`, default the detail radius) sets how far the deep tier draws;
+`Chamfered brick edges` (`chamfer`) turns the near tiles' geometry chamfer
+off, drawing them flat like the caves. **The cave fade:** underground the
+distance fades to black (depth fog, black) from 55 % of the drawn caves'
+reach to its end, by how dark the eye's cell is (none in the open); water
+and lava keep their own fog when the eye is in them (`_cave_fog`).
+
 `--gate=gpu` after all this (2026-11-22 23:26) is NOT a clean number: six
 headless runs of other chats went on through it and it started near 81 C.
 Baseline GPU 6.06 ms on foot, 4.02 ms 25 m up (section 18: 5.48 / 3.89,
