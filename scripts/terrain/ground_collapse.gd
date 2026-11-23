@@ -108,9 +108,11 @@ func setup(w: Node3D, brick_material: Material) -> void:
 	# Every piece stays (the user, 2026-11-17: to change later): no cap, no
 	# group too small to be a piece.
 	pieces.max_pieces = 1 << 30
-	# What a landing knocks off a piece: SMALL_MAX bricks or fewer are crumbs
-	# that fly and shrink away (the city's rule), not pieces that lie forever.
-	pieces.debris_max = SMALL_MAX
+	# What a landing knocks off a piece is a piece too, however small: real
+	# bricks (texture, studs, the cave's light), not the city's crumbs, which
+	# drew as flat boxes that shrank away (the user, 2026-11-23). Small ones
+	# are still deleted when put away (_put_away); over MAX_MOVING they crumb.
+	pieces.debris_max = 0
 	pieces.studs = true
 	# A brick a shot or a pickaxe destroys is deleted, not thrown (the user,
 	# 2026-11-20): only what is left falls, if anything.

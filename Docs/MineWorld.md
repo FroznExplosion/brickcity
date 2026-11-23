@@ -1015,6 +1015,18 @@ turns the chamfer off. Across the floor: 6,815 px -> 88 (one short slit
 where a course seam meets the tile seam; open); chamfer off 0; away from
 the floor 1 px.
 
+**Up and down, and the fade (2026-11-23).** The deep tier loaded one
+section up and down (~11 m), so looking down a deep shaft showed nothing
+loaded while the fade reached 45 m across. `up`/`down` are now half the
+radius in sections (radius 4 -> 2, 8 -> 4; a section ~11 m), and the fade
+ends at the nearer of the two reaches. At 8 that is up to 17 x 17 x 9
+sections; not timed.
+
+**Knocked-off bricks are pieces.** A landing's knocked-off bricks were the
+city's crumbs (flat boxes that shrank away); in the mine world they are
+pieces now however small (`debris_max` 0): textured, studded, lit by the
+cave. Small ones are still deleted when put away; over MAX_MOVING they crumb.
+
 **Options (M, world settings).** `Cave view distance (tiles)` (2-8,
 `cave_tiles`, default the detail radius) sets how far the deep tier draws;
 `Chamfered brick edges` (`chamfer`) turns the near tiles' geometry chamfer

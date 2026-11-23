@@ -418,6 +418,11 @@ func generate(s: Dictionary) -> void:
 	# its water, drawn further, hung in the air). Past it, a black fade
 	# (_cave_fog).
 	_deep.radius = clampi(int(settings.get("cave_tiles", near)), 2, 8)
+	# Up and down too: one section each way (~11 m) left a deep hole empty
+	# below while the fade only reached across. Half the radius in sections
+	# (a section is ~11 m, a tile 11.2 m), so 4 tiles -> 2, 8 -> 4.
+	_deep.up = clampi(ceili(_deep.radius / 2.0), 1, 4)
+	_deep.down = _deep.up
 	add_child(_deep)
 	_deep.setup(_mat)
 
@@ -1241,7 +1246,11 @@ func _cave_fog() -> void:
 			env.fog_enabled = false
 			_cave_fog_on = false
 		return
-	var reach := float(_deep.radius) * float(BrickTerrain.get_tile_studs()) * BrickWorld.get_stud_metres()
+	# The nearest place the drawn caves may end: across (tiles) or up/down
+	# (sections, on their own grid: at least `down` whole sections below).
+	var across := float(_deep.radius) * float(BrickTerrain.get_tile_studs()) * BrickWorld.get_stud_metres()
+	var updown := float(mini(_deep.up, _deep.down)) * float(BrickTerrain.get_deep_section_plates()) 			* BrickWorld.get_plate_metres()
+	var reach := minf(across, updown)
 	env.fog_enabled = true
 	env.fog_mode = Environment.FOG_MODE_DEPTH
 	env.fog_light_color = Color.BLACK
