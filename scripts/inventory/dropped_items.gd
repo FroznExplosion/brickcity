@@ -24,6 +24,9 @@ const MODEL_M := 0.45
 
 var host: Node = null
 var inv: Inventory = null
+## The mine world's sky light on things (Docs/MineWorld.md 19), or null:
+## each drop drawn with its cell's sky light.
+var sky: MineSkyLit = null
 ## [{stack, pos, vel, age, node}]
 var drops: Array = []
 var _stud := 0.35
@@ -50,6 +53,9 @@ func spawn(s: ItemStack, pos: Vector3, vel := Vector3.ZERO, age := 0.0) -> void:
 	var node := _model(s.id)
 	node.position = pos
 	add_child(node)
+	if sky != null:
+		sky.sky_lit_model(node)
+		sky.track(node)
 	drops.append({"stack": s, "pos": pos, "vel": vel, "age": age, "node": node, "rest": false})
 
 

@@ -94,61 +94,28 @@ struct Sampler {
     }
 };
 
-/// Tiles' top courses kept across surveys, by tile version (brick::
-/// tile_version: an edit in or next to a tile, or the world set up again,
-/// makes it a new one). Packing a tile for its top course was 97% of a survey
-/// (29 of 31 ms for an arm on a pillar, 137 of 155 for a long one), and a
-/// survey asks the same unchanged tiles round every edit again.
-struct SharedTops {
-    std::mutex lock;
-    struct Entry {
-        uint64_t version = 0;
-        std::shared_ptr<const std::vector<TopColumn>> cols;
-    };
-    std::unordered_map<int64_t, Entry> tiles;
-};
-static SharedTops g_tops;
-/// Tiles kept at most; past it the cache starts over.
-constexpr size_t TOPS_MAX = 512;
-
-/// The top course's columns (brick::top_columns), a tile at a time: from the
-/// shared cache when the tile has not changed, else packed and kept. Held for
-/// every attempt of one survey.
+/// The top course's columns (brick::top_columns), a tile at a time, held for
+/// every attempt of one survey. They come from the packed-tile store
+/// (brick::packed_tops, Docs/TerrainCollapse.md 8.4): the drawing packed the
+/// tiles round the player already, so a survey samples and packs only ground
+/// nothing has drawn since its last edit. (It had its own cache by tile
+/// version, SharedTops; the store replaces it.)
 struct TopCache {
-    std::unordered_map<int64_t, std::shared_ptr<const std::vector<TopColumn>>> tiles;
+    std::unordered_map<int64_t, std::vector<TopColumn>> tiles;
     int packed = 0;
     const TopColumn &at(int x, int z) {
         const int tx = fdiv(x, TILE), tz = fdiv(z, TILE);
         const int64_t k = ((int64_t)(tx & 0xFFFFFFF) << 28) | (int64_t)(tz & 0xFFFFFFF);
         auto it = tiles.find(k);
         if (it == tiles.end()) {
-            const uint64_t ver = tile_version(tx, tz);
-            std::shared_ptr<const std::vector<TopColumn>> cols;
-            {
-                std::lock_guard<std::mutex> lk(g_tops.lock);
-                auto s = g_tops.tiles.find(k);
-                if (s != g_tops.tiles.end() && s->second.version == ver) {
-                    cols = s->second.cols;
-                }
-            }
-            if (!cols) {
-                auto fresh = std::make_shared<std::vector<TopColumn>>();
-                top_columns(tx, tz, *fresh);
+            it = tiles.emplace(k, std::vector<TopColumn>()).first;
+            bool p = false;
+            top_columns(tx, tz, it->second, &p);
+            if (p) {
                 ++packed;
-                cols = fresh;
-                // Still that version once packed? Then keep it (an edit
-                // landing meanwhile leaves it to the next survey to pack).
-                if (tile_version(tx, tz) == ver) {
-                    std::lock_guard<std::mutex> lk(g_tops.lock);
-                    if (g_tops.tiles.size() >= TOPS_MAX) {
-                        g_tops.tiles.clear();
-                    }
-                    g_tops.tiles[k] = SharedTops::Entry{ ver, cols };
-                }
             }
-            it = tiles.emplace(k, cols).first;
         }
-        return (*it->second)[(size_t)(x - tx * TILE) + TILE * (size_t)(z - tz * TILE)];
+        return it->second[(size_t)(x - tx * TILE) + TILE * (size_t)(z - tz * TILE)];
     }
 };
 
@@ -172,7 +139,7 @@ struct Attempt {
     int packed = 0;          ///< tiles packed for their top course (cache misses)
     double sample_ms = 0.0;
     double solve_ms = 0.0;
-    double tops_ms = 0.0;    ///< the top course's tiles packed (brick::top_columns)
+    double tops_ms = 0.0;    ///< the top course's tiles read, or sampled and packed (brick::top_columns)
     double bond_ms = 0.0;    ///< the bricks laid
     double world_ms = 0.0;   ///< the private world built and solved
 };

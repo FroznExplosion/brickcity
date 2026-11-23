@@ -4,6 +4,7 @@
 #include "terrain_bond.h"
 
 #include <shared_mutex>
+#include <mutex>
 #include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/classes/mesh.hpp>
 #include <godot_cpp/core/class_db.hpp>
@@ -999,6 +1000,10 @@ void set_edit(int x, int yp, int z, int material) {
         r.keys.push_back(key);
     }
     r.dirty = true;
+    // Again after the write: a reader that read the version before the bump
+    // above but sampled before the write must not keep what it packed under
+    // the new version (packed_tile, the collapse's top course).
+    bump_tiles_near(x, z);
 }
 
 int highest_edit_near(int tx, int tz) {
@@ -1929,7 +1934,7 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
                         plate = plate && s.plate[TileSample::idx(x, z)] == 1;
                     }
                 }
-                // HELD (Docs/MineWorld.md 19): the user's rule, "any brick with
+                // HELD (Docs/MineWorld.md 20): the user's rule, "any brick with
                 // a brick on top of it must always have studs". The bond cuts
                 // a top brick out of its course's 4 x 2 footprint; where that
                 // footprint reaches under a higher column -- the foot of every
@@ -3171,10 +3176,9 @@ Dictionary BrickTerrain::find_brick(Vector3 point, Vector3 normal) {
     const int tx = floor_div(x, TILE), tz = floor_div(z, TILE);
     const int lx = x - tx * TILE, lz = z - tz * TILE;
     TileSample s;
-    sample_tile(g_field, tx, tz, s);
-    std::vector<Piece> pieces;
-    std::vector<int32_t> owner;
-    brick::pack_tile(g_field, s, pieces, owner);
+    const std::shared_ptr<const brick::TilePack> packed = brick::packed_tile(tx, tz, s);
+    const std::vector<Piece> &pieces = packed->pieces;
+    const std::vector<int32_t> &owner = packed->owner;
 
     const int col_top = s.tp[TileSample::idx(lx, lz)];
     const int course = floor_div(col_top, PLATES_PER_CELL) * PLATES_PER_CELL;
@@ -3214,17 +3218,115 @@ Dictionary BrickTerrain::find_brick(Vector3 point, Vector3 normal) {
     return out;
 }
 
-void brick::top_columns(int tx, int tz, std::vector<TopColumn> &out) {
-    TileSample s;
+namespace {
+/// brick::packed_tile's tiles. Most recently used kept; past PACKS_MAX the
+/// least used quarter goes. ~10-30 KB a tile.
+struct PackStore {
+    std::mutex lock;
+    struct Entry {
+        uint64_t version = 0;
+        uint64_t used = 0;
+        std::shared_ptr<const brick::TilePack> pack;
+    };
+    std::unordered_map<uint64_t, Entry> tiles;
+    uint64_t clock = 0;
+    int64_t hits = 0;
+    int64_t packs = 0;
+};
+PackStore g_packs;
+/// The mine world keeps ~240 tiles drawn; the rest is the survey's ring and
+/// the far edits round them.
+constexpr size_t PACKS_MAX = 768;
+} // namespace
+
+std::shared_ptr<const brick::TilePack> brick::packed_tile(int tx, int tz, TileSample &s) {
+    // The version BEFORE sampling: an edit landing after it changes it, and
+    // the pack is then not kept.
+    const uint64_t ver = tile_version(tx, tz);
     sample_tile(g_field, tx, tz, s);
-    std::vector<Piece> pieces;
-    std::vector<int32_t> owner;
-    brick::pack_tile(g_field, s, pieces, owner);
+    const uint64_t k = (uint64_t)tile_key(tx, tz);
+    {
+        std::lock_guard<std::mutex> lk(g_packs.lock);
+        auto it = g_packs.tiles.find(k);
+        if (it != g_packs.tiles.end() && it->second.version == ver) {
+            it->second.used = ++g_packs.clock;
+            ++g_packs.hits;
+            return it->second.pack;
+        }
+    }
+    auto fresh = std::make_shared<TilePack>();
+    pack_tile(g_field, s, fresh->pieces, fresh->owner);
+    fresh->top.resize((size_t)TILE * TILE);
+    for (int lz = 0; lz < TILE; ++lz) {
+        for (int lx = 0; lx < TILE; ++lx) {
+            fresh->top[(size_t)lx + TILE * lz] = s.tp[TileSample::idx(lx, lz)];
+        }
+    }
+    std::lock_guard<std::mutex> lk(g_packs.lock);
+    ++g_packs.packs;
+    if (tile_version(tx, tz) == ver) {
+        if (g_packs.tiles.size() >= PACKS_MAX && g_packs.tiles.find(k) == g_packs.tiles.end()) {
+            std::vector<uint64_t> used;
+            used.reserve(g_packs.tiles.size());
+            for (const auto &e : g_packs.tiles) {
+                used.push_back(e.second.used);
+            }
+            const size_t q = used.size() / 4;
+            std::nth_element(used.begin(), used.begin() + q, used.end());
+            const uint64_t cut = used[q];
+            for (auto it = g_packs.tiles.begin(); it != g_packs.tiles.end();) {
+                it = it->second.used <= cut ? g_packs.tiles.erase(it) : std::next(it);
+            }
+        }
+        g_packs.tiles[k] = PackStore::Entry{ ver, ++g_packs.clock, fresh };
+    }
+    return fresh;
+}
+
+std::shared_ptr<const brick::TilePack> brick::packed_tops(int tx, int tz, bool *packed) {
+    if (packed) {
+        *packed = false;
+    }
+    {
+        const uint64_t ver = tile_version(tx, tz);
+        const uint64_t k = (uint64_t)tile_key(tx, tz);
+        std::lock_guard<std::mutex> lk(g_packs.lock);
+        auto it = g_packs.tiles.find(k);
+        if (it != g_packs.tiles.end() && it->second.version == ver) {
+            it->second.used = ++g_packs.clock;
+            ++g_packs.hits;
+            return it->second.pack;
+        }
+    }
+    if (packed) {
+        *packed = true;
+    }
+    TileSample s;
+    return packed_tile(tx, tz, s);
+}
+
+Dictionary BrickTerrain::get_tile_pack_stats(bool reset) {
+    std::lock_guard<std::mutex> lk(g_packs.lock);
+    Dictionary d;
+    d["hits"] = g_packs.hits;
+    d["packs"] = g_packs.packs;
+    d["kept"] = (int64_t)g_packs.tiles.size();
+    if (reset) {
+        g_packs.hits = 0;
+        g_packs.packs = 0;
+    }
+    return d;
+}
+
+void brick::top_columns(int tx, int tz, std::vector<TopColumn> &out, bool *was_packed) {
+    const std::shared_ptr<const brick::TilePack> packed = brick::packed_tops(tx, tz, was_packed);
+    const std::vector<Piece> &pieces = packed->pieces;
+    const std::vector<int32_t> &owner = packed->owner;
     out.assign((size_t)TILE * TILE, TopColumn());
     for (int lz = 0; lz < TILE; ++lz) {
         for (int lx = 0; lx < TILE; ++lx) {
             TopColumn &c = out[(size_t)lx + TILE * lz];
-            c.top = s.tp[TileSample::idx(lx, lz)];
+            c.top = packed->top[(size_t)lx + TILE * lz];
             const int32_t o = owner[(size_t)lx + TILE * lz];
             if (o >= 0) {
                 const Piece &p = pieces[(size_t)o];
@@ -3254,10 +3356,9 @@ Dictionary BrickTerrain::find_bricks(Vector3i lo, Vector3i hi) {
     for (int tz = floor_div(z0, TILE); tz <= floor_div(z1, TILE); ++tz) {
         for (int tx = floor_div(x0, TILE); tx <= floor_div(x1, TILE); ++tx) {
             TileSample s;
-            sample_tile(g_field, tx, tz, s);
-            std::vector<Piece> pieces;
-            std::vector<int32_t> owner;
-            brick::pack_tile(g_field, s, pieces, owner);
+            const std::shared_ptr<const brick::TilePack> packed = brick::packed_tile(tx, tz, s);
+            const std::vector<Piece> &pieces = packed->pieces;
+            const std::vector<int32_t> &owner = packed->owner;
             std::vector<uint8_t> taken(pieces.size(), 0);
             BondView view(s, true);
             const int ax0 = std::max(x0, tx * TILE), ax1 = std::min(x1, tx * TILE + TILE - 1);
@@ -3452,10 +3553,9 @@ bool BrickTerrain::cut_before(int u, int row_key, int axis) {
 
 PackedInt32Array BrickTerrain::pack_tile(int tx, int tz) {
     TileSample s;
-    sample_tile(g_field, tx, tz, s);
-    std::vector<Piece> pieces;
-    std::vector<int32_t> owner;
-    brick::pack_tile(g_field, s, pieces, owner);
+    const std::shared_ptr<const brick::TilePack> packed = brick::packed_tile(tx, tz, s);
+    const std::vector<Piece> &pieces = packed->pieces;
+    const std::vector<int32_t> &owner = packed->owner;
 
     PackedInt32Array out;
     out.resize((int)pieces.size() * PIECE_STRIDE);
@@ -4016,7 +4116,7 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
     // brick that air can see -- a side against a cave or an overhang under a
     // higher column, an overlay brick's sides, its underside -- is drawn here,
     // keyed by the piece. Skipping every face inside a piece left those
-    // see-through (terrain_audit_probe, Docs/MineWorld.md 19).
+    // see-through (terrain_audit_probe, Docs/MineWorld.md 20).
     std::vector<uint8_t> sides_drawn(pieces.size(), 0);
     for (size_t i = 0; i < pieces.size(); ++i) {
         const Piece &p = pieces[i];
@@ -4424,7 +4524,7 @@ void push_instance(PackedFloat32Array &buf, float px, float py, float pz,
 /// with the sky light on -- then four of custom data after the colour, the
 /// cell's sky and block light (sky_light_pass fills them; full sky until it
 /// does), so a stud in a cave is as dark as the floor it stands on
-/// (TerrainTile's sky studs, printed_core INSTANCE_SKY; Docs/MineWorld.md 19).
+/// (TerrainTile's sky studs, printed_core INSTANCE_SKY; Docs/MineWorld.md 20).
 int stud_stride() {
     return g_sky_light.load(std::memory_order_relaxed) ? 20 : 16;
 }
@@ -5648,7 +5748,7 @@ struct SkyGrid {
 /// that point, opaque cells left out. Vertex positions are tile-local in X and
 /// Z (the tile's origin is stud gx0, gz0), absolute in Y.
 /// `studs` (stud_stride 20): each stud's custom data gets the light of the
-/// cell it stands in, as a vertex facing up there would (Docs/MineWorld.md 19).
+/// cell it stands in, as a vertex facing up there would (Docs/MineWorld.md 20).
 static void sky_light_pass(MeshBuf &m, const TileSample &s, bool surface, Dictionary &out,
         PackedFloat32Array *studs = nullptr) {
     if (!g_sky_light.load(std::memory_order_relaxed) || m.verts.is_empty()) {
@@ -5912,7 +6012,7 @@ Dictionary BrickTerrain::build_section(int tx, int sy, int tz) {
     }
     // The keys TerrainTile reads, so a section is drawn by the same node.
     out["mesh"] = mesh;
-    // Studs on the cave floors (Docs/MineWorld.md 19), drawn by the section's
+    // Studs on the cave floors (Docs/MineWorld.md 20), drawn by the section's
     // TerrainTile like a surface tile's.
     out["studs"] = studs;
     out["stud_stride"] = stud_stride();
@@ -5936,10 +6036,9 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
     const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
 
     TileSample s;
-    sample_tile(g_field, tx, tz, s);
-    std::vector<Piece> pieces;
-    std::vector<int32_t> owner;
-    brick::pack_tile(g_field, s, pieces, owner);
+    const std::shared_ptr<const brick::TilePack> packed = brick::packed_tile(tx, tz, s);
+    const std::vector<Piece> &pieces = packed->pieces;
+    const std::vector<int32_t> &owner = packed->owner;
 
     MeshBuf m;
     PackedFloat32Array boxes;
@@ -6154,7 +6253,7 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
         }
     }
 
-    // WHERE EACH COLUMN'S TOP STOPS BEING SOLID (Docs/MineWorld.md 19): the
+    // WHERE EACH COLUMN'S TOP STOPS BEING SOLID (Docs/MineWorld.md 20): the
     // lowest plate of the solid run down from its top, or INT16_MIN past
     // RUN_CAP plates. A top box reached down to the lowest neighbouring column
     // whatever was under the top, so over a cave under a roof -- a course or
@@ -7158,7 +7257,7 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
     return out;
 }
 
-// --- the audit (probes; Docs/MineWorld.md 19) ----------------------------------------
+// --- the audit (probes; Docs/MineWorld.md 20) ----------------------------------------
 //
 // Is every face of an owned solid cell that open air can see covered by a
 // triangle of the FLAT mesh (the far one; the chamfered one is
@@ -7373,7 +7472,7 @@ Dictionary BrickTerrain::audit_tile(int tx, int tz, int sy) {
             }
         }
     }
-    // STUDS (Docs/MineWorld.md 19). The top course: how many of its cells
+    // STUDS (Docs/MineWorld.md 20). The top course: how many of its cells
     // show studs (a studded brick, or a studded plate laid on one), and the
     // held bricks -- something stands on their footprint -- that show none.
     // The caves: their topmost bricks' cells (a +Y face the packer did not
@@ -7664,6 +7763,7 @@ void BrickTerrain::_bind_methods() {
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_slope_pieces"),
         &BrickTerrain::get_slope_pieces);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_region_studs"), &BrickTerrain::get_region_studs);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_tile_pack_stats", "reset"), &BrickTerrain::get_tile_pack_stats, DEFVAL(false));
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("take_dirty_regions"), &BrickTerrain::take_dirty_regions);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_region_edits", "rx", "rz"),
         &BrickTerrain::get_region_edits);

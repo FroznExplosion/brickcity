@@ -14,6 +14,7 @@
 #include "brick_grid.h"
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 using namespace godot;
@@ -473,7 +474,7 @@ constexpr float OVERLAY_TILE_SHARE = 0.62f;
 
 /// Of the bricks topmost in a cave (their top faces drawn by the face mesher,
 /// not packed), how many carry studs: more than the surface's 1 - TILE_CHANCE
-/// (Docs/MineWorld.md 19). The rest are smooth, by the brick's corner.
+/// (Docs/MineWorld.md 20). The rest are smooth, by the brick's corner.
 constexpr float CAVE_STUD_CHANCE = 0.9f;
 
 /// Is there a piece boundary immediately BEFORE `u` on this row?
@@ -521,9 +522,10 @@ struct TopColumn {
     int psx = 0, psz = 0;       ///< and its size
 };
 
-/// Tile (tx, tz)'s columns, TILE x TILE, x fastest. Samples and packs the
-/// tile (a few ms): a worker's job.
-void top_columns(int tx, int tz, std::vector<TopColumn> &out);
+/// Tile (tx, tz)'s columns, TILE x TILE, x fastest, from the packed-tile
+/// store (packed_tops); a tile not kept is sampled and packed (~8 ms): a
+/// worker's job. `packed`, when given, says which.
+void top_columns(int tx, int tz, std::vector<TopColumn> &out, bool *packed = nullptr);
 
 /// What tile (tx, tz) is made of has a version: it changes when a cell in it
 /// or within a tile of it is edited or a brick placed, and for every tile when
@@ -534,6 +536,26 @@ void top_columns(int tx, int tz, std::vector<TopColumn> &out);
 uint64_t tile_version(int tx, int tz);
 /// Every tile's version changes (the world set up again).
 void bump_field_version();
+
+/// A tile's top course packed into pieces (pack_tile's output): `owner` is
+/// TILE x TILE, x fastest, the piece owning each column's top course or -1.
+struct TilePack {
+    std::vector<Piece> pieces;
+    std::vector<int32_t> owner;
+    /// Each column's top solid plate (the sample's `tp`), TILE x TILE.
+    std::vector<int16_t> top;
+};
+
+/// Tile (tx, tz) sampled into `s` and its top course packed -- the bricks the
+/// player sees. Kept by tile version (Docs/TerrainCollapse.md 8.4): the
+/// drawing packs a tile once and the pickaxe, the brick lookups and the
+/// collapse's survey read the same pieces instead of packing again. Thread
+/// safe; packs on a miss. Shared and immutable: never change what it returns.
+std::shared_ptr<const TilePack> packed_tile(int tx, int tz, TileSample &s);
+/// The same without the sample, for a reader that needs only the pieces and
+/// the column tops (the collapse's survey): a kept tile costs a lookup, where
+/// sampling it was ~8 ms.
+std::shared_ptr<const TilePack> packed_tops(int tx, int tz, bool *packed = nullptr);
 
 } // namespace brick
 
@@ -841,6 +863,9 @@ public:
     /// EDITS BY REGION (Docs/MineWorld.md 9), for a save that writes only what
     /// changed. The main thread only. A region is get_region_studs() square.
     static int get_region_studs();
+    /// The packed-tile store (brick::packed_tile): hits, packs (misses),
+    /// tiles kept. `reset` zeroes the counts.
+    static Dictionary get_tile_pack_stats(bool reset = false);
     /// The regions (rx, rz pairs) edited since the last call, and forgets
     /// that they were. Call once after loading to start clean.
     static PackedInt32Array take_dirty_regions();
@@ -892,7 +917,7 @@ public:
     static int get_deep_section_plates();
     static int get_bedrock_plate();
     static Dictionary build_section(int tx, int sy, int tz);
-    /// FOR PROBES (Docs/MineWorld.md 19): the flat mesh and colliders of a
+    /// FOR PROBES (Docs/MineWorld.md 20): the flat mesh and colliders of a
     /// tile (sy = INT32_MIN) or deep section, checked against the field.
     ///   exposed, undrawn   faces of owned solid cells against OPEN air, and
     ///                      those no triangle of the mesh covers (by

@@ -1,6 +1,7 @@
 shader_type spatial;
 render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 #include "res://shaders/weather.gdshaderinc"
+#include "res://shaders/print_underside.gdshaderinc"
 
 // L in heightfield_test: tint every piece of ground by its LOD level. 0 is
 // the detailed tiles; a coarse block says its own level per instance.
@@ -430,7 +431,7 @@ void fragment() {
         }
     }
 
-    // --- the underside (Docs/MineWorld.md 19) -----------------------------
+    // --- the underside (Docs/MineWorld.md 20) -----------------------------
     //
     // A brick's bottom is OPEN: its rim, the ribs that stand in for tubes and
     // the hollow between them (print_surface's ps_underside), as a falling
@@ -438,12 +439,13 @@ void fragment() {
     // bottoms of the bricks over it, and drew as flat plastic. UV is the
     // place in the brick's bottom and UV2 that bottom (the mesher's), so the
     // pattern is the brick's own, across tile edges too.
+    const float UNDER_BEAD = 0.020;  // print_surface bottom_bead_width
     float under_solid = 1.0;
     float under_occ = 1.0;
     if (underside_hollow && !no_piece && v_flat_normal.y < -0.95) {
         vec2 fsize = v_face;
-        vec2 us = ps_underside(cell, fsize);
-        under_solid = us.x;
+        float usd = ps_under_sd(cell, fsize);
+        under_solid = clamp(0.5 - usd / max(fwidth(usd), 1e-5), 0.0, 1.0);
         if (under_solid < 0.99) {
             float shade = mix(under_wall, under_cavity, 0.5);
             if (dist < under_depth_range) {
@@ -498,7 +500,7 @@ void fragment() {
                 }
                 // The walls' lines a layer apart up them, the roof's a bead
                 // apart across it.
-                float lt = on_wall ? hs / layer_height : hp.x / bottom_bead_width;
+                float lt = on_wall ? hs / layer_height : hp.x / UNDER_BEAD;
                 float laa = max(fwidth(lt), 1e-5);
                 float lres = 1.0 - smoothstep(resolve_begin, resolve_end, laa);
                 float ink = (1.0 - smoothstep(0.0, max(laa * 1.4, 0.18), abs(fract(lt) - 0.5)))

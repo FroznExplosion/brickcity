@@ -743,9 +743,9 @@ its neighbours (light reaches 15 studs, a tile is 32).
 | `--gate=mouth`, its walls | 0.446 by the mouth, 0.066 by the back (level 1) |
 | `--gate=gpu`, baseline GPU on foot / 25 m up | 5.48 / 3.89 ms with sky light (62 C start), 5.48 / 3.73 without (57 C); the near tiles' own share 0.75 vs 0.40 ms on foot (the `light()`), editor closed, nothing else running |
 
-**Not in it.** Collapse pieces, dropped items and chests are lit by the
-open-air environment wherever they are, so in a cave they are brighter than
-the walls (they would need their own position's level, like the gun). Studs,
+**Not in it.** Collapse pieces, dropped items and chests were lit by the
+open-air environment wherever they were, so in a cave they glowed brighter
+than the walls: section 19 gives them their own cell's level. Studs,
 tufts, pebbles and the bricks in curved ground are instances in their own
 material and stay sky-lit; they stand on tops, which are sky. Water passes
 light freely. A one-course slab (found building the tunnel for
@@ -822,3 +822,149 @@ both sides agree, the floor falls off a level a step, `take()` names the
 tiles, gone once the lava is), `terrain_probe`, `fluid_probe`; `-- --gate=deep`
 (now with a lava pit: `mine_deep_lava.png`, `_nolights`), `-- --gate=water`
 (`water_lava_night_nolights.png`); `-- --gate=gpu` against section 17.
+
+## 19. Sky light on things (2026-11-22)
+
+Section 18 lit the ground's cells; everything else kept the open-air
+environment, so a collapse piece, a dropped item or a chest in a closed cave
+glowed against black walls. Now each takes the sky light of the cell it is
+in (`scripts/terrain/mine_sky_lit.gd`), and in a dark cave it is
+as dark as the walls round it.
+
+**Copies of the materials, a level per node.** The mine world draws them with
+copies that read an `instance uniform float sky_level` (0..15), made only
+there (`MineSkyLit`, made when sky light is on), so every other scene, and
+the mine world's near trees, which share the pieces' brick material, draw as
+before:
+
+- the collapse pieces (their mesh and their studs) with `brick.gdshader` plus
+  `#define SKY_LIT` (`MineSkyLit.brick_material`, a duplicate of the mine
+  world's `_brick_mat`, registered with WeatherFx like it);
+- ItemIcons' models (drops, chests) and the sand boxes that landed on a piece
+  with `shaders/sky_lit_item.gdshader`, StandardMaterial3D's look (colour,
+  roughness, alpha, glow; specular 0.5) written out, one material per look
+  (`item_material`), `#define ITEM_ALPHA` for the see-through ones.
+
+Both include `shaders/sky_lit.gdshaderinc`, which does what terrain.gdshader's
+`#ifdef SKY_LIGHT` block does, from the node's level instead of the vertex's:
+the same curve and uniforms (`MineWorld.sky_brightness`), `AO` x the
+brightness, `SPECULAR` x sqrt(brightness) (and for a brick, `METALLIC` too:
+a metal's reflections take f0 from its albedo), and a `light()` that writes
+out the engine's Burley diffuse, Schlick-GGX specular (the brick's
+anisotropic form, which the engine takes whenever ANISOTROPY is written) and
+rim, with the SUN scaled by brightness^2. Lamps, the lava's OmniLights and
+the flashlight light them as the engine would: the block light from lava
+reaches things through those lights (there is no per-point block-light
+query; the water keeps its per-tile lava lights partly for this, section 18).
+
+**When the level is asked** (`MineSkyLit`, a node of the mine world, not of
+the collapse, so a gate that stops the collapse keeps it): a thing is
+tracked when it appears (`DroppedItems.spawn`, `MineChests.place`,
+`PlanetPieces.mesh_hung` -- a new signal, emitted when a piece's mesh is hung,
+first or again after a hit -- and the collapse's own mesh and sand-column
+paths); each frame 24 tracked things are checked for a new light cell (a
+falling piece or item), and `terrain_edited` asks again everything within
+16 cells of an edit's box (light reaches 15). `BrickTerrain.sky_light_at`
+(0.2-0.3 ms in a dark cave, a cheap early out under the sky) at most
+0.25 ms a frame, the rest next frame; a new thing that does not fit in the
+frame is drawn at the eye's level meanwhile (things appear near the player).
+Painted with `set_instance_shader_parameter` on its meshes: nothing is read
+back from the renderer, nothing waits on a worker.
+
+**Measured (`-- --gate=skylit`, 2026-11-22).** A stone room built on the
+ground near spawn (13 x 17 studs, 6 courses), a floating dirt block let fall
+into it as a piece, a chest and a dropped grass block; its way out a tunnel a
+stud wide, 20 studs long, up to the sky (a room with no way out is a sealed
+chamber, which the mesher does not draw). Picture brightness at each thing's
+middle and on the floor a stud in front of it:
+
+| | piece | chest | drop | floor |
+|---|---|---|---|---|
+| open to the sky (level 15) | 0.507 | 0.396 | 0.436 | 0.62-0.73 |
+| same, `--no-sky-light` (the shared materials) | 0.507 | 0.396 | 0.429 | 0.62-0.73 |
+| roofed over (level 0, exposure 2) | 0.020 | 0.014 | 0.012 | 0.04 |
+| roofed, level forced to 15 (the old look) | 0.661 | 0.553 | 0.605 | 0.04 |
+
+The open pictures with and without sky light differ by 0.38 grey levels of
+255 overall, 1.5 on the piece, 0.17 on the chest (the drop spins).
+`mine_skylit_open.png`, `_cave.png`, `_cave_old.png` in `user://dev/`.
+
+**Checks.** `-- --gate=skylit` (PASS: each thing at level <= 2 in the closed
+room, no brighter than twice the floor beside it, under half its forced-15
+brightness), and with `--no-sky-light` for the open numbers;
+`mine_world_probe`, `terrain_collapse_probe`; `-- --gate=gpu` against
+section 17.
+
+**Not in it.** Falling sand (one MultiMesh for every falling column, gone
+in a second or two) and the crumbs a landing throws (PlanetCrumbs, short
+lived) keep the open-air light.
+
+
+## 20. The ground's bricks, checked against its data (2026-11-22)
+
+An audit of what a tile draws and collides against what the field holds
+(`BrickTerrain.audit_tile`, run by `tools/probes/terrain_audit_probe.gd`,
+headless, over 30 tiles of generator 1, with and without the deep tier, and
+again after shots). Six faults, from the user's list:
+
+**Invisible walls.** A column top's collider box reached down through a cave
+under a roof one or two bricks thick: 7,158 open-air cells inside boxes over
+30 tiles. A box now stops where its column stops being solid (`WHERE EACH
+COLUMN'S TOP STOPS BEING SOLID`, brick_terrain.cpp); the gaps where tiles
+meet the deep sections are closed too. Now 0, and no exposed ground lost its
+collider.
+
+**See-through faces.** A top brick's side facing a cave or an overhang was
+drawn by nothing, nor were a brick's sides under the tile or plate laid on
+it: 213 faces missing, 687 after shots. Each piece now notes which of its
+sides another piece draws (`sides_drawn`) and draws the rest. Now 0.
+
+**Studs.** 24 % of surface cells had studs, and 5,373 of 5,487 bricks with a
+brick standing on them were smooth. The user's rule: any brick with a brick
+on it has studs. A top brick whose bond footprint reaches under a higher
+column is HELD: a studded brick, and if it takes a second course, a studded
+plate, never a smooth tile. The surface is now 54 % studded, still a mix.
+Cave floors had none; the deep sections' floors now take them
+(`CAVE_STUD_CHANCE`, 0.9), drawn by their TerrainTile like a surface tile's.
+
+**Cave studs go dark with the floor.** With sky light on (section 18) a stud
+carries its cell's sky and block light in its MultiMesh custom data (stride
+20, `stud_stride`), and `TerrainTile.sky_stud_material` (printed.gdshader
+with `#define INSTANCE_SKY`, printed_core's curve and light) draws it as dark
+as the floor it stands on.
+
+**The underside.** A cave roof or an overhang is the bottoms of the bricks
+over it, and drew as flat plastic. terrain.gdshader now draws a falling
+brick's open bottom there -- rim, ribs, the hollow with parallax -- from
+`shaders/print_underside.gdshaderinc`, the uniforms and `ps_under_sd` split
+out of print_surface so both shaders share them (print_surface still has
+`ps_underside`; terrain has its own copy, with no print_surface in it: the
+two share print-line uniform names).
+
+**The flashes as ground breaks or falls.** `-- --gate=handover` notes, after
+every drawn frame, which tiles have swapped and what is out:
+
+- the break flash: a brick across a tile edge was in one tile and out of
+  the other for a frame, its studs with it. Every tile one edit names is now
+  one batch and swaps in the same frame (`TerrainStreamer._batch_of`;
+  `TerrainDeep` the same for sections);
+- the sand flash: sand had a frame with its ground swapped and nothing drawn.
+  What falls HOLDS the tiles that still draw it (`hold_tiles`) until its own
+  mesh is made, then swaps them and lets it go in one call (`swap_ready`);
+- stray studs as a block started to fall: physics interpolation drew a
+  pooled stud halfway between its old and new buffer slot for a tick.
+  TerrainTile is not interpolated.
+
+Run on the fixes: 0 frames half swapped, 0 gaps, 0 drawn twice, for the
+break, a falling piece and falling sand. The break check also checks the
+shot brick's cells are empty. Its pictures (`user://dev/handover/`) never
+showed the hole a break leaves, though the cells, the rebuilt tiles' meshes
+and the game all have it, so the check is the swap count, not the pictures.
+The gate aims with `_aim_eye`, which corrects for where the walker's eye
+really lands.
+
+**Probes.** `terrain_audit_probe` (above), `terrain_probe`,
+`terrain_collapse_probe`, `mine_world_probe`; `-- --gate=handover`.
+`terrain_probe`'s two smooth-terrain checks ("turning it off gives the
+packer its cells back", "every cell has exactly one top surface") fail on
+main too, from before this work.

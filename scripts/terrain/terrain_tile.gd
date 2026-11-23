@@ -52,7 +52,7 @@ const RANGE_FADE := 6.0
 const FLOATS_PER_INSTANCE := 16
 ## ...and with use_custom_data, four more: the ground's studs with the sky
 ## light on (build_tile's "stud_stride" 20: each stud's sky and block light,
-## Docs/MineWorld.md 19), drawn by sky_stud_material in their own kinds.
+## Docs/MineWorld.md 20), drawn by sky_stud_material in their own kinds.
 const FLOATS_PER_SKY_STUD := 20
 
 ## The surface format flag for the print-material channel. One place, because
@@ -74,7 +74,7 @@ var curve_cells := 0
 var _body := RID()
 
 
-## NOT physics-interpolated (Docs/MineWorld.md 19): a tile never moves between
+## NOT physics-interpolated (Docs/MineWorld.md 20): a tile never moves between
 ## ticks, and its pooled stud MultiMeshes are refilled with another layout --
 ## interpolated, each stud was drawn for up to a tick halfway between its old
 ## buffer slot and its new one (the studs that flashed when a brick broke, a
@@ -461,7 +461,7 @@ static func stud_material() -> ShaderMaterial:
 ## The ground's studs where the bake lights them (the mine world): the stud
 ## material with `#define INSTANCE_SKY` (printed_core), which reads each
 ## stud's sky and block light from its custom data -- so a stud in a cave is
-## as dark as the floor under it, not lit by the open sky (Docs/MineWorld.md 19).
+## as dark as the floor under it, not lit by the open sky (Docs/MineWorld.md 20).
 static func sky_stud_material() -> ShaderMaterial:
 	if _sky_stud_material == null:
 		var code: String = (load("res://shaders/printed.gdshader") as Shader).code

@@ -25,6 +25,8 @@ const PLATES := 3
 var host: Node = null
 var drops: DroppedItems = null
 var inv: Inventory = null
+## The mine world's sky light on things (Docs/MineWorld.md 19), or null.
+var sky: MineSkyLit = null
 ## key "x,y,z" (block) -> {"block": Vector3i, "slots": Array, "node": Node3D}
 var chests := {}
 var _stud := 0.35
@@ -107,6 +109,9 @@ func place(block: Vector3i, slots: Array = [], force := false) -> bool:
 		s = Inventory._empty(Inventory.CHEST_SIZE)
 	var node := _node(block)
 	add_child(node)
+	if sky != null:
+		sky.sky_lit_model(node)
+		sky.track(node)
 	chests[key] = {"block": block, "slots": s, "node": node}
 	_changed()
 	return true

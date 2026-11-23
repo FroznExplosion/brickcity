@@ -71,7 +71,7 @@ global uniform float lod_zoom;
 global uniform float near_stud_radius;
 #endif
 #ifdef INSTANCE_SKY
-// THE GROUND'S STUDS IN THE MINE WORLD (Docs/MineWorld.md 19): each stud's
+// THE GROUND'S STUDS IN THE MINE WORLD (Docs/MineWorld.md 20): each stud's
 // sky and block light, from the bake (BrickTerrain sky_light_pass), in its
 // MultiMesh custom data (r sky, g block, 0..1 for levels 0..15) -- the
 // terrain shader's curve and its light() below, so a stud in a cave is as

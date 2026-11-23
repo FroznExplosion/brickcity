@@ -52,7 +52,7 @@ var _collide_pending := {}
 var _out_since := {}
 const LINGER_MS := 600
 ## REFRESHES SWAP TOGETHER, as the surface tiles' do (TerrainStreamer,
-## Docs/MineWorld.md 19): a refreshed section is built hidden and collided
+## Docs/MineWorld.md 20): a refreshed section is built hidden and collided
 ## (`_swaps`, key -> the new TerrainTile or null for none), and the sections
 ## one edit named (a batch) swap in one frame once all are built; a held
 ## section (hold_box, ground_collapse.gd) waits for its holder.
@@ -162,7 +162,7 @@ func _land(t0: int) -> void:
 			add_child(tile)
 			tile.build(k.x, k.z, _material, data)
 			tile.set_casts_shadow(false)
-			# Studs on its cave floors (Docs/MineWorld.md 19).
+			# Studs on its cave floors (Docs/MineWorld.md 20).
 			tile.set_near(true)
 			built += 1
 		if refresh:

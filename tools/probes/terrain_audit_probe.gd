@@ -1,7 +1,7 @@
 extends SceneTree
 
 ## The mine world's ground, mesh and colliders against the field
-## (Docs/MineWorld.md 19). Headless.
+## (Docs/MineWorld.md 20). Headless.
 ##
 ##     godot --headless --path . --script res://tools/probes/terrain_audit_probe.gd
 ##
@@ -17,7 +17,7 @@ extends SceneTree
 ##     inside a box, or a walker falls through ground that is drawn.
 ##   * both again with the deep tier on (tiles over their floor, then the
 ##     sections under them), and after shots have broken bricks.
-##   * studs (Docs/MineWorld.md 19): the surface keeps a mix of studded and
+##   * studs (Docs/MineWorld.md 20): the surface keeps a mix of studded and
 ##     smooth top pieces; cave floors carry studs, more often than the
 ##     surface; a top piece that a higher column stands on (its bond
 ##     footprint reaches under it) always has studs.

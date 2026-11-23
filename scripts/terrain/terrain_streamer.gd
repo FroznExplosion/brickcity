@@ -148,7 +148,7 @@ var _bevel_tasks := {}
 var _swaps := {}
 ## A refresh in waiting whose collider is in: it swaps with its BATCH.
 const SWAP_READY := 2
-## EDITS SWAP TOGETHER (Docs/MineWorld.md 19). Every resident tile one
+## EDITS SWAP TOGETHER (Docs/MineWorld.md 20). Every resident tile one
 ## refresh() names is one batch (two edits over a tile merge theirs), and a
 ## batch's tiles swap in the SAME frame, once each is built and collided --
 ## each tile swapping by itself put a brick across a tile edge in one tile and
@@ -159,7 +159,7 @@ var _batch_of := {}
 ## A batch waits this long at most for a straggler (a tile edited again and
 ## again -- lava relighting, a sand pour) before swapping what is ready.
 const BATCH_WAIT_MS := 300
-## HELD TILES (Docs/MineWorld.md 19): coord -> {owner: true}. A held tile is
+## HELD TILES (Docs/MineWorld.md 20): coord -> {owner: true}. A held tile is
 ## built and collided but not swapped: what falls from the ground
 ## (ground_collapse.gd) holds the tiles that still draw it until its own mesh
 ## is made, then swaps them and lets it go in one call (swap_ready), so the
