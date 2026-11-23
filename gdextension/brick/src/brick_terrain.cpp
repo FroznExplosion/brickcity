@@ -4274,6 +4274,10 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                     // along U, 1 along V, 2 back along U, 3 back along V.
                     uint8_t convex = 0;
                     uint8_t square = 0;
+                    // Square because the neighbour is solid and covered (not
+                    // only because a piece is beside it): where a face
+                    // reaches past its edge (the skirts below).
+                    uint8_t covered = 0;
                     {
                         // Unit steps along the slice's U and V axes.
                         const int ux = (dx != 0) ? 0 : 1;
@@ -4298,6 +4302,7 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                                 convex |= (uint8_t)(1u << k);
                             } else if (s.solid(nx2 + dx, ny2 + dy, nz2 + dz)) {
                                 square |= (uint8_t)(1u << k);
+                                covered |= (uint8_t)(1u << k);
                             }
                             // A solid piece above butts square against this
                             // wall; its own bottom is square too, so neither
@@ -4307,6 +4312,31 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                                 square |= (uint8_t)(1u << k);
                             }
                         }
+                        // The probes above are in slice order (0 V-, 1 U+,
+                        // 2 V+, 3 U-); `quad` reads bit i as the edge from
+                        // corner i to i+1, and not every face is wound
+                        // a0 -> b0 along +U. The -X and +Z walls run a0 -> b0
+                        // along -U, so their two upright edges swap; the -Y
+                        // face runs a0 -> b0 along +V, so edge i is probe
+                        // 3 - i. Read unswapped, a brick at a room's inside
+                        // corner bevelled its corner edge (nothing meets it
+                        // there) and squared its seam edge (half the groove
+                        // gone): two slits to daylight up every inside
+                        // corner, the bright dotted lines in a dark room
+                        // (MineWorld.md 19, --gate=seams).
+                        auto remap = [&](uint8_t m) -> uint8_t {
+                            if (dy < 0) {
+                                return (uint8_t)(((m >> 3) & 1u) | (((m >> 2) & 1u) << 1)
+                                        | (((m >> 1) & 1u) << 2) | ((m & 1u) << 3));
+                            }
+                            if (dx < 0 || dz > 0) {
+                                return (uint8_t)((m & 0x5u) | ((m & 0x2u) << 2) | ((m & 0x8u) >> 2));
+                            }
+                            return m;
+                        };
+                        convex = remap(convex);
+                        square = remap(square);
+                        covered = remap(covered);
                     }
                     // UV is this quad's place in its BRICK and UV2 the
                     // brick's face (Docs/TerrainBond.md): a brick across a
@@ -4351,13 +4381,80 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                     // a wall stopping at the floor's top left each groove's
                     // end a triangle open into the unmeshed ground: daylight
                     // at the foot of every terrace (bevel_gap_probe at a
-                    // bigger bevel). Edge 0 of a side is its bottom.
-                    if (dy == 0 && g_face_bevel > 0.0f && (square & 1u) != 0) {
-                        const Vector3 down(0.0f, bevel_reach(), 0.0f);
-                        const Vector2 sk(fsz.x, bevel_reach());
-                        m.raw_quad(Vector3((float)dx, 0.0f, (float)dz), col, sk,
-                            a0 - down, b0 - down, b0, a0,
-                            Vector2(0, 0), Vector2(sk.x, 0), sk, Vector2(0, sk.y));
+                    // bigger bevel).
+                    //
+                    // The same at EVERY square edge, not only a wall's foot:
+                    // a wall's upright seam grooves end on the floor, and a
+                    // wall's course grooves end on the other wall at a room's
+                    // inside corner, each end a triangle open behind the face
+                    // it meets (--gate=seams: dots at the foot of every seam
+                    // and up every inside corner). So each face reaches a
+                    // bevel past every square edge, in its own plane, behind
+                    // the face there -- the floor under the wall, a wall into
+                    // the other wall -- and closes the grooves ending on it.
+                    // Only where the neighbour is covered (and a wall's foot,
+                    // as before): an edge squared only because a piece is
+                    // beside it has that piece's own face in this plane
+                    // there, which a skirt would lie over.
+                    const uint8_t skirt = covered | ((dy == 0) ? (square & 1u) : 0u);
+                    // And a BACKING a bevel and a half behind the face: where
+                    // grooves cross, one brick's edge meets two bricks' edges
+                    // part way along (a T-junction), and the groove's floor
+                    // cracks to single pixels of daylight there (--gate=seams,
+                    // 15 px in 36 close views). Widened past every coplanar
+                    // edge under the neighbour's; pulled in from a convex or
+                    // square edge, where its edge would touch the face it
+                    // meets.
+                    if (g_face_bevel > 0.0f) {
+                        const Vector3 n((float)dx, (float)dy, (float)dz);
+                        const Vector3 rim[4] = { a0, b0, c0, d0 };
+                        const Vector3 centre = (a0 + b0 + c0 + d0) * 0.25f;
+                        const float r = bevel_reach();
+                        Vector3 grow[4];
+                        for (int i = 0; i < 4; ++i) {
+                            const Vector3 &p = rim[i];
+                            const Vector3 &q = rim[(i + 1) % 4];
+                            Vector3 o = n.cross(q - p).normalized();
+                            if (o.dot((p + q) * 0.5f - centre) < 0.0f) {
+                                o = -o;
+                            }
+                            const bool flat = ((convex | square) & (1u << i)) == 0;
+                            grow[i] = flat ? o * r : -o * (r * 0.5f);
+                        }
+                        Vector3 bk[4];
+                        for (int i = 0; i < 4; ++i) {
+                            bk[i] = rim[i] - n * r + grow[i] + grow[(i + 3) % 4];
+                        }
+                        m.raw_quad(n, col, fsz, bk[0], bk[1], bk[2], bk[3],
+                            Vector2(0, 0), Vector2(fsz.x, 0), fsz, Vector2(0, fsz.y));
+                    }
+                    if (g_face_bevel > 0.0f && skirt != 0) {
+                        const Vector3 n((float)dx, (float)dy, (float)dz);
+                        const Vector3 rim[4] = { a0, b0, c0, d0 };
+                        const Vector3 centre = (a0 + b0 + c0 + d0) * 0.25f;
+                        const float r = bevel_reach();
+                        for (int i = 0; i < 4; ++i) {
+                            if ((skirt & (1u << i)) == 0) {
+                                continue;
+                            }
+                            const Vector3 &p = rim[i];
+                            const Vector3 &q = rim[(i + 1) % 4];
+                            Vector3 o = n.cross(q - p).normalized();
+                            if (o.dot((p + q) * 0.5f - centre) < 0.0f) {
+                                o = -o;
+                            }
+                            const float len = p.distance_to(q);
+                            const Vector2 sk(len, r);
+                            // Wound as the faces here are: (B-A)x(C-A)
+                            // against the normal.
+                            if ((q - p).cross(o).dot(n) < 0.0f) {
+                                m.raw_quad(n, col, sk, p, q, q + o * r, p + o * r,
+                                    Vector2(0, 0), Vector2(sk.x, 0), sk, Vector2(0, sk.y));
+                            } else {
+                                m.raw_quad(n, col, sk, q, p, p + o * r, q + o * r,
+                                    Vector2(0, 0), Vector2(sk.x, 0), sk, Vector2(0, sk.y));
+                            }
+                        }
                     }
                     u += wdt;
                 }
@@ -5788,6 +5885,31 @@ double BrickTerrain::sky_light_at(Vector3 point) {
     return 0.0;
 }
 
+/// The block light of the cell holding `point`: the bake's fill_block over a
+/// box light's reach round it, seeded by the lava in that box. Nothing to do,
+/// and no grid made, when there is no lava near.
+double BrickTerrain::block_light_at(Vector3 point) {
+    if (BrickFluid::lava_total() <= 0) {
+        return 0.0;
+    }
+    const int x = (int)std::floor(point.x / STUD_M);
+    const int c = (int)std::floor(point.y / BRICK_M);
+    const int z = (int)std::floor(point.z / STUD_M);
+    std::vector<int32_t> lava;
+    BrickFluid::lava_cells_in(Vector3i(x - SKY_MAX, c - SKY_MAX, z - SKY_MAX),
+            Vector3i(x + SKY_MAX, c + SKY_MAX, z + SKY_MAX), lava);
+    if (lava.empty()) {
+        return 0.0;
+    }
+    SkyGrid g;
+    g.init(x - SKY_MAX, z - SKY_MAX, c - SKY_MAX, 2 * SKY_MAX + 1, 2 * SKY_MAX + 1, 2 * SKY_MAX + 1);
+    const Vector3i at(x, c, z);
+    if (g.fill_block(at, at, lava) == 0) {
+        return 0.0;
+    }
+    return (double)g.block_light(x, c, z);
+}
+
 Dictionary BrickTerrain::build_section(int tx, int sy, int tz) {
     const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
     g_face_bevel = t_bevel_override >= 0.0f ? t_bevel_override : g_face_bevel_set;
@@ -7171,6 +7293,7 @@ void BrickTerrain::_bind_methods() {
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_sky_light", "on"), &BrickTerrain::set_sky_light);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_sky_light"), &BrickTerrain::get_sky_light);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("sky_light_at", "point"), &BrickTerrain::sky_light_at);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("block_light_at", "point"), &BrickTerrain::block_light_at);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("deep_top", "tx", "tz"),
         &BrickTerrain::deep_top);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_deep_section_plates"),

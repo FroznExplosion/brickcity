@@ -786,8 +786,9 @@ void fragment() {
     AO_LIGHT_AFFECT = 0.0;
 #ifdef SKY_LIT
     float sl_b = sky_lit_raw(sky_level);
-    float sl_ao = mix(sky_light_floor, 1.0, sl_b);
+    float sl_ao = sky_lit_ao();
     AO = occlusion * sl_ao;
+    EMISSION += sky_lit_glow(ALBEDO);
     // The sky's reflections: SPECULAR for plastic, METALLIC (f0 = albedo)
     // for metal. light() keeps the surface's own for lamps and lava.
     SPECULAR = out_spec * sqrt(sl_ao);

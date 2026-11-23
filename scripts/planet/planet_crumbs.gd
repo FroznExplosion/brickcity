@@ -97,6 +97,13 @@ var _lie := 84
 var _fade := 21
 
 
+## The light where a throw starts, as a colour each crumb's is multiplied
+## by (world point -> Color), or none: the mine world's sky and lava light
+## (MineSkyLit.tint_at, Docs/MineWorld.md 19), so crumbs thrown in a dark
+## cave are dark. One call a throw.
+var shade := Callable()
+
+
 func setup(p: Node3D) -> void:
 	name = "Crumbs"
 	planet = p
@@ -124,6 +131,7 @@ func throw(world: BrickWorld, source: int, ids: PackedInt32Array, linear := Vect
 	var floor_r := _floor_r(centre + kick * 0.4)
 	var frame_basis := to_planet.basis * xf.basis.orthonormalized()
 	var now := Engine.get_physics_frames()
+	var tint: Color = shade.call(centre) if shade.is_valid() else Color.WHITE
 	var n := 0
 	for id in ids:
 		if world.is_block_decorative(source, id):
@@ -146,7 +154,7 @@ func throw(world: BrickWorld, source: int, ids: PackedInt32Array, linear := Vect
 		# Its spin kept as the shader reads it, so it lies as it was drawn.
 		var sp := IslandManager.crumb_pack_spin(ax.normalized() if ax.length() > 0.01 else Vector3.UP,
 				randf_range(-SPIN, SPIN))
-		var c := BrickWorld.get_filament_colour(world.get_block_colour(source, id))
+		var c := BrickWorld.get_filament_colour(world.get_block_colour(source, id)) * tint
 		st.pos.append(to_planet * at)
 		st.vel.append(to_planet.basis * vel)
 		st.base.append(frame_basis)
