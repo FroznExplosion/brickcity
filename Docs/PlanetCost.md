@@ -467,3 +467,33 @@ the change answered nothing; it is not in.
 Still seen, not looked into: a segfault now and then at the exit of a save stage that passed
 (signal 11 after "372 RID allocations of type 'P11JoltShape3D' were leaked at exit"): 2 of ~21
 stage runs. The checks before it pass; it is the quit with bodies still live.
+
+## 12. The quit's segfault (2026-11-23)
+
+Now and then a save stage that had passed segfaulted at its quit (signal 11), after
+"554 RID allocations of type 'P11JoltShape3D' were leaked" and "16 resources still in use".
+`--verbose` named them: `ai_services.gd`, `planet_nav_net.gd`, `planet_nav_region.gd`,
+`planet_nav_map.gd`, the combat policy, callouts, aggro table, tactics book, air support, the
+planet scene's script -- and a World3D with one reference. The AI's RefCounted objects held each
+other (`AIServices._air` -> `AirSupport.services` -> the same `AIServices`, and the like), so none
+reached a count of zero when the scene went: they, the World3D they hold (`AIServices.world3d`)
+and the scripts they run outlived the scene into Godot's own shutdown, which is where the
+project's memory places this kind of signal 11 (class-cycle exit crash).
+
+- `AIServices.dispose()` lets go of everything it holds (its per-side helpers, its maps, its
+  callables, its nav net, policy, judge, callouts, World3D); `PlanetNavNet.dispose()` the same
+  (its builds waited for first).
+- `PlanetScene._exit_tree` disposes every AIServices it made (`_all_ai`: a jump drops the other
+  worlds' from `ai_of`, not from here) and the load's prepared net.
+
+Three verbose save sequences after: every stage passes, stage 3 (the jumps, where it crashed)
+0 leaked instances and 0 resources in use each time, no crash and no hang (before: 126 leaked,
+16 in use, a signal 11 and a run killed mid-exit). Stage 2 leaves only a SceneTreeTimer of the
+gate's own, now and then. AI gates after: squad 10/0, garrison 20/0, farfight 11/0.
+
+Tried and taken back: freeing the ghost hulls' physics space on the star system's predelete (it
+leaks at a quit): a parent is predeleted before its children are freed, so ships' ghost bodies
+would be freed into a freed space -- a likelier crash than the leak. Left as it was.
+`--gate=travel` failed once after (the squad's MOVE not done in time, 7/3) and passed 10/0 on the
+rerun; main passed it 10/0 the same hour -- a flake of its own (the machine short of memory then).
+`pieces_ai` 4/0.

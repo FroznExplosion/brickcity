@@ -176,10 +176,26 @@ func _exit_tree() -> void:
 	Gravity.reset()
 	# The nav regions still building on workers (setup_ai's, _prepare_ai's).
 	if _ai_prep != null:
-		_ai_prep.wait_builds()
+		_ai_prep.dispose()
+		_ai_prep = null
+	# And everything the AI holds let go (AIServices.dispose): its own helpers
+	# held it back, and it outlived the scene (the quit's signal 11).
+	# Every one it made: a jump drops other worlds' from ai_of, not from here.
+	var all_ai: Array = _all_ai.duplicate()
 	for s in ai_of.values():
-		if s != null and s.nav_net is PlanetNavNet:
-			(s.nav_net as PlanetNavNet).wait_builds()
+		if s != null and not all_ai.has(s):
+			all_ai.append(s)
+	if ai != null and not all_ai.has(ai):
+		all_ai.append(ai)
+	_all_ai.clear()
+	for s in all_ai:
+		if s == null:
+			continue
+		if s.nav_net is PlanetNavNet:
+			(s.nav_net as PlanetNavNet).dispose()
+		(s as AIServices).dispose()
+	ai_of.clear()
+	ai = null
 
 ## The gates (`-- --gate=<name>`) live in tools/passes/planet_gates.gd, out of the
 ## game's own code: made the first time a gate is asked for, never in a plain run.
@@ -505,6 +521,7 @@ func _spawn_player(feet: Vector3, facing: Vector3) -> void:
 	var s := ai
 	if s == null:
 		s = AIServices.new()
+		_all_ai.append(s)
 		s.world3d = get_world_3d()
 	kit = PlayerKit.attach(self, player, cam, gun, s, {"scripted": _gate})
 	_lap("spawn: kit")
@@ -1488,6 +1505,8 @@ var ai_worst_parts: Array = []
 ## player is let go; Docs/PlanetCost.md 5.3). The grids are the planet's data,
 ## its sites and its trees -- all known before anything streams.
 var _ai_prep: PlanetNavNet = null
+## Every AIServices setup_ai made (disposed at the scene's exit, _exit_tree).
+var _all_ai: Array = []
 var _ai_prep_dir := Vector3.ZERO
 
 
@@ -1555,6 +1574,7 @@ func setup_ai(dir: Vector3, b: PlanetBody = planet) -> void:
 	var r := net.region_at(at)
 	nav_region = r.nav_region
 	ai = AIServices.new()
+	_all_ai.append(ai)
 	ai.nav_net = net
 	ai.ai_world = r.world
 	ai.ai_nav = r.nav

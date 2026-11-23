@@ -542,6 +542,33 @@ func token(target: Pawn, holder: Object) -> bool:
 	return false
 
 
+## Everything it holds let go, for a scene going away (Docs/PlanetCost.md 12):
+## the helpers it keeps per side hold it back (AirSupport.services, the
+## callouts, the policy), so nothing reached a count of zero -- AIServices, its
+## nav net, its World3D and their scripts lived past the scene, and the planet's
+## save gate segfaulted at the quit now and then (signal 11, "Resource still in
+## use: ai_services.gd ..."). After this it is not to be used.
+func dispose() -> void:
+	for d in [_air, _knowledge, _aggro, _suppressed, _tokens, _fields, _net_views, navs, lanes]:
+		(d as Dictionary).clear()
+	for a in [pawns, decisions, flashes, round_listeners, shared_navs]:
+		(a as Array).clear()
+	on_structure_hit = Callable()
+	on_breach = Callable()
+	marks = Callable()
+	on_say = Callable()
+	nav_net = null
+	tally = null
+	airspace = null
+	sched = null
+	world3d = null
+	ai_world = null
+	ai_nav = null
+	policy = null
+	judge = null
+	callouts = null
+
+
 func release_token(target: Pawn, holder: Object) -> void:
 	if target == null:
 		return

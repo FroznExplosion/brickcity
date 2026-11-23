@@ -341,6 +341,22 @@ func wait_builds() -> void:
 	_building.clear()
 
 
+## Everything let go, for a scene going away (AIServices.dispose; Docs/
+## PlanetCost.md 12). Its builds waited for first.
+func dispose() -> void:
+	wait_builds()
+	regions.clear()
+	portals.clear()
+	_border_portals.clear()
+	_reqs.clear()
+	_makers.clear()
+	_site_bricks.clear()
+	sites.clear()
+	tree_source = Callable()
+	bricks = null
+	planet = null
+
+
 func regions_building() -> int:
 	return _building.size()
 
