@@ -23,6 +23,14 @@
 // sl_binormal (its ANISOTROPY, TANGENT, BINORMAL): light() cannot read those.
 
 instance uniform float sky_level = 15.0;
+// BLOCK LIGHT from lava (0..15), BrickTerrain.block_light_at, asked with the
+// sky level: the ground's warm glow (terrain.gdshader's block light, same
+// uniforms) -- EMISSION of colour x albedo by its brightness, and the AO
+// lifted by block_light_ao of it (sky_lit_ao).
+instance uniform float block_level = 0.0;
+uniform vec3 block_light_colour : source_color = vec3(1.0, 0.52, 0.22);
+uniform float block_light_energy : hint_range(0.0, 4.0) = 1.0;
+uniform float block_light_ao : hint_range(0.0, 1.0) = 0.5;
 uniform float sky_light_floor : hint_range(0.0, 0.2) = 0.015;
 uniform float sky_light_curve : hint_range(0.5, 0.95) = 0.8;
 uniform float sky_sun_power : hint_range(1.0, 4.0) = 2.0;
@@ -43,6 +51,25 @@ float sky_lit_raw(float level) {
     float k0 = pow(sky_light_curve, 15.0);
     return clamp((pow(sky_light_curve, 15.0 - clamp(level, 0.0, 15.0)) - k0) / (1.0 - k0),
             0.0, 1.0);
+}
+
+// The ambient's scale at these levels: the sky's, or the lava's share of
+// its block light where that is brighter.
+float sky_lit_ao_at(float sky, float block) {
+    return mix(sky_light_floor, 1.0, max(sky_lit_raw(sky), sky_lit_raw(block) * block_light_ao));
+}
+
+float sky_lit_ao() {
+    return sky_lit_ao_at(sky_level, block_level);
+}
+
+// The lava's glow on an albedo.
+vec3 sky_lit_glow_at(vec3 base, float block) {
+    return block_light_colour * base * (sky_lit_raw(block) * block_light_energy);
+}
+
+vec3 sky_lit_glow(vec3 base) {
+    return sky_lit_glow_at(base, block_level);
 }
 
 float sky_lit_schlick(float u) {

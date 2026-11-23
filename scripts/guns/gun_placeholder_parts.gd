@@ -24,7 +24,21 @@ const BRANDS: Array[StringName] = [&"jakobs", &"maliwan", &"vladof", &"torgue"]
 
 
 ## One library covering every slot at every tier. `per_tier` part variants per slot.
-static func build_library(per_tier: int = 2) -> GunPartLibrary:
+## Built once a `per_tier` and shared: nothing changes a library after it is
+## built, and building it was 45-110 ms every time a kit, a soldier's gun, a wave
+## or a vehicle asked (the frame the player appeared paid it twice;
+## Docs/PlanetCost.md 10). `fresh` builds a new one anyway.
+static var _built := {}
+
+static func build_library(per_tier: int = 2, fresh := false) -> GunPartLibrary:
+	if not fresh and _built.has(per_tier):
+		return _built[per_tier]
+	var lib := _build(per_tier)
+	_built[per_tier] = lib
+	return lib
+
+
+static func _build(per_tier: int) -> GunPartLibrary:
 	var lib := GunPartLibrary.new()
 	var parts: Array[GunPartDef] = []
 	for tier in range(1, 7):

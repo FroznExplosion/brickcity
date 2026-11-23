@@ -1,6 +1,8 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene format=3 uid="uid://uwpcw7uyqsqc"]
 
-[ext_resource type="Script" path="res://scripts/city_scene.gd" id="1_city"]
+[ext_resource type="Script" uid="uid://dganjxne1qc5w" path="res://scripts/city_scene.gd" id="1_city"]
 
-[node name="City" type="Node3D"]
+[node name="City" type="Node3D" unique_id=481838609]
 script = ExtResource("1_city")
+respawn_buildings = false
+brick_budget = 5000

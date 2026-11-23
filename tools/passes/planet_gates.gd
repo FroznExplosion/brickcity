@@ -2951,7 +2951,19 @@ func _run_save_gate() -> void:
 		t0 = Time.get_ticks_msec()
 		while host._ground_hit(spot) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
 			await host._frames(1)
-		host.pawn.place(spot + Gravity.up_at(spot) * 0.3)
+		# On the ground's collider, not the planet's sum (surface_point): the
+		# meshed ground stood ~2 m over it here, the pawn was put INSIDE it and
+		# saved there, and the load rightly lifted it out (keep_over_ground) --
+		# the 2.16-2.52 m stage 3 read (Docs/PlanetCost.md 10).
+		# The ground's own layer only, from just over the sum's surface: a ray from
+		# 50 m up (_ground_hit) meets a roof, a tree or the ship first.
+		var gup := Gravity.up_at(spot)
+		var gq := PhysicsRayQueryParameters3D.create(spot + gup * 15.0, spot - gup * 15.0, Layers.WORLD)
+		gq.exclude = [host.pawn.body.get_rid()]
+		var gh := host.get_world_3d().direct_space_state.intersect_ray(gq)
+		var ground: Vector3 = gh.position if not gh.is_empty() else spot
+		print("[save] stage 2: the ground %.2f m over the sum's surface there" % (ground - spot).dot(gup))
+		host.pawn.place(ground + gup * 0.3)
 		await wait_bricked.call(pb)
 		var w_site := -1
 		for k in pb.sites.size():
@@ -2959,6 +2971,10 @@ func _run_save_gate() -> void:
 				w_site = k
 		wall.call(pb, world, w_site)
 		await host.get_tree().create_timer(1.0).timeout
+		# Standing, not still falling, when it is written.
+		t0 = Time.get_ticks_msec()
+		while not host.pawn.body.is_on_floor() and Time.get_ticks_msec() - t0 < 5000:
+			await host._frames(1)
 		host.saver.save_now()
 		notes["world"] = host.system.index_of(world)
 		notes["w_site"] = w_site
@@ -2972,6 +2988,22 @@ func _run_save_gate() -> void:
 				"system %d" % host.system.system_index)
 		var world: PlanetBody = host.system.anchor
 		var off := world.to_local(host.pawn.feet()).distance_to(notes.w_at)
+		var want_l: Vector3 = notes.w_at
+		var aim_l := world.to_local(host.saver._world_point())
+		var now_l := world.to_local(host.pawn.feet())
+		var up_l := want_l.normalized()
+		print("[save] stage 3: saved %s, resume aimed %s (%.2f m off it, %.2f up), feet now %s (%.2f m off, %.2f up)" % [
+				want_l, aim_l, aim_l.distance_to(want_l), (aim_l - want_l).dot(up_l), now_l,
+				now_l.distance_to(want_l), (now_l - want_l).dot(up_l)])
+		var hit := host._ground_hit(host.pawn.feet() + Gravity.up_at(host.pawn.feet()) * 0.5)
+		var sp := host.get_world_3d().direct_space_state
+		var q := PhysicsRayQueryParameters3D.create(host.pawn.feet() + Gravity.up_at(host.pawn.feet()) * 0.3,
+				host.pawn.feet() - Gravity.up_at(host.pawn.feet()) * 6.0)
+		q.exclude = [host.pawn.body.get_rid()]
+		var under := sp.intersect_ray(q)
+		print("[save] stage 3: analytic ground %.2f m under the feet; ground hit %s; ray down meets %s; ground saves %d; on floor %s" % [
+				world.altitude_of(host.pawn.feet()), hit, (str(under.collider) + " at %.2f m" % (under.position as Vector3).distance_to(host.pawn.feet())) if not under.is_empty() else "nothing",
+				host.ground_saves, host.pawn.body.is_on_floor()])
 		_check("the player where they were, on foot, the ship down", host.on_foot and off < 1.5 and host.ship.landed and host.ship.ref == world, "%.2f m off" % off)
 		var pb: PlanetBuildings = host.system.built[world]
 		_check("its wall's bricks gone", pb.site_gone(int(notes.w_site)).size() == int(notes.w_gone), "%d" % pb.site_gone(int(notes.w_site)).size())
@@ -5341,8 +5373,20 @@ var _cost_saved := {}
 const COST_FRAMES := 150
 
 
+## `-- --plain`: frames by the wall clock only -- no FrameClock, whose reads of the
+## renderer (GPU time, draw counts) make the main thread wait for a renderer on its
+## own thread every frame (the --render-thread separate A/B, Docs/PlanetCost.md 10).
+var _plain := "--plain" in OS.get_cmdline_user_args()
+
+
 func _cost_measure(frames := COST_FRAMES) -> Dictionary:
 	await host._frames(20)
+	if _plain:
+		var t0 := Time.get_ticks_usec()
+		await host._frames(frames)
+		var mean := float(Time.get_ticks_usec() - t0) / 1000.0 / frames
+		return {"frame": mean, "gpu": 0.0, "scripts": 0.0, "step": 0.0, "process": 0.0, "draw": 0.0,
+				"sync": 0.0, "draws_k": 0.0, "tris_M": 0.0, "sh_draws_k": 0.0, "sh_tris_M": 0.0, "objects": 0}
 	var clock := FrameClock.new()
 	host.add_child(clock)
 	await host._frames(frames)
@@ -5563,8 +5607,10 @@ func _cost_big() -> void:
 ## The walker carried along `path_fn(s)` (s seconds in, a world point) for
 ## `seconds`, looking along its way and `pitch` down; the frames by the clock.
 func _cost_trip(what: String, seconds: float, path_fn: Callable, pitch: float) -> void:
-	var clock := FrameClock.new()
-	host.add_child(clock)
+	var clock: FrameClock = null if _plain else FrameClock.new()
+	if clock != null:
+		host.add_child(clock)
+	var frame_ms: Array[float] = []
 	var shifts0 := PlanetFrame.shifts
 	var t0 := Time.get_ticks_usec()
 	var last := path_fn.call(0.0) as Vector3
@@ -5583,6 +5629,7 @@ func _cost_trip(what: String, seconds: float, path_fn: Callable, pitch: float) -
 		var now := Time.get_ticks_usec()
 		if now - last_us > 40000:
 			over40 += 1
+		frame_ms.append(float(now - last_us) / 1000.0)
 		last_us = now
 		var s := float(now - t0) / 1.0e6
 		if s > seconds:
@@ -5596,7 +5643,18 @@ func _cost_trip(what: String, seconds: float, path_fn: Callable, pitch: float) -
 			host.walker.pitch = pitch
 			host.walker.reset_physics_interpolation()
 		last = p
-	var lines := clock.report_lines()
+	var lines: Array[String] = []
+	if clock != null:
+		lines = clock.report_lines()
+	if not frame_ms.is_empty():
+		var sorted := frame_ms.duplicate()
+		sorted.sort()
+		var sum := 0.0
+		for f in frame_ms:
+			sum += f
+		lines.append("frames by the wall clock: %d, mean %.2f ms, 99th %.1f, worst %.1f, over 33 ms %d" % [
+				frame_ms.size(), sum / frame_ms.size(), sorted[int(sorted.size() * 0.99)], sorted[-1],
+				frame_ms.filter(func(f: float) -> bool: return f > 33.3).size()])
 	print("[cost] --- %s: %d frames over 40 ms, %d origin shift(s), worst brick step %.1f ms (%s), trees' last build %.1f ms ---" % [
 			what, over40, PlanetFrame.shifts - shifts0, host.buildings.brick_worst_us / 1000.0, host.buildings.brick_worst_what, host.trees.last_build_us / 1000.0])
 	print("[cost]   worst _process: buildings %.1f ms (%s), trees %.1f ms %s; scene %.1f ms, system %.1f ms; a square refilled at worst %.1f ms (made %.1f)" % [
@@ -5606,7 +5664,8 @@ func _cost_trip(what: String, seconds: float, path_fn: Callable, pitch: float) -
 			ImpostorLod.worst_apply_us / 1000.0, ImpostorLod.worst_chunk_us / 1000.0])
 	for l in lines:
 		print("[cost]   " + l)
-	clock.queue_free()
+	if clock != null:
+		clock.queue_free()
 
 
 ## What is in the tree to draw: visible GeometryInstance3D nodes by where they
@@ -5905,6 +5964,51 @@ func _run_load_gate() -> void:
 			host.trees.process_worst_us / 1000.0, host.trees.process_worst_what,
 			host.buildings.process_worst_us / 1000.0, host.buildings.process_worst_what,
 			host.process_worst_us / 1000.0, host.process_worst_what])
+	# First use against second (shaders and the like made on first use): the gun
+	# fired 0.3 s at the ground ahead twice, a building blasted twice.
+	if host.gun != null and "--first-use" in OS.get_cmdline_user_args():
+		var worst_of := func(work: Callable, frames_n: int) -> float:
+			var w := 0.0
+			var fc := FrameClock.new()
+			host.add_child(fc)
+			await host.get_tree().process_frame
+			var t := Time.get_ticks_usec()
+			work.call()
+			for k in frames_n:
+				await host.get_tree().process_frame
+				var now := Time.get_ticks_usec()
+				w = maxf(w, float(now - t) / 1000.0)
+				t = now
+			var ws: Array = fc.slow.worst
+			if not ws.is_empty():
+				var parts: Dictionary = ws[0][1]
+				print("[load]   its worst frame %.1f ms: process %.1f, draw %.1f, scripts %.1f, step %.1f, sync %.1f" % [
+						ws[0][0], parts.process, parts.draw, parts.scripts, parts.step, parts.sync])
+			fc.queue_free()
+			return w
+		var fire := func() -> void:
+			host.gun.set_trigger(true)
+			await host.get_tree().create_timer(0.3).timeout
+			host.gun.set_trigger(false)
+		var shots: Array = []
+		for k in 2:
+			shots.append(await worst_of.call(func() -> void:
+					host.gun.set_trigger(true)
+					host.get_tree().create_timer(0.3).timeout.connect(func() -> void: host.gun.set_trigger(false)), 30))
+			await host.get_tree().create_timer(1.5).timeout
+		var blasts: Array = []
+		var bi := -1
+		for i in host.buildings.sites.size():
+			if bi < 0 and host.buildings.sites[i].bricked:
+				bi = i
+		if bi >= 0:
+			var st: PlanetBuildings.Site = host.buildings.sites[bi]
+			for k in 2:
+				var at := host.planet.global_transform * (st.frame * Vector3(st.fx * 0.2 + k * 3.0, 2.0 + k * 3.0, 0.2))
+				blasts.append(await worst_of.call(func() -> void:
+						host._structure_hit(at, Vector3.ZERO, {"blast": true, "radius": 2.0, "hp": 0}), 30))
+				await host.get_tree().create_timer(1.5).timeout
+		print("[load] first use: firing worst frame %s ms (first, second); a blast %s ms" % [shots, blasts])
 	if host.ship != null:
 		print("[load] the ship: water step worst %.1f ms, drawn worst %.1f ms (%d draws)" % [
 				host.ship.water_step_us / 1000.0, host.ship.water_draw_us / 1000.0, host.ship._water_draws])

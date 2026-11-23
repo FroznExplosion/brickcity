@@ -123,6 +123,10 @@ func setup(w: Node3D, brick_material: Material) -> void:
 		brick_material = sky.brick_material(brick_material as ShaderMaterial)
 		pieces.mesh_hung.connect(func(p: PlanetPieces.Piece) -> void: sky.track(p.body))
 	pieces.setup(bricks, w, brick_material)
+	if sky != null and pieces.crumbs != null:
+		# The crumbs a landing throws: the light where they are thrown,
+		# baked into their colour (one level a throw; they last a second).
+		pieces.crumbs.shade = sky.tint_at
 	_sand_mm = MultiMeshInstance3D.new()
 	_sand_mm.name = "FallingSand"
 	var mm := MultiMesh.new()
@@ -135,6 +139,11 @@ func setup(w: Node3D, brick_material: Material) -> void:
 	mat.roughness = 0.9
 	box.material = mat
 	mm.mesh = box
+	if sky != null:
+		# Each column's sky and lava light, per instance (MineSkyLit.
+		# sand_material): falling into a dark cave it is dark.
+		mm.use_custom_data = true
+		_sand_mm.material_override = MineSkyLit.sand_material()
 	mm.instance_count = 64
 	mm.visible_instance_count = 0
 	_sand_mm.multimesh = mm
@@ -404,11 +413,32 @@ func _fall_sand(delta: float) -> void:
 	for c in _sand:
 		var at: Vector2 = c.at
 		var mats: PackedByteArray = c.mats
+		var lv := _sand_light(c, brick)
 		for j in mats.size():
 			var p := Vector3(at.x, float(c.y) + (j + 0.5) * brick, at.y)
 			mm.set_instance_transform(k, Transform3D(Basis(), p))
 			mm.set_instance_color(k, _colour(mats[j]))
+			if sky != null:
+				mm.set_instance_custom_data(k, lv)
 			k += 1
+
+
+## A falling column's light (INSTANCE_CUSTOM: r sky, g block, as 0..1), its
+## foot's cell asked when it falls into a new one and the frame's asking budget
+## has room; till first asked, the eye's level.
+func _sand_light(c: Dictionary, brick: float) -> Color:
+	if sky == null:
+		return Color()
+	var at: Vector2 = c.at
+	var cell := Vector3i(int(c.x), floori((float(c.y) + brick * 0.5) / brick), int(c.z))
+	if c.get("lcell", Vector3i(1 << 30, 0, 0)) != cell and sky.has_room():
+		c.lcell = cell
+		var lv := sky.levels_at(Vector3(at.x, float(c.y) + brick * 0.5, at.y))
+		c.light = Color(lv.x / 15.0, lv.y / 15.0, 0.0, 0.0)
+	if not c.has("light"):
+		var eye: float = float(world.get("_eye_sky")) if world != null else 15.0
+		return Color(eye / 15.0, 0.0, 0.0, 0.0)
+	return c.light
 
 
 func _is_piece_body(o: Object) -> bool:

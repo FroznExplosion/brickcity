@@ -370,6 +370,9 @@ func _add_surface(arrays: Array, material: Material,
 	mi.name = "Surface"
 	mi.mesh = mesh
 	mi.material_override = material
+	# Block light is in its cells: off the lava lights' layer (RenderLayers).
+	if material is ShaderMaterial and _sky_light_shader != null 			and (material as ShaderMaterial).shader == _sky_light_shader:
+		mi.layers = RenderLayers.BLOCK_LIT
 	mi.visibility_range_begin = range_begin
 	mi.visibility_range_end = range_end
 	if range_begin > 0.0:

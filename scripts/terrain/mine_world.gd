@@ -314,6 +314,8 @@ func _ready() -> void:
 			_run_handover_gate()
 		elif "--gate=skylit" in OS.get_cmdline_user_args():
 			_run_skylit_gate()
+		elif "--gate=seams" in OS.get_cmdline_user_args():
+			_run_seams_gate()
 		else:
 			_run_gate()
 
@@ -794,10 +796,15 @@ func near_tile(t: Vector2i) -> bool:
 func lava_relit(flat: PackedInt32Array) -> void:
 	if not _sky_light_on:
 		return
+	var tile := BrickTerrain.get_tile_studs()
 	for i in range(0, flat.size(), 4):
 		var t := Vector2i(flat[i], flat[i + 1])
 		var r: Vector2i = _lava_relight.get(t, Vector2i(flat[i + 2], flat[i + 3]))
 		_lava_relight[t] = Vector2i(mini(r.x, flat[i + 2]), maxi(r.y, flat[i + 3]))
+		# Things near the lava take its block light again (MineSkyLit).
+		if sky_lit != null:
+			sky_lit.dirty_box(Vector3i(t.x * tile, flat[i + 2], t.y * tile),
+					Vector3i(t.x * tile + tile - 1, flat[i + 3], t.y * tile + tile - 1))
 
 
 func _flush_lava_light(delta: float) -> void:
@@ -5161,31 +5168,16 @@ func _run_skylit_gate() -> void:
 	if view.arms != null:
 		view.arms.visible = false
 	_hud_layer.visible = false
+	# The kit's HUD too (key help, bars, aggro meters): the pictures show the room.
+	if kit != null:
+		for layer: CanvasLayer in [kit.hud, kit._aggro_layer]:
+			if layer != null:
+				layer.visible = false
 	var stud := BrickWorld.get_stud_metres()
 	var plate := BrickWorld.get_plate_metres()
-	var e := _eye()
-	var o := Vector2i(floori(e.x / stud) + 6, floori(e.z / stud))
-	var t_max := -(1 << 30)
-	var t_min := 1 << 30
-	for dz in range(-10, 11):
-		for dx in range(-1, 36):
-			t_max = maxi(t_max, BrickTerrain.surface_plate(o.x + dx, o.y + dz))
-			t_min = mini(t_min, BrickTerrain.surface_plate(o.x + dx, o.y + dz))
-	# The room's floor: whole courses, one over the highest ground there.
-	var b := (floori(float(t_max + 1) / 3.0) + 1) * 3
-	# Stone walls a stud thick round 13 x 17 studs, 6 courses tall, open on
-	# top, on stone down to the lowest ground (a floor slab over a dip is let
-	# go by the collapse); the roof comes later (a roof over open ground
-	# first would come down too, and the collapse must run to make the piece).
-	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x, mini(t_min, b - 3), o.y - 9), Vector3i(o.x + 14, b + 17, o.y + 9), 4, true))
-	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x + 1, b, o.y - 8), Vector3i(o.x + 13, b + 17, o.y + 8), 0, false))
-	# Its way out: a tunnel a stud wide and a course tall, 20 studs long, up
-	# to the sky at its end. A room with no way out is a sealed chamber,
-	# which the mesher does not draw (nobody can be in it); light dies out
-	# 15 cells along the tunnel, so the room is dark.
-	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x + 14, mini(t_min, b - 3), o.y - 1), Vector3i(o.x + 35, b + 5, o.y + 1), 4, true))
-	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x + 14, b, o.y), Vector3i(o.x + 34, b + 2, o.y), 0, false))
-	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x + 34, b, o.y), Vector3i(o.x + 34, b + 5, o.y), 0, false))
+	var site := _build_gate_room()
+	var o: Vector2i = site[0]
+	var b: int = site[1]
 	# A floating dirt block (2 x 2 studs, a course): it falls as a piece.
 	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x + 2, b + 9, o.y - 5), Vector3i(o.x + 3, b + 11, o.y - 4), 2, true))
 	chests.place(MineChests.block_of(Vector3i(o.x + 6, b, o.y - 5)), [], true)
@@ -5286,7 +5278,186 @@ func _run_skylit_gate() -> void:
 		fails += 0 if ok else 1
 		print("[mine-skylit] %s  %s in the closed room: %.3f, the floor beside it %.3f, lit by the open air %.3f (level %.0f; open to the sky %.3f)"
 				% ["ok  " if ok else "FAIL", things[i][0], obj, fl, was, lvl, open[i][0]])
+	# LAVA in the dark room (BrickTerrain.block_light_at): a pool of 3 x 3
+	# cells on the floor behind the things, by the back wall (not in front of
+	# any); each must take block light and draw brighter than in the dark.
+	water.manual = true
+	var pool := []
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			var cell := Vector3i(o.x + 8 + dx, floori(b / 3.0), o.y - 7 + dz)
+			BrickFluid.place(cell, 2, 0, 3)
+			pool.append(cell)
+	water.step(1)
+	await _frames(90)
+	sky_lit.ask_all()
+	await _frames(30)
+	var hot: Array = await measure.call("lava")
+	await _shot(dev + "mine_skylit_lava.png")
+	for i in things.size():
+		var blk := sky_lit.block_of(things[i][1])
+		var obj: float = hot[i][0]
+		var ok: bool = blk >= 5.0 and obj > float(cave[i][0]) * 1.5 + 0.005
+		fails += 0 if ok else 1
+		print("[mine-skylit] %s  %s by the lava: %.3f (block level %.0f; in the dark %.3f)"
+				% ["ok  " if ok else "FAIL", things[i][0], obj, blk, cave[i][0]])
+	for cell: Vector3i in pool:
+		BrickFluid.remove(cell, -1)
 	print("[mine-skylit] %s; %s" % ["PASS" if fails == 0 else "%d FAILED" % fails, sky_lit.readout()])
+	get_tree().quit()
+
+
+## The gates' stone room (--gate=skylit, --gate=seams), built on the ground
+## a few studs ahead of the eye: walls a stud thick round 13 x 17 studs, 6
+## courses tall, open on top, on stone down to the lowest ground (a floor slab
+## over a dip is let go by the collapse). Returns [o, b, t_min]: the corner
+## column, the floor's plate, the lowest ground's plate. The roof is the
+## caller's (a roof over open ground first would come down too).
+func _build_gate_room() -> Array:
+	var stud := BrickWorld.get_stud_metres()
+	var e := _eye()
+	var o := Vector2i(floori(e.x / stud) + 6, floori(e.z / stud))
+	var t_max := -(1 << 30)
+	var t_min := 1 << 30
+	for dz in range(-10, 11):
+		for dx in range(-1, 36):
+			t_max = maxi(t_max, BrickTerrain.surface_plate(o.x + dx, o.y + dz))
+			t_min = mini(t_min, BrickTerrain.surface_plate(o.x + dx, o.y + dz))
+	# The room's floor: whole courses, one over the highest ground there.
+	var b := (floori(float(t_max + 1) / 3.0) + 1) * 3
+	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x, mini(t_min, b - 3), o.y - 9), Vector3i(o.x + 14, b + 17, o.y + 9), 4, true))
+	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x + 1, b, o.y - 8), Vector3i(o.x + 13, b + 17, o.y + 8), 0, false))
+	# Its way out: a tunnel a stud wide and a course tall, 20 studs long, up
+	# to the sky at its end. A room with no way out is a sealed chamber,
+	# which the mesher does not draw (nobody can be in it); light dies out
+	# 15 cells along the tunnel, so the room is dark.
+	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x + 14, mini(t_min, b - 3), o.y - 1), Vector3i(o.x + 35, b + 5, o.y + 1), 4, true))
+	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x + 14, b, o.y), Vector3i(o.x + 34, b + 2, o.y), 0, false))
+	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x + 34, b, o.y), Vector3i(o.x + 34, b + 5, o.y), 0, false))
+	return [o, b, t_min]
+
+
+## -- --gate=seams: does the near tier's chamfer open the walls of a room?
+## The stone room roofed over, an unlit MAGENTA box round its outside, and
+## close views of its walls, inside corners, floor and roof edges through a
+## narrow lens: any magenta pixel is a slit through a wall (the bright dotted
+## lines up a dark room's wall seams, MineWorld.md 19). Counted with the
+## geometry chamfer off and on; on must add none.
+func _run_seams_gate() -> void:
+	await _frames(10)
+	var dev := UserPaths.DEV
+	DirAccess.make_dir_recursive_absolute(dev)
+	_time = 0.42
+	set_on_foot(false)
+	view.process_mode = Node.PROCESS_MODE_DISABLED
+	view.rig.visible = false
+	if view.arms != null:
+		view.arms.visible = false
+	_hud_layer.visible = false
+	if kit != null:
+		for layer: CanvasLayer in [kit.hud, kit._aggro_layer]:
+			if layer != null:
+				layer.visible = false
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var site := _build_gate_room()
+	var o: Vector2i = site[0]
+	var b: int = site[1]
+	var t_min: int = site[2]
+	var mid := Vector3((o.x + 7.5) * stud, (b + 9) * plate, (o.y + 0.5) * stud)
+	_fly_to(Vector3(mid.x, b * plate + 0.05, mid.z), Vector3(0, 0, -1))
+	await _frames(60)
+	collapse.process_mode = Node.PROCESS_MODE_DISABLED
+	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x, b + 18, o.y - 9), Vector3i(o.x + 14, b + 20, o.y + 9), 4, true))
+	_flush_edits()
+	# The magenta box, half a stud outside the shell all round.
+	var lo := Vector3(o.x * stud - stud * 0.5, mini(t_min, b - 3) * plate - 0.2, (o.y - 9) * stud - stud * 0.5)
+	var hi := Vector3((o.x + 15) * stud + stud * 0.5, (b + 21) * plate + 0.2, (o.y + 10) * stud + stud * 0.5)
+	var box := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = hi - lo
+	box.mesh = bm
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(1, 0, 1)
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	box.material_override = mat
+	box.position = (lo + hi) * 0.5
+	add_child(box)
+	# The tunnel runs out through the box: a black card across it, just inside
+	# the shell's outer face, so looking down the tunnel is not a hole.
+	var card := MeshInstance3D.new()
+	var cm := BoxMesh.new()
+	cm.size = Vector3(0.01, 3.0 * plate + 0.1, stud + 0.1)
+	card.mesh = cm
+	var black := StandardMaterial3D.new()
+	black.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	black.albedo_color = Color.BLACK
+	card.material_override = black
+	card.position = Vector3((o.x + 15.0) * stud, (b + 1.5) * plate, (o.y + 0.5) * stud)
+	add_child(card)
+	# Views from inside: the four inside corners at three heights, each wall
+	# straight on, the floor's and roof's edges; 14 degrees, like a scope.
+	var views := []
+	var corners := [Vector3(o.x + 1, 0, o.y - 8), Vector3(o.x + 14, 0, o.y - 8),
+			Vector3(o.x + 14, 0, o.y + 9), Vector3(o.x + 1, 0, o.y + 9)]
+	for k in corners.size():
+		var cxz: Vector3 = corners[k] * stud
+		for h in [b + 2, b + 9, b + 16]:
+			var at := Vector3(cxz.x, h * plate, cxz.z)
+			var from := mid.lerp(Vector3(at.x, mid.y, at.z), 0.55)
+			views.append(Transform3D(Basis(), from).looking_at(at))
+	for a in 8:
+		var yaw := TAU * a / 8.0
+		var dir := Vector3(sin(yaw), 0, cos(yaw))
+		for tilt in [-0.5, 0.0, 0.5]:
+			views.append(Transform3D(Basis(), mid).looking_at(mid + dir * 4.0 + Vector3(0, tilt * 4.0, 0)))
+	# Its own camera: the walker's is posed from the walker every frame.
+	var cam0 := get_viewport().get_camera_3d()
+	var cam := Camera3D.new()
+	add_child(cam)
+	cam.attributes = cam0.attributes
+	cam.near = 0.02
+	cam.current = true
+	var fov0 := cam.fov
+	var count := func(tag: String) -> Array:
+		cam.fov = 14.0
+		var total := 0
+		var worst := 0
+		var lines := 0
+		for i in views.size():
+			cam.global_transform = views[i]
+			await _frames(4)
+			await RenderingServer.frame_post_draw
+			var img := get_viewport().get_texture().get_image()
+			var n := 0
+			for y in img.get_height():
+				for x in img.get_width():
+					var c := img.get_pixel(x, y)
+					if c.r > 0.45 and c.b > 0.45 and c.g < 0.6 * minf(c.r, c.b):
+						n += 1
+			total += n
+			lines += 1 if n > 0 else 0
+			if i % 9 == 0:
+				img.save_png(dev + "mine_seams_%s_view%d.png" % [tag, i])
+			if n > worst:
+				worst = n
+				img.save_png(dev + "mine_seams_%s.png" % tag)
+		print("[mine-seams] %-3s magenta %d px over %d views (%d views with any, worst %d)" % [tag, total, views.size(), lines, worst])
+		cam.fov = fov0
+		return [total, lines]
+	var settle := func() -> void:
+		_streamer.invalidate(Rect2i(-(1 << 20), -(1 << 20), 1 << 21, 1 << 21))
+		_streamer.settle(Vector2(mid.x, mid.z))
+		await _frames(90)
+	TerrainTile.bevel_enabled = false
+	await settle.call()
+	var off: Array = await count.call("off")
+	TerrainTile.bevel_enabled = true
+	await settle.call()
+	var on: Array = await count.call("on")
+	var ok: bool = on[0] <= off[0]
+	print("[mine-seams] %s  chamfer on %d px, off %d px" % ["PASS" if ok else "FAIL", on[0], off[0]])
 	get_tree().quit()
 
 
