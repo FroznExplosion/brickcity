@@ -9,9 +9,11 @@ extends SceneTree
 ## Every test stands on a flat stone floor laid by terrain edits high above
 ## the generated world (course FLOOR), so the ground under it is known
 ## exactly. What each check is for:
-## - a source on flat ground reaches 14 studs and stops; levels 3 (the
-##   source), 2 (distance 1-7), 1 (8-14): Minecraft's reach, brick to tile;
-## - deeper water flows over a tile and not over a brick (R3);
+## Amounts are UNITS, half tiles, six to a brick (2026-11-23).
+## - a source on flat ground reaches 5 studs and stops; levels 6 (the
+##   source, a brick), then half a tile less a stud, 5 to 1;
+## - deeper water flows over a tile and not over a brick (R3); water no
+##   deeper than a tile stops at one;
 ## - still water poured on flat ground keeps every tile while it spreads,
 ##   stops at a tile deep, and the lone tiles dry later (R5);
 ## - a stream cut off from its source drains and dries (4.1.6), off a step
@@ -67,7 +69,7 @@ func _floor(x0: int, z0: int, x1: int, z1: int) -> void:
 
 func _amt(x: int, b: int, z: int) -> int:
 	var c: Dictionary = BrickFluid.cell_info(Vector3i(x, b, z))
-	return int(c.amount) if int(c.fluid) != 0 else 0
+	return int(c.units) if int(c.fluid) != 0 else 0
 
 
 func _info(x: int, b: int, z: int) -> Dictionary:
@@ -146,14 +148,13 @@ func _run() -> void:
 	BrickFluid.place(Vector3i(0, W, 0), 1, BrickFluid.SOURCE, 3)
 	var t := _settle(400)
 	_ok("source settles", BrickFluid.active_count() == 0, "%d ticks" % t)
-	_ok("source cell is a brick of water", _amt(0, W, 0) == 3)
-	_ok("distance 1 and 7 are 2 plates", _amt(1, W, 0) == 2 and _amt(7, W, 0) == 2,
-			"%d %d" % [_amt(1, W, 0), _amt(7, W, 0)])
-	_ok("distance 8 and 14 are a tile", _amt(8, W, 0) == 1 and _amt(14, W, 0) == 1,
-			"%d %d" % [_amt(8, W, 0), _amt(14, W, 0)])
-	_ok("distance 15 is dry", _amt(15, W, 0) == 0 and _amt(0, W, 15) == 0)
-	_ok("diagonal reach is by path", _amt(7, W, 7) == 1 and _amt(8, W, 8) == 0,
-			"%d %d" % [_amt(7, W, 7), _amt(8, W, 8)])
+	_ok("source cell is a brick of water", _amt(0, W, 0) == 6)
+	_ok("half a tile less a stud: 5 at 1, 3 at 3, 1 at 5",
+			_amt(1, W, 0) == 5 and _amt(3, W, 0) == 3 and _amt(5, W, 0) == 1,
+			"%d %d %d" % [_amt(1, W, 0), _amt(3, W, 0), _amt(5, W, 0)])
+	_ok("distance 6 is dry", _amt(6, W, 0) == 0 and _amt(0, W, 6) == 0)
+	_ok("diagonal reach is by path", _amt(2, W, 2) == 2 and _amt(3, W, 3) == 0,
+			"%d %d" % [_amt(2, W, 2), _amt(3, W, 3)])
 	_ok("flowing kind and distance", int(_info(5, W, 0).kind) == BrickFluid.FLOW
 			and int(_info(5, W, 0).dist) == 5)
 	var m: Dictionary = BrickFluid.build_tile_mesh(0, 0)
@@ -167,15 +168,17 @@ func _run() -> void:
 	BrickFluid.terrain_changed(Vector3i(203, W * 3, -20), Vector3i(206, W * 3 + 2, 20))
 	BrickFluid.place(Vector3i(200, W, 0), 1, BrickFluid.SOURCE, 3)
 	_settle(400)
-	_ok("2-plate water flows over a tile", _amt(203, W, 0) == 1 and _amt(204, W, 0) >= 1,
+	# (Distance 3 holds 3 units: it runs over the tile at 203, 1 deep on it.)
+	_ok("deeper water flows over a tile", _amt(203, W, 0) >= 1 and _amt(204, W, 0) >= 1,
 			"%d %d" % [_amt(203, W, 0), _amt(204, W, 0)])
 	_ok("water does not pass a brick", _amt(207, W, 0) == 0)
-	# A tile-deep sheet meets a tile: it stops (never above what feeds it).
-	BrickTerrain.fill_box(Vector3i(190, W * 3, -20), Vector3i(190, W * 3, 20), 4, false)
-	BrickFluid.terrain_changed(Vector3i(190, W * 3, -20), Vector3i(190, W * 3, 20))
+	# Water no deeper than a tile meets a tile: it stops (never above what
+	# feeds it). Distance 4 holds 2 units, a tile: the tile at 195 holds it.
+	BrickTerrain.fill_box(Vector3i(195, W * 3, -20), Vector3i(195, W * 3, 20), 4, false)
+	BrickFluid.terrain_changed(Vector3i(195, W * 3, -20), Vector3i(195, W * 3, 20))
 	_settle(400)
-	_ok("water a tile deep stops at a tile", _amt(191, W, 0) >= 1 and _amt(190, W, 0) == 0,
-			"%d %d" % [_amt(191, W, 0), _amt(190, W, 0)])
+	_ok("water a tile deep stops at a tile", _amt(196, W, 0) >= 1 and _amt(195, W, 0) == 0,
+			"%d %d" % [_amt(196, W, 0), _amt(195, W, 0)])
 
 	# 3. Still water: conserved, stops a tile deep, then dries.
 	_sec("3")
@@ -191,8 +194,8 @@ func _run() -> void:
 	for x in range(380, 421):
 		for z in range(-20, 21):
 			deepest = maxi(deepest, _amt(x, W, z))
-	_ok("poured water is 9 tiles", poured == 9, str(poured))
-	_ok("spreading keeps every tile", held == 9, str(held))
+	_ok("poured water is 9 tiles (18 units)", poured == 18, str(poured))
+	_ok("spreading keeps every unit", held == 18, str(held))
 	_ok("it stops spreading at a tile deep", deepest <= 2, "deepest %d" % deepest)
 	BrickFluid.tick_now(500)
 	_ok("lone tiles dry", _region_units(360, 440, -40, 40, W) == 0, str(_region_units(360, 440, -40, 40, W)))
@@ -247,7 +250,7 @@ func _run() -> void:
 	BrickFluid.place(Vector3i(2172, W, 18), 1, BrickFluid.STILL, 3)
 	BrickFluid.place(Vector3i(2173, W, 18), 1, BrickFluid.STILL, 3)
 	BrickFluid.tick_now(700)
-	_ok("a pond in a pit keeps its tiles", _region_units(2172, 2173, 17, 18, W) == 9,
+	_ok("a pond in a pit keeps its tiles", _region_units(2172, 2173, 17, 18, W) == 18,
 			str(_region_units(2172, 2173, 17, 18, W)))
 
 	# 4d. A calm pond's top is merged (stage 8): an 8 x 8 pond two plates
@@ -283,7 +286,7 @@ func _run() -> void:
 		for x in range(2921, 2930):
 			for z in range(-4, 5):
 				var pc: Dictionary = _info(x, b, z)
-				if int(pc.fluid) == 1 and int(pc.kind) == BrickFluid.STILL and int(pc.amount) == 3:
+				if int(pc.fluid) == 1 and int(pc.kind) == BrickFluid.STILL and int(pc.units) == 6:
 					pit_full += 1
 	var outside := _region_units(2900, 2918, -20, 20, W)
 	_ok("a pit under a fall fills to its rim", pit_full >= 9 * 9 * 3 - 3, "%d of %d cells full" % [pit_full, 9 * 9 * 3])
@@ -301,7 +304,7 @@ func _run() -> void:
 		for z in range(-9, 10):
 			var c: Dictionary = _info(x, W, z)
 			if int(c.fluid) == 1 and int(c.kind) == BrickFluid.STILL:
-				beside += int(c.amount)
+				beside += int(c.units)
 	_ok("still water beside a source drains into it", beside == 0, "%d still tiles left" % beside)
 
 	# 4g. Minecraft's meeting, at once: water reaching a lava SOURCE makes it
@@ -349,12 +352,15 @@ func _run() -> void:
 	# 7. Lava meets water.
 	_sec("7")
 	_floor(1160, -20, 1240, 20)
-	# Lava alone first: water's reach (14) would cover all of lava's.
+	# Lava alone first.
 	BrickFluid.place(Vector3i(1200, W, 0), 2, BrickFluid.SOURCE, 3)
 	BrickFluid.tick_now(120)
 	_ok("lava's reach is 6", int(_info(1194, W, 0).fluid) == 2 and int(_info(1193, W, 0).fluid) == 0,
 			"%d %d" % [int(_info(1194, W, 0).fluid), int(_info(1193, W, 0).fluid)])
 	BrickFluid.take()
+	# Water reaches 5: one source into running lava beside the lava source
+	# (obsidian, and stone beyond), one that runs to the lava's thin end.
+	BrickFluid.place(Vector3i(1199, W, 0), 1, BrickFluid.SOURCE, 3)
 	BrickFluid.place(Vector3i(1210, W, 0), 1, BrickFluid.SOURCE, 3)
 	BrickFluid.tick_now(120)
 	var res: Dictionary = BrickFluid.take()
@@ -413,8 +419,8 @@ func _run() -> void:
 			"%d frozen, %d at 3 studs" % [frozen, _amt(2403, W, 0)])
 	BrickFluid.set_centre(Vector3(2400 * 0.35, 0, 0), 100.0)
 	_settle(400)
-	_ok("and runs on when the player comes back", _amt(2410, W, 0) == 1 and BrickFluid.active_count() == 0,
-			"%d" % _amt(2410, W, 0))
+	_ok("and runs on when the player comes back", _amt(2404, W, 0) == 2 and BrickFluid.active_count() == 0,
+			"%d" % _amt(2404, W, 0))
 	BrickFluid.take()
 	var ftx := floori(2400 / 32.0)
 	BrickFluid.request_far_mesh(ftx, 0)

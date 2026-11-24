@@ -705,7 +705,11 @@ func _mine(point: Vector3, dir: Vector3, _info) -> void:
 	# High priority: at low, the shot waited behind every streaming bake
 	# (all high) before it knew what it hit (Docs/MineWorld.md 21).
 	var task := WorkerThreadPool.add_task(
-		func() -> void: holder[0] = BrickTerrain.find_brick(at, n), true, "break brick")
+		func() -> void:
+			var s0 := Time.get_ticks_usec()
+			holder[0] = BrickTerrain.find_brick(at, n)
+			holder.append(s0)
+			holder.append(Time.get_ticks_usec()), true, "break brick")
 	_break_jobs.append([task, holder, at - dir * 0.6, Time.get_ticks_usec()])
 
 
@@ -726,11 +730,26 @@ func _land_breaks() -> void:
 		var res: Dictionary = BrickTerrain.clear_runs(runs)
 		if int(res.get("removed", 0)) == 0:
 			continue
+		var logged := {}
 		if _streamer != null and _streamer.log_latency:
-			break_log.append({"shot": job[3], "found": Time.get_ticks_usec()})
+			logged = {"shot": job[3], "found": Time.get_ticks_usec()}
+			var h: Array = job[1]
+			if h.size() >= 3:
+				logged["find_start"] = h[1]
+				logged["find_end"] = h[2]
+			break_log.append(logged)
 		# What a shot destroys is gone (the user, 2026-11-20): no brick thrown.
 		# What it leaves hanging falls -- the collapse, from terrain_edited.
 		terrain_edited(res)
+		if not logged.is_empty():
+			# The generation each tile must be drawn at for the hole to show.
+			var want := {}
+			var tl: PackedInt32Array = res["tiles"]
+			for k in range(0, tl.size(), 2):
+				var c := Vector2i(tl[k], tl[k + 1])
+				if _streamer.has_tile(c):
+					want[c] = int(_streamer._gen.get(c, 0))
+			logged["want"] = want
 
 
 func _wait_breaks() -> void:
@@ -2648,6 +2667,12 @@ func _run_breaklag_gate() -> void:
 	var rows: Array = []
 	var streaming := "--streaming" in OS.get_cmdline_user_args()
 	var t_eye := _tile_of(e)
+	if "--burst" in OS.get_cmdline_user_args():
+		await _breaklag_burst(e, stud)
+		_streamer.log_latency = false
+		print("[breaklag] done")
+		get_tree().quit()
+		return
 	var shoot := func(k: int, n: int) -> void:
 		break_log.clear()
 		_streamer.latency_log.clear()
@@ -2705,6 +2730,72 @@ func _run_breaklag_gate() -> void:
 	_streamer.log_latency = false
 	print("[breaklag] done")
 	get_tree().quit()
+
+
+## --gate=breaklag --burst: SUSTAINED FIRE (the user: "sometimes full
+## seconds" before a broken brick goes, Docs/MineWorld.md 21). Ten shots a
+## second for 3 s (`--burst-every=N` frames a shot, 6) into the ground in front, a few studs apart, then quiet;
+## each shot is timed from the trigger to the frame its hole is DRAWN (every
+## tile it changed swapped in at its generation or later).
+func _breaklag_burst(e: Vector3, stud: float) -> void:
+	break_log.clear()
+	var shots := 30
+	var f := 0
+	var fired := 0
+	var gone: Array[float] = []
+	var every := 6
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--burst-every="):
+			every = maxi(1, int(arg.split("=")[1]))
+	while f < 600:
+		if fired < shots and f % every == 0:
+			var p := e + Vector3(1.2 + float(fired % 5) * 0.7, 0.0, -2.0 - floorf(float(fired) / 5.0) * 0.7)
+			var c := Vector2i(floori(p.x / stud), floori(p.z / stud))
+			p.y = _ground_m(c.x, c.y) - 0.2
+			_mine(p, Vector3.DOWN, null)
+			fired += 1
+		await get_tree().process_frame
+		f += 1
+		for b in break_log:
+			if not b.has("want") or b.has("gone"):
+				continue
+			var shown := true
+			for c in b.want:
+				if int(_streamer.drawn_gen.get(c, -1)) < int(b.want[c]):
+					shown = false
+			if shown:
+				b["gone"] = Time.get_ticks_usec()
+				gone.append((b.gone - b.shot) / 1000.0)
+		if fired == shots and gone.size() >= break_log.size() and f > shots * every + 30:
+			break
+	var waiting := 0
+	for b in break_log:
+		if not b.has("gone"):
+			waiting += 1
+	gone.sort()
+	var mean := 0.0
+	for g in gone:
+		mean += g
+	mean /= maxf(1.0, gone.size())
+	var over := func(ms: float) -> int:
+		var n := 0
+		for g in gone:
+			if g > ms:
+				n += 1
+		return n
+	print("[breaklag] burst: %d shots, %d broke, %d never drawn; trigger to hole drawn: mean %.0f ms, median %.0f, worst %.0f; over 100 ms %d, over 250 ms %d, over 1 s %d" % [
+			fired, break_log.size(), waiting, mean, gone[floori(gone.size() * 0.5)] if not gone.is_empty() else 0.0,
+			gone[-1] if not gone.is_empty() else 0.0, over.call(100.0), over.call(250.0), over.call(1000.0)])
+	print("[breaklag] burst, each: %s" % ", ".join(gone.map(func(g: float) -> String: return "%.0f" % g)))
+	# Where each shot's time went: queued for a worker, finding, waiting to
+	# be landed, then the tile.
+	var parts: Array[String] = []
+	for b in break_log:
+		if b.has("find_start") and b.has("gone"):
+			parts.append("%.0f/%.0f/%.0f/%.0f" % [(int(b.find_start) - int(b.shot)) / 1000.0,
+					(int(b.find_end) - int(b.find_start)) / 1000.0, (int(b.found) - int(b.find_end)) / 1000.0,
+					(int(b.gone) - int(b.found)) / 1000.0])
+	print("[breaklag] burst, queued/find/land/tile ms: %s" % ", ".join(parts))
 
 
 ## -- --gate=gpu: WHERE THE GPU'S TIME GOES in the mine world (a report, not
@@ -4628,6 +4719,14 @@ func _run_sea_gate() -> void:
 	walker.pitch = -0.12
 	await _frames(40)
 	await _shot(dev + "sea_band_low.png")
+	# Looking down at the shallows from 2.4 m (see-through water, MineWater.md
+	# 7.4): near and far water alike tinted by the water looked through, no
+	# line where one tier hands over to the next (the user, 2026-11-23).
+	walker.place(to_global(shore_m + Vector3(dir.x, 0, dir.y) * 2.0 + Vector3(0, 2.4, 0)),
+			Vector3(dir.x, 0, dir.y))
+	walker.pitch = -0.75
+	await _frames(40)
+	await _shot(dev + "sea_look_down.png")
 	walker.place(to_global(shore_m + Vector3(dir.x, 0, dir.y) * 1.0 + Vector3(0, 1.2, 0)),
 			(Vector3(dir.x, 0, dir.y) + along * 0.4).normalized())
 	walker.pitch = -0.15
