@@ -136,9 +136,25 @@ box -- 4 in --gate=light). `--gate=mem`'s line: one visible probe +16.9 MB
 --gate=light (room inside 0.550 both, pictures differ only in the HUD's fps),
 --gate=hull (cabin; the still views differ only in HUD text), mine
 --gate=deep (cave with the held gun, picture mean 0.044 / 0.046, the lava's
-flow differing). Next possible saving, not done: the renderer's own ~500 MB
-(shadow atlases at 4096, screen targets, sky) -- a look change, the user's
-call.
+flow differing).
+
+**Done 2026-11-24 (the rest of the video textures):** the ~550 MB left was
+NOT the renderer's buffers. Taken apart (terrain_mem_probe's "renderer"
+steps, tools/probes/vram_baseline_probe.gd):
+- an empty Godot window on this GPU already holds 186 MB of textures, a bare
+  3D view (camera, sky, shadowed sun) 264 MB; of that only the directional
+  shadow atlas shrinks (2048 at the default Shadow Quality: 16 MB). The
+  positional atlas, glow, sky radiance (1.7 MB), screen targets (13.6 MB at
+  render scale 0.75 -> 0.25) are small. The compressed PBR texture arrays
+  (~170 MB BPTC) are not in this counter at all.
+- **ItemIcons kept its 1792x2408 SubViewport alive, 3D, MSAA 4x**: ~300 MB of
+  multisampled buffers for a ~17 MB picture. Now copied once into an
+  ImageTexture at load (a read-back at load, allowed) and the viewport freed.
+  --gate=mem: video textures at spawn 597.9 -> 299.4 MB, video total 830 ->
+  492 MB. The icon sheet is pixel-identical (--gate=inventory saves it to
+  user://dev/mine_item_icons.png; INV-GATE PASS).
+- Left: ~264 MB the engine holds for any 3D window, ~35 MB of game textures
+  the counter sees (impostors 50 MB, grid light 16 MB counted elsewhere).
 
 ## 3. Stage B -- bricks fitted per region, regions offset every course
 

@@ -2169,6 +2169,10 @@ func _run_inventory_gate() -> void:
 		waited += 1
 	check.call("item icons rendered at load (stage 4)", ItemIcons.ready and ItemIcons.has_icon(&"granite")
 			and ItemIcons.has_icon(&"bucket"))
+	# The sheet, for a look (a read-back: a gate's).
+	if ItemIcons.ready and ItemIcons.texture != null:
+		DirAccess.make_dir_recursive_absolute(UserPaths.DEV)
+		ItemIcons.texture.get_image().save_png(UserPaths.DEV + "mine_item_icons.png")
 	await _key(KEY_B)
 	check.call("B: the items hands", builder.active)
 	await _key(KEY_E)

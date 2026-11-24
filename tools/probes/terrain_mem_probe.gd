@@ -52,6 +52,7 @@ func run(world: Node3D) -> void:
 			ProjectSettings.get_setting("rendering/reflections/reflection_atlas/reflection_size"),
 			ProjectSettings.get_setting("rendering/reflections/reflection_atlas/reflection_count")])
 	probe.queue_free()
+	await _renderer_own(world)
 	world.set_on_foot(false)
 	var w: Node3D = world.walker
 	w.place(w.global_position + Vector3(0, 40, 0), Vector3(1, -0.35, 0.2).normalized())
@@ -328,3 +329,72 @@ func _print_runs(what: String, t: Dictionary) -> void:
 	print("[mem] runs %s: %d sampled, %.1f plates tall, %.2f ms each; a sample %.0f KB (transient); %.1f runs a column -> store %.1f KB each, %.2f MB for all %d; solid %.0f %%" % [
 			what, t.n, float(t.plates) / t.n, t.ms / t.n, t.bytes / 1024.0 / t.n, float(t.runs) / t.columns,
 			store / 1024.0 / t.n, store / 1e6, t.n, 100.0 * t.solid / maxf(1.0, float(t.columns) * t.plates / t.n)])
+
+
+## THE RENDERER'S OWN VIDEO MEMORY (Docs/TerrainRegions.md 2.1): what is
+## left of the textures once the asset textures are counted, taken apart by
+## changing one thing at a time and reading the total (each change put back).
+func _renderer_own(world: Node3D) -> void:
+	var vp := world.get_viewport()
+	var tex_mb := func() -> float:
+		return Performance.get_monitor(Performance.RENDER_TEXTURE_MEM_USED) / 1e6
+	var base: float = tex_mb.call()
+	print("[mem] renderer: textures %.1f MB before the steps" % base)
+	var rig = world.get("_rig")
+	var env: Environment = rig.env if rig != null else null
+	var steps := []
+	steps.append(["directional shadow atlas 2048 -> 512", func(): RenderingServer.directional_shadow_atlas_set_size(512, false),
+			func(): RenderingServer.directional_shadow_atlas_set_size(2048, false)])
+	steps.append(["positional shadow atlas %d -> 0" % vp.positional_shadow_atlas_size,
+			func(): vp.set_meta(&"pos", vp.positional_shadow_atlas_size); vp.positional_shadow_atlas_size = 0,
+			func(): vp.positional_shadow_atlas_size = int(vp.get_meta(&"pos"))])
+	if env != null:
+		steps.append(["glow off", func(): vp.set_meta(&"glow", env.glow_enabled); env.glow_enabled = false,
+				func(): env.glow_enabled = bool(vp.get_meta(&"glow"))])
+		steps.append(["SSAO/SSIL/SSR/SDFGI/fog off", func():
+				vp.set_meta(&"fx", [env.ssao_enabled, env.ssil_enabled, env.ssr_enabled, env.sdfgi_enabled, env.volumetric_fog_enabled])
+				env.ssao_enabled = false; env.ssil_enabled = false; env.ssr_enabled = false
+				env.sdfgi_enabled = false; env.volumetric_fog_enabled = false,
+				func():
+				var f: Array = vp.get_meta(&"fx")
+				env.ssao_enabled = f[0]; env.ssil_enabled = f[1]; env.ssr_enabled = f[2]
+				env.sdfgi_enabled = f[3]; env.volumetric_fog_enabled = f[4]])
+		if env.sky != null:
+			steps.append(["sky radiance %d -> 32" % env.sky.radiance_size, func():
+					vp.set_meta(&"rad", env.sky.radiance_size); env.sky.radiance_size = Sky.RADIANCE_SIZE_32,
+					func(): env.sky.radiance_size = int(vp.get_meta(&"rad"))])
+	steps.append(["render scale %.2f -> 0.25" % vp.scaling_3d_scale, func():
+			vp.set_meta(&"scale", vp.scaling_3d_scale); vp.scaling_3d_scale = 0.25,
+			func(): vp.scaling_3d_scale = float(vp.get_meta(&"scale"))])
+	steps.append(["msaa %d, screen AA %d, TAA %s -> off" % [vp.msaa_3d, vp.screen_space_aa, vp.use_taa], func():
+			vp.set_meta(&"aa", [vp.msaa_3d, vp.screen_space_aa, vp.use_taa])
+			vp.msaa_3d = Viewport.MSAA_DISABLED; vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED; vp.use_taa = false,
+			func():
+			var a: Array = vp.get_meta(&"aa")
+			vp.msaa_3d = a[0]; vp.screen_space_aa = a[1]; vp.use_taa = a[2]])
+	for st: Array in steps:
+		var before: float = tex_mb.call()
+		(st[1] as Callable).call()
+		for i in 10:
+			await world.get_tree().process_frame
+		var after: float = tex_mb.call()
+		(st[2] as Callable).call()
+		for i in 10:
+			await world.get_tree().process_frame
+		print("[mem]   %-44s %+8.1f MB" % [st[0], after - before])
+	print("[mem] renderer: textures back to %.1f MB" % tex_mb.call())
+	# Every SubViewport alive (each holds render buffers of its own while it
+	# is in the tree): icons, impostor bakers, previews.
+	var vps := world.get_tree().root.find_children("*", "SubViewport", true, false)
+	var px := 0
+	for v in vps:
+		var sv := v as SubViewport
+		px += sv.size.x * sv.size.y
+	print("[mem] renderer: %d SubViewports alive, %.1f Mpx in all" % [vps.size(), px / 1e6])
+	var shown := 0
+	for v in vps:
+		var sv := v as SubViewport
+		if shown < 12:
+			print("[mem]   %s %dx%d update %d 3d %s own_world %s" % [sv.get_path(), sv.size.x, sv.size.y,
+					sv.render_target_update_mode, not sv.disable_3d, sv.own_world_3d])
+			shown += 1
