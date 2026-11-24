@@ -4662,6 +4662,25 @@ func _run_water_gate() -> void:
 		await get_tree().process_frame
 		fw = maxf(fw, float(Time.get_ticks_usec() - f0) / 1000.0)
 	print("[water-gate] live: 120 frames, worst %.1f ms; %s" % [fw, water.report()])
+	# Far away the terrain lets the platform's tile go, and its water goes
+	# with it; back, both come back (the user, 2026-11-23: flowing water
+	# never unloaded).
+	var pt := Vector2i(floori(float(o.x) / 32.0), floori(float(o.y) / 32.0))
+	var home := _eye()
+	_fly_to(home + Vector3(400, 0, 0), Vector3(1, 0, 0))
+	var waited := 0
+	while waited < 900 and (_streamer.has_tile(pt) or water.has_tile_drawn(pt)):
+		await get_tree().process_frame
+		waited += 1
+	var gone: bool = not water.has_tile_drawn(pt)
+	var bare: int = water.drawn_on_bare()
+	_fly_to(home, Vector3(1, 0, 0))
+	waited = 0
+	while waited < 900 and not water.has_tile_drawn(pt):
+		await get_tree().process_frame
+		waited += 1
+	print("[water-gate] unload: platform tile water gone far away %s, drawn on bare ground %d (want 0), %d parked; back again %s" % [
+			gone, bare, water.parked_count(), water.has_tile_drawn(pt)])
 	# Saving (stage 7): the water written beside the edits, the world made
 	# again from its settings, the same water back.
 	water.manual = true
