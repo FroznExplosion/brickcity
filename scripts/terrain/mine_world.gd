@@ -98,6 +98,12 @@ var drops: DroppedItems = null
 ## Sky light on collapse pieces, drops and chests (Docs/MineWorld.md 19);
 ## null with --no-sky-light.
 var sky_lit: MineSkyLit = null
+## THE BRICK OVERLAY (Docs/BrickOverlay.md): real bevelled bricks over the
+## flat ground near the eye, in place of the old chamfered near tiles. On
+## with the world setting Chamfered brick edges; `-- --old-chamfer` draws the
+## old near tier instead (the A/B).
+var bricks: TerrainBricks = null
+var _overlay_on := false
 
 ## Saving the world's changes (Docs/MineWorld.md 9): one file per seed and
 ## generator settings, under UserPaths.SAVES (a scripted pass: user://dev/).
@@ -316,6 +322,8 @@ func _ready() -> void:
 			_run_skylit_gate()
 		elif "--gate=seams" in OS.get_cmdline_user_args():
 			_run_seams_gate()
+		elif "--gate=bricks" in OS.get_cmdline_user_args():
+			_run_bricks_gate()
 		else:
 			_run_gate()
 
@@ -396,6 +404,15 @@ func generate(s: Dictionary) -> void:
 	# The geometry chamfer near the camera (Chamfered brick edges): off, the
 	# near tiles are drawn flat, as the deep sections are.
 	TerrainTile.bevel_enabled = bool(settings.get("chamfer", true))
+	_overlay_on = TerrainTile.bevel_enabled and not ("--old-chamfer" in OS.get_cmdline_user_args())
+	if _overlay_on:
+		TerrainTile.bevel_enabled = false
+	if bricks == null:
+		bricks = TerrainBricks.new()
+		bricks.name = "Bricks"
+		add_child(bricks)
+		bricks.setup(self, _mat, _sky_light_on)
+	bricks.set_enabled(_overlay_on)
 	_streamer = TerrainStreamer.new()
 	_streamer.name = "Streamer"
 	_streamer.near_radius = near
@@ -5539,6 +5556,184 @@ func _build_gate_room() -> Array:
 	return [o, b, t_min]
 
 
+## -- --gate=bricks: THE BRICK OVERLAY (Docs/BrickOverlay.md 4, stage 2). The
+## stone room (_build_gate_room) roofed over, seen from inside (its corners,
+## walls, floor and roof edges at the normal lens) and the open ground
+## outside it, each view drawn with the overlay ON and OFF (pictures
+## mine_bricks_<view>_on/off.png in user://dev). Counts: instances, bricks in
+## reach, how far the overlay reached; the fill's cost over a full turn (24
+## picks, one a frame). Checks: bricks are laid (inside and out), within
+## max_bricks, every picked brick within range, a fill under 2 ms.
+func _run_bricks_gate() -> void:
+	await _frames(10)
+	var dev := UserPaths.DEV
+	DirAccess.make_dir_recursive_absolute(dev)
+	_time = 0.42
+	set_on_foot(false)
+	view.process_mode = Node.PROCESS_MODE_DISABLED
+	view.rig.visible = false
+	if view.arms != null:
+		view.arms.visible = false
+	_hud_layer.visible = false
+	if kit != null:
+		for layer: CanvasLayer in [kit.hud, kit._aggro_layer]:
+			if layer != null:
+				layer.visible = false
+	var fails := 0
+	var check := func(ok: bool, what: String) -> void:
+		print("[mine-bricks] %s  %s" % ["ok  " if ok else "FAIL", what])
+	if bricks == null or not _overlay_on:
+		print("[mine-bricks] FAIL  the overlay is off (Chamfered brick edges off, or --old-chamfer)")
+		get_tree().quit()
+		return
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var site := _build_gate_room()
+	var o: Vector2i = site[0]
+	var b: int = site[1]
+	var mid := Vector3((o.x + 7.5) * stud, (b + 9) * plate, (o.y + 0.5) * stud)
+	_fly_to(Vector3(mid.x, b * plate + 0.05, mid.z), Vector3(0, 0, -1))
+	await _frames(60)
+	collapse.process_mode = Node.PROCESS_MODE_DISABLED
+	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x, b + 18, o.y - 9), Vector3i(o.x + 14, b + 20, o.y + 9), 4, true))
+	_flush_edits()
+	_streamer.settle(Vector2(mid.x, mid.z))
+	await _frames(90)
+	var cam0 := get_viewport().get_camera_3d()
+	var cam := Camera3D.new()
+	add_child(cam)
+	cam.attributes = cam0.attributes
+	cam.near = 0.02
+	cam.fov = cam0.fov
+	cam.current = true
+	# Inside: two corners, a wall straight on, floor and roof edges.
+	var views := []
+	var c0 := Vector3((o.x + 1) * stud, (b + 3) * plate, (o.y - 8) * stud)
+	var c1 := Vector3((o.x + 14) * stud, (b + 15) * plate, (o.y + 9) * stud)
+	views.append(["room_corner", Transform3D(Basis(), mid.lerp(Vector3(c0.x, mid.y, c0.z), 0.4)).looking_at(c0)])
+	views.append(["room_roof", Transform3D(Basis(), mid.lerp(Vector3(c1.x, mid.y, c1.z), 0.4)).looking_at(c1)])
+	views.append(["room_wall", Transform3D(Basis(), mid).looking_at(mid + Vector3(0, -0.3, -4.0))])
+	views.append(["room_floor", Transform3D(Basis(), mid + Vector3(0, 0.6, 0)).looking_at(
+			Vector3(mid.x + 1.5, b * plate, mid.z + 1.0))])
+	# Outside: the open ground beside the room, from a walker's height.
+	var gx := o.x - 12
+	var gz := o.y
+	var gy := BrickTerrain.surface_plate(gx, gz)
+	var eye_out := Vector3(gx * stud, (gy + 1) * plate + 1.7, gz * stud)
+	views.append(["ground", Transform3D(Basis(), eye_out).looking_at(eye_out + Vector3(-3.0, -1.6, 1.0))])
+	views.append(["ground_far", Transform3D(Basis(), eye_out).looking_at(eye_out + Vector3(-4.0, -0.4, -2.0))])
+	# The dark room's own bricks, from each room view's pick: none lit by the
+	# sky on a face inside it (the light is the bake's, of the faces it drew),
+	# and no box reaching into its air.
+	var rlo := Vector3((o.x + 1) * stud, b * plate, (o.y - 8) * stud)
+	var rhi := Vector3((o.x + 14) * stud, (b + 18) * plate, (o.y + 9) * stud)
+	var lit := 0
+	var intrude := 0
+	var scan := func(tag: String) -> Array:
+		var n_lit := 0
+		var n_in := 0
+		var rb := bricks.buffer
+		for i in bricks.count:
+			var k := i * TerrainBricks.STRIDE
+			var size := Vector3(rb[k], rb[k + 5], rb[k + 10])
+			var c := Vector3(rb[k + 3], rb[k + 7], rb[k + 11])
+			var blo := c - size * 0.5
+			var bhi := c + size * 0.5
+			var lv := []
+			var any := false
+			for f in 6:
+				# The face's middle: on the room's inside (its box, edges in)?
+				var fc := c
+				var ax := f / 2
+				fc[ax] = bhi[ax] if f % 2 == 0 else blo[ax]
+				var inside := fc.x > rlo.x - 0.01 and fc.x < rhi.x + 0.01 and fc.y > rlo.y - 0.01 \
+						and fc.y < rhi.y + 0.01 and fc.z > rlo.z - 0.01 and fc.z < rhi.z + 0.01
+				for corner in 4:
+					var n := f * 4 + corner
+					var l := (int(rb[k + 16 + n / 6]) >> (4 * (n % 6))) & 15
+					lv.append(l)
+					if inside and l >= 6:
+						any = true
+			# Into the room's air (it is all air, 1 cm in from its faces)?
+			if blo.x < rhi.x - 0.01 and bhi.x > rlo.x + 0.01 and blo.y < rhi.y - 0.01 and bhi.y > rlo.y + 0.01 \
+					and blo.z < rhi.z - 0.01 and bhi.z > rlo.z + 0.01:
+				n_in += 1
+				if n_in <= 4:
+					print("[mine-bricks]   %s: in the room's air: box %s..%s" % [tag, blo, bhi])
+			if any:
+				n_lit += 1
+				if n_lit <= 6:
+					print("[mine-bricks]   %s: lit in the room: box %s..%s faces' corners %s" % [tag, blo, bhi, lv])
+		return [n_lit, n_in]
+	var room_count := 0
+	var out_count := 0
+	for v: Array in views:
+		var t: Transform3D = v[1]
+		cam.global_transform = t
+		if str(v[0]) == "ground":
+			_streamer.settle(Vector2(t.origin.x, t.origin.z))
+		for on in [true, false]:
+			bricks.set_enabled(on)
+			await _frames(6)
+			await RenderingServer.frame_post_draw
+			get_viewport().get_texture().get_image().save_png(dev + "mine_bricks_%s_%s.png" % [v[0], "on" if on else "off"])
+		bricks.set_enabled(true)
+		await _frames(3)
+		print("[mine-bricks] %-11s %s" % [v[0], bricks.readout()])
+		if str(v[0]).begins_with("room"):
+			room_count = maxi(room_count, bricks.count)
+			var got: Array = scan.call(str(v[0]))
+			lit += int(got[0])
+			intrude += int(got[1])
+		else:
+			out_count = maxi(out_count, bricks.count)
+	var ok: bool = lit == 0
+	check.call(ok, "no sky light on the dark room's corners (%d bricks lit)" % lit)
+	fails += 0 if ok else 1
+	ok = intrude == 0
+	check.call(ok, "no brick's box in the room's air (%d)" % intrude)
+	fails += 0 if ok else 1
+	ok = room_count > 50
+	check.call(ok, "bricks laid in the room (%d)" % room_count)
+	fails += 0 if ok else 1
+	ok = out_count > 50
+	check.call(ok, "bricks laid on the open ground (%d)" % out_count)
+	fails += 0 if ok else 1
+	# The turn: 24 picks, one a frame, from the room's middle.
+	bricks.worst_fill_ms = 0.0
+	var sum := 0.0
+	var most := 0
+	for i in 24:
+		var yaw := TAU * i / 24.0
+		cam.global_transform = Transform3D(Basis(), mid).looking_at(mid + Vector3(sin(yaw), -0.2, cos(yaw)))
+		await get_tree().process_frame
+		sum += bricks.fill_ms
+		most = maxi(most, bricks.count)
+	print("[mine-bricks] turn: fill %.2f ms mean, %.2f worst; up to %d instances" % [sum / 24.0, bricks.worst_fill_ms, most])
+	ok = bricks.worst_fill_ms < 2.0
+	check.call(ok, "a fill under 2 ms (worst %.2f)" % bricks.worst_fill_ms)
+	fails += 0 if ok else 1
+	ok = most <= bricks.max_bricks
+	check.call(ok, "within max_bricks (%d <= %d)" % [most, bricks.max_bricks])
+	fails += 0 if ok else 1
+	# Every instance within range of the eye (its box), from the buffer this
+	# script wrote: the transform's origin and scale.
+	var buf: PackedFloat32Array = bricks.buffer
+	var e := to_local(cam.global_position)
+	var worst_d := 0.0
+	for i in bricks.count:
+		var k := i * TerrainBricks.STRIDE
+		var size := Vector3(buf[k], buf[k + 5], buf[k + 10])
+		var c := Vector3(buf[k + 3], buf[k + 7], buf[k + 11])
+		var q := e.clamp(c - size * 0.5, c + size * 0.5)
+		worst_d = maxf(worst_d, q.distance_to(e))
+	ok = worst_d <= bricks.range_m + 0.01
+	check.call(ok, "every brick within range (farthest %.2f m of %.1f)" % [worst_d, bricks.range_m])
+	fails += 0 if ok else 1
+	print("[mine-bricks] %s; %s" % ["PASS" if fails == 0 else "%d FAILED" % fails, bricks.readout()])
+	get_tree().quit()
+
+
 ## -- --gate=seams: does the near tier's chamfer open the walls of a room?
 ## The stone room roofed over, an unlit MAGENTA box round its outside, and
 ## close views of its walls, inside corners, floor and roof edges through a
@@ -5655,16 +5850,25 @@ func _run_seams_gate() -> void:
 		_streamer.invalidate(Rect2i(-(1 << 20), -(1 << 20), 1 << 21, 1 << 21))
 		_streamer.settle(Vector2(mid.x, mid.z))
 		await _frames(90)
+	# With the brick overlay (Docs/BrickOverlay.md) the chamfer is its real
+	# bricks over the sunken flat ground, and the old near tier stays off;
+	# without it (-- --old-chamfer), the old near tier.
 	TerrainTile.bevel_enabled = false
+	if _overlay_on:
+		bricks.set_enabled(false)
 	await settle.call()
 	var off: Array = await count.call("off")
-	TerrainTile.bevel_enabled = true
+	if _overlay_on:
+		bricks.set_enabled(true)
+	else:
+		TerrainTile.bevel_enabled = true
 	await settle.call()
 	var on: Array = await count.call("on")
 	# Both tiers whole: the chamfer's slits and the flat tier's T-junction
 	# cracks were both seen as dots in a dark cave.
 	var ok: bool = on[0] == 0 and off[0] == 0
-	print("[mine-seams] %s  chamfer on %d px, off %d px" % ["PASS" if ok else "FAIL", on[0], off[0]])
+	print("[mine-seams] %s  %s on %d px, off %d px" % ["PASS" if ok else "FAIL",
+			"overlay" if _overlay_on else "chamfer", on[0], off[0]])
 	get_tree().quit()
 
 
@@ -5791,7 +5995,8 @@ func _run_seams_deep() -> void:
 		if n > worst:
 			worst = n
 			img.save_png(dev + "mine_seams_deep.png")
-	print("[mine-seams] deep hall: %d sections drawn, floor plate %d (%d under the ground), chamfer %s" % [_deep._secs.size(), b, t_min - b, TerrainTile.bevel_enabled])
+	print("[mine-seams] deep hall: %d sections drawn, floor plate %d (%d under the ground), chamfer %s, overlay %s" % [_deep._secs.size(), b, t_min - b, TerrainTile.bevel_enabled,
+			bricks.readout() if _overlay_on else "off"])
 	print("[mine-seams] %s  deep: magenta %d px over %d views (%d views with any, worst %d)"
 			% ["PASS" if total == 0 else "FAIL", total, views.size(), hit, worst])
 	get_tree().quit()

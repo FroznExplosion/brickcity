@@ -15,6 +15,7 @@
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 
 #include <algorithm>
+#include <cstring>
 #include <atomic>
 #include <cmath>
 #include <functional>
@@ -3616,7 +3617,9 @@ struct MeshBuf {
     PackedByteArray custom0;
     /// What `quad`/`tri` stamp into custom0 for the vertices they emit.
     uint8_t material = 0;
-    /// custom0.b: 255 on a real bevel facet, which the shader draws plain
+    /// custom0.b: BOXED_FACE on a flat face with a brick of the overlay over
+    /// it (Docs/BrickOverlay.md: the shader sinks it under the brick's box
+    /// near the eye); 255 on a real bevel facet, which the shader draws plain
     /// (the top's print paths stop at the edge instead of running down it).
     uint8_t facet = 0;
 
@@ -3977,33 +3980,102 @@ Color piece_colour(const TileSample &s, int ox, int oz, int mat, bool studded) {
 /// Keyed by the brick's corner and course; its plates the union of what the
 /// faces found solid. Set by build_tile / build_section for their own call
 /// (thread-local: bakes run on workers side by side).
+/// CUSTOM0.b of a flat face an overlay brick covers (MeshBuf::facet).
+constexpr uint8_t BOXED_FACE = 64;
+/// How far such a face sinks near the eye (terrain.gdshader OVERLAY_RECESS).
+constexpr float OVERLAY_RECESS_M = 0.013f;
+
 struct OutBrick {
     int x0, z0, x1, z1;   ///< studs, absolute, [x0, x1)
     int p0, p1;           ///< plates, [p0, p1)
     uint8_t mat;
     Color col;
+    bool studded;         ///< its top drew studs (any face noting it so)
+    /// What of each face the bake drew (face f: +x -x +y -y +z -z): one
+    /// bit a cell, in the face's own axes -- x faces (u z studs, v y
+    /// plates), y faces (u x, v z studs), z faces (u x studs, v y plates) --
+    /// bit (u - u base) + 8 (v - v base), u from the brick's corner, v from
+    /// its z corner (y faces) or OutBrick::v_base (plates). Cells past 8 are
+    /// not kept. 0: none drawn (a surface piece's side the packer draws),
+    /// the face is taken whole.
+    uint64_t drawn[6];
+    /// The plate the plate faces' v counts from: two under the key's course.
+    int v_base;
+    /// Sky light (levels 0..15) at each face's 4 corners (corner c: bit 0
+    /// the face's u max, bit 1 its v max), read as the flat mesh reads a
+    /// vertex's -- half a cell out along the face's normal -- at the corners
+    /// of what of the face is drawn: a brick through a wall has a face in
+    /// the room and one outside, and corners of the whole brick lit the
+    /// room's face with the outside's light. Block light (lava) a face.
+    /// sky_light_pass fills them; with no sky light, the open air's 15.
+    uint8_t sky[6][4];
+    uint8_t blk[6];
 };
 static thread_local std::map<std::array<int, 3>, OutBrick> *t_bricks = nullptr;
 
-static void note_brick(int x0, int z0, int sx, int sz, int p0, int p1, int mat, const Color &col) {
+static void note_brick(int x0, int z0, int sx, int sz, int p0, int p1, int mat, const Color &col,
+        bool studded) {
     if (t_bricks == nullptr || sx <= 0 || sz <= 0 || p1 <= p0) {
         return;
     }
     const std::array<int, 3> k{ x0, z0, floor_div(p0, PLATES_PER_CELL) };
     auto it = t_bricks->find(k);
     if (it == t_bricks->end()) {
-        (*t_bricks)[k] = OutBrick{ x0, z0, x0 + sx, z0 + sz, p0, p1, (uint8_t)mat, col };
+        OutBrick b{ x0, z0, x0 + sx, z0 + sz, p0, p1, (uint8_t)mat, col, studded, {}, 0, {}, {} };
+        b.v_base = floor_div(p0, PLATES_PER_CELL) * PLATES_PER_CELL - 2;
+        for (int f = 0; f < 6; ++f) {
+            b.drawn[f] = 0;
+            b.blk[f] = 0;
+            for (int c = 0; c < 4; ++c) {
+                b.sky[f][c] = 15;
+            }
+        }
+        (*t_bricks)[k] = b;
     } else {
         it->second.p0 = std::min(it->second.p0, p0);
         it->second.p1 = std::max(it->second.p1, p1);
+        it->second.studded = it->second.studded || studded;
     }
 }
 
-/// The noted bricks as floats, 10 a brick: min corner, max corner (metres,
-/// absolute), material, colour r g b (the alpha's "takes studs" dropped).
+/// The face `f` of the brick at corner x0 z0, course of plate p0 (as
+/// note_brick keyed it) drew [u0, u1) x [v0, v1) in that face's axes.
+static void note_face(int x0, int z0, int p0, int f, int u0, int v0, int u1, int v1) {
+    if (t_bricks == nullptr) {
+        return;
+    }
+    auto it = t_bricks->find(std::array<int, 3>{ x0, z0, floor_div(p0, PLATES_PER_CELL) });
+    if (it == t_bricks->end()) {
+        return;
+    }
+    OutBrick &b = it->second;
+    const int ax = f / 2;
+    const int ub = ax == 0 ? b.z0 : b.x0;
+    const int vb = ax == 1 ? b.z0 : b.v_base;
+    for (int v = std::max(v0, vb); v < std::min(v1, vb + 8); ++v) {
+        for (int u = std::max(u0, ub); u < std::min(u1, ub + 8); ++u) {
+            b.drawn[f] |= 1ULL << ((u - ub) + 8 * (v - vb));
+        }
+    }
+}
+
+/// A face's index: +x 0, -x 1, +y 2, -y 3, +z 4, -z 5.
+static inline int face_index(int dx, int dy, int dz) {
+    return dx > 0 ? 0 : dx < 0 ? 1 : dy > 0 ? 2 : dy < 0 ? 3 : dz > 0 ? 4 : 5;
+}
+
+/// The noted bricks as floats, 17 a brick: min corner, max corner (metres,
+/// absolute), material, colour r g b, 1 if its top drew studs (else 0), then
+/// its light as whole numbers of 24 bits, 4 bits a level: sky words 0-3
+/// (face f's corner c is level 4 f + c, six to a word, the first at bit 0),
+/// the block word (face f at bit 4 f), and the drawn word: how much of face
+/// f this bake drew (cells, at most 15; 0 none) -- a brick
+/// across a tile edge is in two tiles' lists, each lit from what that tile
+/// drew of it, and overlay_pick takes each face from the one that drew more.
+/// OutBrick::sky for the order.
 static PackedFloat32Array bricks_floats(const std::map<std::array<int, 3>, OutBrick> &m) {
     PackedFloat32Array out;
-    out.resize((int64_t)m.size() * 10);
+    out.resize((int64_t)m.size() * 17);
     float *w = out.ptrw();
     for (const auto &kv : m) {
         const OutBrick &b = kv.second;
@@ -4017,6 +4089,29 @@ static PackedFloat32Array bricks_floats(const std::map<std::array<int, 3>, OutBr
         *w++ = b.col.r;
         *w++ = b.col.g;
         *w++ = b.col.b;
+        *w++ = b.studded ? 1.0f : 0.0f;
+        int words[4] = { 0, 0, 0, 0 };
+        int blk = 0;
+        for (int f = 0; f < 6; ++f) {
+            for (int c = 0; c < 4; ++c) {
+                const int n = f * 4 + c;
+                words[n / 6] |= (int)std::min<uint8_t>(b.sky[f][c], 15) << (4 * (n % 6));
+            }
+            blk |= (int)std::min<uint8_t>(b.blk[f], 15) << (4 * f);
+        }
+        for (int q = 0; q < 4; ++q) {
+            *w++ = (float)words[q];
+        }
+        *w++ = (float)blk;
+        int drawn = 0;
+        for (int f = 0; f < 6; ++f) {
+            int cells = 0;
+            for (uint64_t m = b.drawn[f]; m != 0; m &= m - 1) {
+                ++cells;
+            }
+            drawn |= std::min(cells, 15) << (4 * f);
+        }
+        *w++ = (float)drawn;
     }
     return out;
 }
@@ -4353,6 +4448,17 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                     // the bond's.
                     const bool of_piece = key < 0;
                     const BondRect br = of_piece ? piece_rect(key) : brick_rect(lx, yp, lz);
+                    // STUDS ON THE TOPMOST BRICKS OF A CAVE (Docs/MineWorld.md
+                    // 19), in the mine world's look (the bond's top course):
+                    // a cave floor or ledge is a brick's top as much as the
+                    // surface is, and drew none at all. More often studded
+                    // than the surface, smooth otherwise, by the brick's corner
+                    // and course, so every face of one brick agrees.
+                    bool studded = false;
+                    if (dy > 0 && g_bond_top && material_studded(mat)) {
+                        const int c = floor_div(yp, PLATES_PER_CELL);
+                        studded = hashf(br.x, br.z, (int32_t)(seed ^ 0xCA5EU) + c) < CAVE_STUD_CHANCE;
+                    }
                     if (t_bricks != nullptr) {
                         // The brick's plates: a piece's course under its top,
                         // or the solid plates of this cell's course.
@@ -4372,18 +4478,16 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                                 }
                             }
                         }
-                        note_brick(br.x, br.z, br.sx, br.sz, bp0, bp1, mat, col);
-                    }
-                    // STUDS ON THE TOPMOST BRICKS OF A CAVE (Docs/MineWorld.md
-                    // 19), in the mine world's look (the bond's top course):
-                    // a cave floor or ledge is a brick's top as much as the
-                    // surface is, and drew none at all. More often studded
-                    // than the surface, smooth otherwise, by the brick's corner
-                    // and course, so every face of one brick agrees.
-                    bool studded = false;
-                    if (dy > 0 && g_bond_top && material_studded(mat)) {
-                        const int c = floor_div(yp, PLATES_PER_CELL);
-                        studded = hashf(br.x, br.z, (int32_t)(seed ^ 0xCA5EU) + c) < CAVE_STUD_CHANCE;
+                        note_brick(br.x, br.z, br.sx, br.sz, bp0, bp1, mat, col, studded);
+                        // What of the face this quad draws, in its axes.
+                        const int ax = s.tx * TILE + lx, az = s.tz * TILE + lz;
+                        if (dx != 0) {
+                            note_face(br.x, br.z, bp0, face_index(dx, dy, dz), az, yp, az + wdt, yp + hgt);
+                        } else if (dy != 0) {
+                            note_face(br.x, br.z, bp0, face_index(dx, dy, dz), ax, az, ax + wdt, az + hgt);
+                        } else {
+                            note_face(br.x, br.z, bp0, face_index(dx, dy, dz), ax, yp, ax + wdt, yp + hgt);
+                        }
                     }
                     if (studded) {
                         col.a = 1.0f;
@@ -4453,6 +4557,10 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                     // Square only because this sample stops there (another
                     // tile or tier draws on, flat): the backing reaches past.
                     uint8_t bound = 0;
+                    // Edges whose neighbour is past this sample's plates (a
+                    // tile's floor, a section's top or bottom): the flat
+                    // face must not reach past them (see `reach` below).
+                    uint8_t past_y = 0;
                     {
                         // Unit steps along the slice's U and V axes.
                         const int ux = (dx != 0) ? 0 : 1;
@@ -4484,6 +4592,9 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                             const int nx2 = lx + probe[k][0];
                             const int ny2 = yp + probe[k][1];
                             const int nz2 = lz + probe[k][2];
+                            if (ny2 < y0 || ny2 >= y1) {
+                                past_y |= (uint8_t)(1u << k);
+                            }
                             if (!s.solid(nx2, ny2, nz2)) {
                                 convex |= (uint8_t)(1u << k);
                             } else if (s.solid(nx2 + dx, ny2 + dy, nz2 + dz)) {
@@ -4542,6 +4653,7 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                         square = remap(square);
                         covered = remap(covered);
                         bound = remap(bound);
+                        past_y = remap(past_y);
                     }
                     // UNCHAMFERED (the deep sections, the flat tier): each
                     // face overlaps its neighbours by FLAT_OVERLAP past every
@@ -4565,7 +4677,23 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                             if (o.dot((p + q) * 0.5f - centre) < 0.0f) {
                                 o = -o;
                             }
-                            grow[i] = (convex & (1u << i)) ? Vector3() : o * FLAT_OVERLAP;
+                            // An INSIDE corner (the neighbour solid and covered:
+                            // a floor's edge at a wall's foot) reaches the
+                            // brick overlay's recess further, into the solid
+                            // behind the face it meets, where nothing sees it:
+                            // near the eye both faces sink 13 mm under their
+                            // bricks (terrain.gdshader overlay_reach), and a
+                            // floor ending at the wall's old plane stopped
+                            // 13 mm short of the sunken wall -- a slit along
+                            // every wall's foot (--gate=seams --deep --at-top),
+                            // where the brick under the wall, buried, has no
+                            // box to hide it.
+                            // Not past the sample's own plates: the tier
+                            // beyond draws that side (mine_world_probe: a
+                            // tile draws nothing under its floor).
+                            const float reach = FLAT_OVERLAP
+                                    + ((covered & ~past_y & (1u << i)) ? OVERLAY_RECESS_M : 0.0f);
+                            grow[i] = (convex & (1u << i)) ? Vector3() : o * reach;
                         }
                         for (int i = 0; i < 4; ++i) {
                             *rim[i] += grow[i] + grow[(i + 3) % 4];
@@ -4600,6 +4728,10 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                             va = (float)(az - br.z) * STUD_M;   // along Z
                             bf = Vector2((float)br.sx * STUD_M, (float)br.sz * STUD_M);
                         }
+                        // Every face here is a listed brick's (note_brick).
+                        if (g_face_bevel <= 0.0f) {
+                            m.facet = BOXED_FACE;
+                        }
                         if (dy < 0) {
                             // Wound a0 -> b0 along Z here: UV.x stays along X.
                             m.quad(Vector3((float)dx, (float)dy, (float)dz), col, bf,
@@ -4611,6 +4743,9 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                                 a0, b0, c0, d0,
                                 Vector2(ua, va), Vector2(ua + fsz.x, va), Vector2(ua + fsz.x, va + fsz.y),
                                 Vector2(ua, va + fsz.y), convex, square);
+                        }
+                        if (g_face_bevel <= 0.0f) {
+                            m.facet = 0;
                         }
                     }
                     // A wall standing on a floor reaches a bevel below it.
@@ -5990,6 +6125,76 @@ static void sky_light_pass(MeshBuf &m, const TileSample &s, bool surface, Dictio
         return Vector3(b[3], b[7], b[11]);
     };
     const Vector3 UP(0.0f, 1.0f, 0.0f);
+    // The overlay's bricks (Docs/BrickOverlay.md): each face's 4 corners --
+    // of what of the face was drawn (the whole face if none was noted) --
+    // read as a vertex there with the face's normal.
+    std::vector<OutBrick *> obs;
+    std::vector<Vector3> bpts;
+    std::vector<Vector3> bnrm;
+    if (t_bricks != nullptr) {
+        obs.reserve(t_bricks->size());
+        bpts.reserve(t_bricks->size() * 24);
+        bnrm.reserve(t_bricks->size() * 24);
+        static const Vector3 NRM[6] = { Vector3(1, 0, 0), Vector3(-1, 0, 0), Vector3(0, 1, 0),
+            Vector3(0, -1, 0), Vector3(0, 0, 1), Vector3(0, 0, -1) };
+        for (auto &kv : *t_bricks) {
+            OutBrick &b = kv.second;
+            obs.push_back(&b);
+            for (int f = 0; f < 6; ++f) {
+                const int ax = f / 2;   // 0 x, 1 y, 2 z
+                // The face's whole rect in its axes.
+                int u0, v0, u1, v1;
+                if (ax == 0) {
+                    u0 = b.z0; u1 = b.z1; v0 = b.p0; v1 = b.p1;
+                } else if (ax == 1) {
+                    u0 = b.x0; u1 = b.x1; v0 = b.z0; v1 = b.z1;
+                } else {
+                    u0 = b.x0; u1 = b.x1; v0 = b.p0; v1 = b.p1;
+                }
+                const int ub = ax == 0 ? b.z0 : b.x0;
+                const int vb = ax == 1 ? b.z0 : b.v_base;
+                const bool hi = (f & 1) == 0;
+                for (int c = 0; c < 4; ++c) {
+                    // The corner of the drawn cell nearest this corner of the
+                    // face (a face drawn in an L has a corner nowhere drawn,
+                    // maybe in the open air past a wall).
+                    const int tu = (c & 1) ? u1 : u0, tv = (c & 2) ? v1 : v0;
+                    float u = (float)tu, v = (float)tv;
+                    if (b.drawn[f] != 0) {
+                        int best = INT_MAX;
+                        for (uint64_t m = b.drawn[f]; m != 0; m &= m - 1) {
+                            int bit = 0;
+                            while (((m >> bit) & 1ULL) == 0) {
+                                ++bit;
+                            }
+                            const int cu = ub + (bit & 7) + ((c & 1) ? 1 : 0);
+                            const int cv = vb + (bit >> 3) + ((c & 2) ? 1 : 0);
+                            const int d = std::abs(cu - tu) + std::abs(cv - tv);
+                            if (d < best) {
+                                best = d;
+                                u = (float)cu;
+                                v = (float)cv;
+                            }
+                        }
+                    }
+                    Vector3 q;
+                    if (ax == 0) {
+                        q = Vector3((float)((hi ? b.x1 : b.x0) - gx0) * STUD_M, v * PLATE_M,
+                                (u - (float)gz0) * STUD_M);
+                    } else if (ax == 1) {
+                        q = Vector3((u - (float)gx0) * STUD_M, (float)(hi ? b.p1 : b.p0) * PLATE_M,
+                                (v - (float)gz0) * STUD_M);
+                    } else {
+                        q = Vector3((u - (float)gx0) * STUD_M, v * PLATE_M,
+                                (float)((hi ? b.z1 : b.z0) - gz0) * STUD_M);
+                    }
+                    bpts.push_back(q);
+                    bnrm.push_back(NRM[f]);
+                }
+            }
+        }
+    }
+    const int nb = (int)bpts.size();
     // The eight cells round a point's sample point, and their weights.
     auto corners_at = [&](const Vector3 &pos, const Vector3 &nrm, int &ix, int &iy, int &iz,
             float &fx, float &fy, float &fz) {
@@ -6013,13 +6218,15 @@ static void sky_light_pass(MeshBuf &m, const TileSample &s, bool surface, Dictio
     // Block light answers for every open cell a vertex reads, sky or not.
     Vector3i blo(INT_MAX, INT_MAX, INT_MAX), bhi(INT_MIN, INT_MIN, INT_MIN);
     bool dark = false;
-    for (int i = 0; i < n + ns; ++i) {
+    for (int i = 0; i < n + ns + nb; ++i) {
         int ix, iy, iz;
         float fx, fy, fz;
         if (i < n) {
             corners(i, ix, iy, iz, fx, fy, fz);
-        } else {
+        } else if (i < n + ns) {
             corners_at(stud_at(i - n), UP, ix, iy, iz, fx, fy, fz);
+        } else {
+            corners_at(bpts[(size_t)(i - n - ns)], bnrm[(size_t)(i - n - ns)], ix, iy, iz, fx, fy, fz);
         }
         for (int k = 0; k < 8; ++k) {
             const int x = ix + (k & 1), c = iy + ((k >> 1) & 1), z = iz + ((k >> 2) & 1);
@@ -6123,6 +6330,32 @@ static void sky_light_pass(MeshBuf &m, const TileSample &s, bool surface, Dictio
         float *b = studs->ptrw() + (size_t)k * SS;
         b[16] = wsum > 1e-5f ? std::clamp(sum / wsum / (float)SKY_MAX, 0.0f, 1.0f) : 1.0f;
         b[17] = wsum > 1e-5f ? std::clamp(bs / wsum / (float)SKY_MAX, 0.0f, 1.0f) : 0.0f;
+    }
+    // The overlay bricks' faces: the open cells' blend, as a vertex's.
+    for (int k = 0; k < nb; ++k) {
+        int ix, iy, iz;
+        float fx, fy, fz;
+        corners_at(bpts[(size_t)k], bnrm[(size_t)k], ix, iy, iz, fx, fy, fz);
+        float sum = 0.0f, wsum = 0.0f, bs = 0.0f;
+        for (int c8 = 0; c8 < 8; ++c8) {
+            const int x = ix + (c8 & 1), c = iy + ((c8 >> 1) & 1), z = iz + ((c8 >> 2) & 1);
+            if (g.opaque(x, c, z) && !g.sky(x, c, z)) {
+                continue;
+            }
+            const float w = ((c8 & 1) ? fx : 1.0f - fx) * (((c8 >> 1) & 1) ? fy : 1.0f - fy)
+                    * (((c8 >> 2) & 1) ? fz : 1.0f - fz);
+            sum += w * (float)g.light(x, c, z);
+            if (lit) {
+                bs += w * (float)g.block_light(x, c, z);
+            }
+            wsum += w;
+        }
+        OutBrick &ob = *obs[(size_t)(k / 24)];
+        const int f = (k / 4) % 6, cc = k % 4;
+        const float lv = wsum > 1e-5f ? sum / wsum : 0.0f;
+        ob.sky[f][cc] = (uint8_t)std::clamp((int)std::lround(lv), 0, SKY_MAX);
+        const int bl = (int)std::lround(wsum > 1e-5f ? bs / wsum : 0.0f);
+        ob.blk[f] = (uint8_t)std::clamp(std::max((int)ob.blk[f] * (cc > 0 ? 1 : 0), bl), 0, SKY_MAX);
     }
     out["sky_ms"] = (double)(Time::get_singleton()->get_ticks_usec() - t0) / 1000.0;
     out["sky_filled"] = g.cells_filled;
@@ -6284,6 +6517,119 @@ double BrickTerrain::block_light_at(Vector3 point) {
         return 0.0;
     }
     return (double)g.block_light(x, c, z);
+}
+
+/// A colour as one whole number of 24 bits (8 a channel, r at bit 0): exact
+/// in a float, which the overlay's instance colour is.
+static inline float pack_rgb(float r, float g, float b) {
+    auto q = [](float v) { return (int)std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f); };
+    return (float)(q(r) | (q(g) << 8) | (q(b) << 16));
+}
+
+Dictionary BrickTerrain::overlay_pick(const Array &lists, Vector3 eye, Vector3 forward, double range_m,
+        double cos_half, int max_bricks) {
+    constexpr int IN = 17, OUT = 20;
+    struct Cand {
+        float d2;
+        const float *b;
+        int sky[4];   ///< the faces' sky words, merged
+        int blk;
+        int drawn;
+    };
+    std::vector<Cand> cands;
+    std::unordered_map<uint64_t, size_t> keys;
+    const float r = (float)range_m, r2 = r * r;
+    const float ch = (float)cos_half;
+    const Vector3 f = forward.length_squared() > 1e-12f ? forward.normalized() : Vector3(0, 0, -1);
+    int64_t seen = 0;
+    // The arrays stay referenced by `lists` for the call: pointers into them hold.
+    for (int64_t li = 0; li < lists.size(); ++li) {
+        const Variant &v = lists[li];
+        if (v.get_type() != Variant::PACKED_FLOAT32_ARRAY) {
+            continue;
+        }
+        const PackedFloat32Array a = v;   // shares the list's buffer (copy on write)
+        const int64_t n = a.size() / IN;
+        const float *p = a.ptr();
+        seen += n;
+        for (int64_t i = 0; i < n; ++i) {
+            const float *b = p + i * IN;
+            const Vector3 lo(b[0], b[1], b[2]), hi(b[3], b[4], b[5]);
+            // Distance to the box.
+            const Vector3 q(std::clamp(eye.x, lo.x, hi.x), std::clamp(eye.y, lo.y, hi.y),
+                    std::clamp(eye.z, lo.z, hi.z));
+            const float d2 = (q - eye).length_squared();
+            if (d2 > r2) {
+                continue;
+            }
+            // In the cone: its bounding sphere.
+            const Vector3 mid = (lo + hi) * 0.5f;
+            const Vector3 to = mid - eye;
+            const float rad = (hi - lo).length() * 0.5f;
+            const float tl = to.length();
+            if (tl > rad && to.dot(f) < tl * ch - rad) {
+                continue;
+            }
+            const uint64_t k = ((uint64_t)(uint32_t)(int32_t)std::lround(lo.x / STUD_M) & 0x1FFFFFULL)
+                    | (((uint64_t)(uint32_t)(int32_t)std::lround(lo.z / STUD_M) & 0x1FFFFFULL) << 21)
+                    | (((uint64_t)(uint32_t)floor_div((int)std::lround(lo.y / PLATE_M), PLATES_PER_CELL)
+                            & 0x3FFFFFULL) << 42);
+            auto found = keys.find(k);
+            if (found != keys.end()) {
+                // The same brick from another tile: each face from the list
+                // that drew more of it.
+                Cand &c = cands[found->second];
+                const int dr = (int)b[16];
+                for (int f = 0; f < 6; ++f) {
+                    const int mine = (c.drawn >> (4 * f)) & 15, theirs = (dr >> (4 * f)) & 15;
+                    if (theirs <= mine) {
+                        continue;
+                    }
+                    for (int cc = 0; cc < 4; ++cc) {
+                        const int n = f * 4 + cc, wq = n / 6, sh = 4 * (n % 6);
+                        c.sky[wq] = (c.sky[wq] & ~(15 << sh)) | (((int)b[11 + wq] >> sh & 15) << sh);
+                    }
+                    c.blk = (c.blk & ~(15 << (4 * f))) | (((int)b[15] >> (4 * f) & 15) << (4 * f));
+                    c.drawn = (c.drawn & ~(15 << (4 * f))) | (theirs << (4 * f));
+                }
+                continue;
+            }
+            keys.emplace(k, cands.size());
+            cands.push_back(Cand{ d2, b, { (int)b[11], (int)b[12], (int)b[13], (int)b[14] }, (int)b[15],
+                    (int)b[16] });
+        }
+    }
+    const int64_t total = (int64_t)cands.size();
+    const int64_t take = std::min<int64_t>(total, std::max(0, max_bricks));
+    float far_m = r;
+    if (take < total) {
+        std::nth_element(cands.begin(), cands.begin() + take, cands.end(),
+                [](const Cand &x, const Cand &y) { return x.d2 < y.d2; });
+        far_m = std::sqrt(cands[(size_t)take].d2);
+    }
+    PackedFloat32Array buf;
+    buf.resize(take * OUT);
+    float *w = buf.ptrw();
+    for (int64_t i = 0; i < take; ++i) {
+        const Cand &cd = cands[(size_t)i];
+        const float *b = cd.b;
+        const float sx = b[3] - b[0], sy = b[4] - b[1], sz = b[5] - b[2];
+        const float o[OUT] = {
+            sx, 0.0f, 0.0f, (b[0] + b[3]) * 0.5f,
+            0.0f, sy, 0.0f, (b[1] + b[4]) * 0.5f,
+            0.0f, 0.0f, sz, (b[2] + b[5]) * 0.5f,
+            pack_rgb(b[7], b[8], b[9]), (float)cd.blk, 0.0f, b[6] * 2.0f + (b[10] > 0.5f ? 1.0f : 0.0f),
+            (float)cd.sky[0], (float)cd.sky[1], (float)cd.sky[2], (float)cd.sky[3],
+        };
+        std::memcpy(w + i * OUT, o, sizeof(o));
+    }
+    Dictionary out;
+    out["buffer"] = buf;
+    out["count"] = take;
+    out["far_m"] = far_m;
+    out["seen"] = seen;
+    out["inside"] = total;
+    return out;
 }
 
 Dictionary BrickTerrain::build_section(int tx, int sy, int tz) {
@@ -6855,11 +7201,16 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
         }
         if (p.kind == PIECE_BRICK || p.kind == PIECE_TILE) {
             note_brick(gx0 + p.brick_x(), gz0 + p.brick_z(), p.brick_sx(), p.brick_sz(),
-                    p.top - (PLATES_PER_CELL - 1), p.top + 1, p.mat, col);
+                    p.top - (PLATES_PER_CELL - 1), p.top + 1, p.mat, col,
+                    p.overlay == 0 && p.studded != 0);
+            // Its top as this tile draws it (the piece's part of the brick).
+            note_face(gx0 + p.brick_x(), gz0 + p.brick_z(),
+                    p.overlay != 0 ? p.top + 1 : p.top - (PLATES_PER_CELL - 1), 2,
+                    gx0 + p.ox, gz0 + p.oz, gx0 + p.ox + p.sx, gz0 + p.oz + p.sz);
             if (p.overlay != 0) {
                 // The tile or plate laid on it: its own one-plate brick.
                 note_brick(gx0 + p.brick_x(), gz0 + p.brick_z(), p.brick_sx(), p.brick_sz(),
-                        p.top + 1, p.top + 2, p.mat, col);
+                        p.top + 1, p.top + 2, p.mat, col, p.studded != 0);
             }
         }
         const float top = (float)(p.top + 1) * PLATE_M;
@@ -6902,6 +7253,11 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
             // The overlay's top, one plate up. The brick's own top is NOT
             // emitted: it is covered exactly, so it is culled.
             const float oy = top + OVERLAY_M;
+            // The overlay's top and lips: its one-plate brick's box.
+            const bool boxed = g_face_bevel <= 0.0f && (p.kind == PIECE_BRICK || p.kind == PIECE_TILE);
+            if (boxed) {
+                m.facet = BOXED_FACE;
+            }
             // The top's bevel runs down onto the overlay's OWN lip walls
             // (always drawn), so it needs nobody else; the lips are square.
             m.quad(Vector3(0, 1, 0), col, bface,
@@ -6933,6 +7289,9 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                 Vector3(x1, lb, z0), Vector3(x1, lb, z1),
                 Vector3(x1, oy, z1), Vector3(x1, oy, z0),
                 Vector2(0, lip_z.y), Vector2(lip_z.x, lip_z.y), Vector2(lip_z.x, 0), Vector2(0, 0), 0, LIP_SQ);
+            if (boxed) {
+                m.facet = 0;
+            }
         } else {
             // A side is convex where the ground DROPS AWAY, because that is
             // where a wall face exists for the chamfer to meet. Level with a
@@ -7062,11 +7421,20 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                         }
                     }
                 }
+                // Its top: its brick's box (sides are left flat: one can
+                // run down past its brick, where no box is).
+                const bool boxed = g_face_bevel <= 0.0f && (p.kind == PIECE_BRICK || p.kind == PIECE_TILE);
+                if (boxed) {
+                    m.facet = BOXED_FACE;
+                }
                 m.quad(Vector3(0, 1, 0), col, bface,
                     Vector3(x0, top, z0), Vector3(x1, top, z0),
                     Vector3(x1, top, z1), Vector3(x0, top, z1),
                     uv0, uv0 + Vector2(face.x, 0), uv0 + face, uv0 + Vector2(0, face.y),
                     0, square, cutc);
+                if (boxed) {
+                    m.facet = 0;
+                }
                 // THE SKIRT. A square edge beside a LEVEL neighbour can still
                 // face that neighbour's half-groove: the rule above decides a
                 // whole piece edge, so a 2x4 edge that is square because one
@@ -8083,6 +8451,9 @@ void BrickTerrain::_bind_methods() {
         &BrickTerrain::get_bedrock_plate);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("build_section", "tx", "sy", "tz"),
         &BrickTerrain::build_section);
+    ClassDB::bind_static_method("BrickTerrain",
+        D_METHOD("overlay_pick", "lists", "eye", "forward", "range_m", "cos_half", "max_bricks"),
+        &BrickTerrain::overlay_pick);
     ClassDB::bind_static_method("BrickTerrain",
         D_METHOD("build_coarse", "tx0", "tz0", "span", "step"),
         &BrickTerrain::build_coarse);
