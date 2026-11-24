@@ -4,8 +4,9 @@ extends SceneTree
 ##
 ##     godot --headless --path . --script res://tools/probes/fluid_probe.gd
 ##
-## - spreading water's new tops rise from their floor, level (no flash up to a
-##   brick, no tilted corners), and keep rising when meshed again mid-way;
+## - spreading water's new tops pop in at their height, level, and hold it;
+##   poured water's tops ease down as they give water, and keep easing when
+##   meshed again mid-way (no rise, no snap, no tilted corners);
 ## Every test stands on a flat stone floor laid by terrain edits high above
 ## the generated world (course FLOOR), so the ground under it is known
 ## exactly. What each check is for:
@@ -76,6 +77,38 @@ func _info(x: int, b: int, z: int) -> Dictionary:
 	return BrickFluid.cell_info(Vector3i(x, b, z))
 
 
+## Tick and mesh tile (-250, 0) `ticks` times, at once (no time passes):
+## its tops' easing offsets (CUSTOM0.x) at the last mesh -- eased (any),
+## falling (above their level), the worst rise, tilted tops.
+func _ease_run(ticks: int) -> Dictionary:
+	var r := { "tops": 0, "moved": 0, "falling": 0, "worst_up": 0.0, "tilted": 0 }
+	for t in ticks:
+		BrickFluid.tick_now(1)
+		var em: Dictionary = BrickFluid.build_tile_mesh(-250, 0)
+		var arr: Array = em.water
+		if arr.is_empty():
+			continue
+		var v: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var n: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+		var c: PackedFloat32Array = arr[Mesh.ARRAY_CUSTOM0]
+		r.falling = 0
+		for q in range(0, v.size(), 4):
+			if n[q].y < 0.9:
+				continue
+			r.tops += 1
+			if absf(c[q * 4]) > 0.001:
+				r.moved += 1
+			if c[q * 4] > 0.01:
+				r.falling += 1
+			r.worst_up = maxf(r.worst_up, -c[q * 4])
+			var s0 := v[q].y + c[q * 4]
+			for k in range(1, 4):
+				if absf(v[q + k].y + c[(q + k) * 4] - s0) > 0.001:
+					r.tilted += 1
+					break
+	return r
+
+
 func _region_units(x0: int, x1: int, z0: int, z1: int, b: int) -> int:
 	var n := 0
 	for x in range(x0, x1 + 1):
@@ -100,48 +133,29 @@ func _run() -> void:
 	BrickFluid.reset(20.0, false)
 	BrickFluid.set_centre(Vector3(0, 0, 0), 100000.0)
 
-	# 0. Spreading water eases each new top up from its floor, level: a top
-	# never starts above its own level, nor tilted (the easing was keyed by
-	# the grid corner two cells share, so a new cell took its neighbour's old
-	# height: it flashed up to a brick and dropped -- the user, 2026-11-23).
+	# 0. Spreading water pops each new top in at its own height, level, and
+	# holds it: it eases only when its level changes (rising from its floor,
+	# a cell that took water rose and at once fell as it passed water on --
+	# choppy, the user, 2026-11-24; before that the easing was keyed by the
+	# grid corner two cells share and a new cell flashed up to a brick).
 	_sec("0")
 	# (Wide enough that it settles on it: a calm world is checked later.)
 	BrickTerrain.fill_box(Vector3i(-8010, FLOOR * 3, -6), Vector3i(-7960, FLOOR * 3 + 2, 36), 4, false)
 	BrickFluid.terrain_changed(Vector3i(-8010, FLOOR * 3, -6), Vector3i(-7960, FLOOR * 3 + 2, 36))
-	BrickFluid.place(Vector3i(-7985, W, 15), 1, BrickFluid.SOURCE, 3)
-	var worst_up := 0.0
-	var tilted := 0
-	var tops := 0
-	var rising := 0
-	for t in 14:
-		BrickFluid.tick_now(1)
-		var em: Dictionary = BrickFluid.build_tile_mesh(-250, 0)
-		var arr: Array = em.water
-		if arr.is_empty():
-			continue
-		var v: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
-		var n: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
-		var c: PackedFloat32Array = arr[Mesh.ARRAY_CUSTOM0]
-		rising = 0
-		for q in range(0, v.size(), 4):
-			if n[q].y < 0.9:
-				continue
-			tops += 1
-			if c[q * 4] < -0.01:
-				rising += 1
-			var s0 := v[q].y + c[q * 4]
-			for k in range(1, 4):
-				if absf(v[q + k].y + c[(q + k) * 4] - s0) > 0.001:
-					tilted += 1
-					break
-			for k in 4:
-				worst_up = maxf(worst_up, c[(q + k) * 4])
-	_ok("spreading tops ease up from their floor, level", tops > 50 and worst_up <= 0.001 and tilted == 0,
-			"%d tops, worst start %.3f m above, %d tilted" % [tops, worst_up, tilted])
-	# Meshed again and again within milliseconds, the tops are still on their
-	# way up: each mesh eases on from where the last was DRAWN (it snapped a
-	# rising cell to its full height -- the user, 2026-11-23, "jumps up").
-	_ok("a tile meshed mid-ease keeps its tops rising", rising > 20, "%d still rising" % rising)
+	BrickFluid.place(Vector3i(-7995, W, 15), 1, BrickFluid.SOURCE, 3)
+	var e0 := _ease_run(10)
+	_ok("a source's new tops pop in at their height, level", e0.tops > 50 and e0.moved == 0 and e0.tilted == 0,
+			"%d tops, %d eased, %d tilted" % [e0.tops, e0.moved, e0.tilted])
+	# Poured water spreading: its cells give water away, so they ease DOWN,
+	# and meshed again and again within milliseconds they are still on their
+	# way: each mesh eases on from where the last was DRAWN (a remesh snapped
+	# a moving top to its end -- the user, 2026-11-23, "jumps").
+	BrickFluid.place(Vector3i(-7975, W, 15), 1, BrickFluid.STILL, 3)
+	var e1 := _ease_run(3)
+	# (A cell may take a second half tile as the water moves on -- a real
+	# rise, eased; never a rise from its floor.)
+	_ok("poured water's tops ease down as they give water", e1.falling >= 1 and e1.worst_up < 0.071 and e1.tilted == 0,
+			"%d still falling, worst rise %.3f m, %d tilted" % [e1.falling, e1.worst_up, e1.tilted])
 	# Its water away again: later sections clear the terrain's edits, and a
 	# source without its floor would pour onto the generated world below.
 	for x in range(-8010, -7959):
