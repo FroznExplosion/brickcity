@@ -27,16 +27,19 @@ city's, at most 10 floors.
 
 ## 2. What looks or works wrong (what stage 1 showed)
 
-1. **Colours.** A cell holds a material, not a colour; each building colour
-   goes to the nearest terrain material, so walls come out in stripes of
-   stone, sandstone, clay and terracotta, nothing like the city's palette.
-2. **Strength.** The ground holds at 4x a building brick's tension
-   (ground_collapse TERRAIN_TIMES): a tower with half its footprint dug away
-   lost 6 bricks and hung over the hole.
-3. **Tall things are not surveyed whole.** ground_collapse's survey box is
-   at most 32 x 96 x 32 plates (MAX_BOX); a 6-floor tower is 122 plates. Dug
-   out from under all of it, 2,706 bricks let go and the top of the tower
-   still stood in the air.
+1. **Colours** (fixed in stage 2). A cell holds a material, not a colour;
+   each building colour went to the nearest terrain material, so walls came
+   out in stripes of stone, sandstone, clay and terracotta.
+2. **Strength** (fixed in stage 2). The ground holds at 4x a building
+   brick's tension (ground_collapse TERRAIN_TIMES): a tower with half its
+   footprint dug away lost 6 bricks and hung over the hole.
+3. **Tall things fall whole** -- not a problem after all: dug out from under
+   all of it, the tower (122 plates) dropped into the hole as pieces and
+   landed (the survey grows upward, TerrainCollapse GROW_UP; a first look at
+   the picture misread it as standing).
+3b. **No tipping.** The solve is tension, not balance: half its footprint
+   gone, a tower holds on the other half's studs. The city's buildings tip
+   (Docs/StoreyUnits, the storey-unit landings); the ground's survey does not.
 4. **Brick shapes.** The terrain draws its own bond (staggered bricks by
    course), not the building's bricks; a placed-brick rect exists for player
    builds (`q_placed`), not yet for stamped ones.
@@ -48,7 +51,19 @@ city's, at most 10 floors.
 
 ## 3. Stages
 
-2. **Building materials.** Append terrain materials for the building
+**Stage 2 done 2026-11-24:** building materials MAT_FIL_BASE (64) + the
+filament index (brick_terrain.h: is_building_material, clamp_material,
+material_filament): the city's colours, studded, strong-bonded. The survey
+takes `building_times` (ground_collapse passes TERRAIN_TIMES): a building
+brick weighs 4x its cells there, so at the ground's 4x tension it holds as a
+city brick does. Each stamped brick is BrickTerrain.mark_placed -- one brick,
+kept whole -- but only where it fills whole terrain courses: a storey is 20
+plates (6 courses + a 2-plate slab), so most floors sit off the ground's
+course lines and stay bond cells (3,204 of 22,856 cells placed). Half dug:
+166 bricks let go (6 before); it still stands on the other half (3b).
+Mined, a building brick drops no item (ItemCatalog has none for them).
+
+2. **Building materials.** (done, above) Append terrain materials for the building
    palette's colours (or a colour byte per edited cell, if the edit table can
    carry one): walls the city's colours. Each material its own strength
    (building bricks at x1, ground at x4), read by the survey per cell.
@@ -60,7 +75,11 @@ city's, at most 10 floors.
    nothing standing over the hole.
 4. **Placed bricks keep their shapes.** Stamped bricks recorded as placed
    rects, so the mesher draws the building's own bricks, and the overlay's
-   boxes are its bricks.
+   boxes are its bricks. Needs placed bricks at PLATE offsets, not only on
+   the ground's courses (a storey is 20 plates, the ground's course 3).
+4b. **Tipping.** A building whose support is cut on one side leans and falls
+   over (balance about its remaining support), as the city's storey units do.
+4c. **Items.** A mined building brick gives a block item of its colour.
 5. **Glass.** A translucent terrain material (the brick shader's glass
    pass); windows glazed again.
 6. **Interiors.** Doors and furniture as placed assets on cells (the asset
