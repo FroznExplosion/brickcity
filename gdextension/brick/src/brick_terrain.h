@@ -925,6 +925,20 @@ public:
     static int get_deep_section_plates();
     static int get_bedrock_plate();
     static Dictionary build_section(int tx, int sy, int tz);
+    /// THE BRICK OVERLAY's pick (Docs/BrickOverlay.md 3): from bakes'
+    /// `overlay_bricks` lists (Array of PackedFloat32Array, 17 floats a
+    /// brick), the bricks within `range_m` of `eye` (to their box) and inside
+    /// the cone round `forward` (cos of its half angle; a brick's bounding
+    /// sphere counts), deduped by corner and course (each face's light from the list that drew
+    /// more of it), nearest first, up to
+    /// `max_bricks`. Returns {buffer: MultiMesh TRANSFORM_3D + colours +
+    /// custom data (20 floats an instance), count, far_m: the farthest picked
+    /// brick's distance (range_m when none was left out), seen: bricks read}.
+    /// The instance: transform = the box (scale its size, origin its middle),
+    /// colour = (rgb as 24 bits, block word, 0, material * 2 + studs), custom = the faces' sky
+    /// words (overlay_bricks' floats 11-14). Main thread, no renderer.
+    static Dictionary overlay_pick(const Array &lists, Vector3 eye, Vector3 forward, double range_m,
+            double cos_half, int max_bricks);
     /// FOR PROBES (Docs/MineWorld.md 20): the flat mesh and colliders of a
     /// tile (sy = INT32_MIN) or deep section, checked against the field.
     ///   exposed, undrawn   faces of owned solid cells against OPEN air, and

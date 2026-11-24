@@ -10,8 +10,16 @@ extends SceneTree
 ## middle lies on the surface of some listed brick (the overlay must cover
 ## every face it will push back); for every listed brick: some triangle lies
 ## on it (no brick laid where nothing is drawn); no two bricks overlap.
+## With sky light on: some surface bricks say their top has studs, and the
+## deep sections' bricks have dark corners (the light the boxes are drawn
+## with: 17 floats a brick, 4 bits a face's corner).
 
 const EPS := 0.004
+const STRIDE := 17
+
+var _studded := 0
+var _dark_corners := 0
+var _lit_corners := 0
 
 var failures := 0
 
@@ -27,6 +35,7 @@ func _initialize() -> void:
 	BrickTerrain.set_coarse_smooth_step(0)
 	BrickTerrain.clear_terrain_edits()
 	BrickTerrain.set_face_bevel(0.0)
+	BrickTerrain.set_sky_light(true)
 
 	var tiles: Array[Vector2i] = []
 	for i in 8:
@@ -46,6 +55,10 @@ func _initialize() -> void:
 			secs += 1
 			_check("section %s,%d" % [t, sy - k], d, Vector3(t.x * ts, 0.0, t.y * ts))
 	_expect(secs > 0, "some deep sections had faces (%d)" % secs)
+	_expect(_studded > 0, "some bricks' tops have studs (%d)" % _studded)
+	_expect(_dark_corners > 0 and _lit_corners > 0,
+			"bricks' corners carry the sky light (%d dark, %d open air)" % [_dark_corners, _lit_corners])
+	BrickTerrain.set_sky_light(false)
 	BrickTerrain.set_deep_tier(false)
 	BrickTerrain.set_generator(0)
 	BrickTerrain.set_bond_top(false)
@@ -62,17 +75,27 @@ func _expect(ok: bool, what: String) -> void:
 
 func _check(tag: String, d: Dictionary, origin: Vector3) -> void:
 	var b: PackedFloat32Array = d.get("overlay_bricks", PackedFloat32Array())
-	var n := b.size() / 10
+	var n := b.size() / STRIDE
 	var lo: Array[Vector3] = []
 	var hi: Array[Vector3] = []
 	# Bricks by stud column they cover, for the lookup.
 	var stud := BrickWorld.get_stud_metres()
 	var cols := {}
 	for i in n:
-		var a := Vector3(b[i * 10], b[i * 10 + 1], b[i * 10 + 2])
-		var c := Vector3(b[i * 10 + 3], b[i * 10 + 4], b[i * 10 + 5])
+		var a := Vector3(b[i * STRIDE], b[i * STRIDE + 1], b[i * STRIDE + 2])
+		var c := Vector3(b[i * STRIDE + 3], b[i * STRIDE + 4], b[i * STRIDE + 5])
 		lo.append(a)
 		hi.append(c)
+		if b[i * STRIDE + 10] > 0.5:
+			_studded += 1
+		for h in 4:
+			var packed := int(b[i * STRIDE + 11 + h])
+			for q in 6:
+				var lv := (packed >> (4 * q)) & 15
+				if lv == 15:
+					_lit_corners += 1
+				elif lv < 8:
+					_dark_corners += 1
 		for x in range(floori(a.x / stud + 0.01), ceili(c.x / stud - 0.01)):
 			for z in range(floori(a.z / stud + 0.01), ceili(c.z / stud - 0.01)):
 				var k := Vector2i(x, z)

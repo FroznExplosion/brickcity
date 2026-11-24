@@ -73,6 +73,16 @@ var curve_cells := 0
 ## The tile's collider, owned directly rather than through nodes.
 var _body := RID()
 
+## THE BRICK OVERLAY (Docs/BrickOverlay.md): the bake's `overlay_bricks`
+## (17 floats a brick, terrain frame; brick_terrain.cpp bricks_floats), for
+## TerrainBricks. Every tile in the
+## tree with a list is in `overlay_tiles`; `overlay_version` counts every
+## change to what they show (a build, a tile in or out, shown or hidden), so
+## TerrainBricks picks again only then.
+var overlay := PackedFloat32Array()
+static var overlay_tiles := {}
+static var overlay_version := 0
+
 
 ## NOT physics-interpolated (Docs/MineWorld.md 20): a tile never moves between
 ## ticks, and its pooled stud MultiMeshes are refilled with another layout --
@@ -153,6 +163,8 @@ func build(tile_x: int, tile_z: int, material: Material,
 
 	_material = material
 	_far_surface = _add_surface(data["mesh"], material, 0.0, 0.0)
+	overlay = data.get("overlay_bricks", PackedFloat32Array())
+	overlay_version += 1
 	if not near.is_empty():
 		add_bevel(near)
 	_data = data
@@ -744,6 +756,8 @@ func _add_collision(boxes: PackedFloat32Array) -> void:
 ## The collider has no node: when the tile is moved (an origin shift moves
 ## its streamer, Docs/MineWorld.md 15) the body is moved with it.
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_VISIBILITY_CHANGED:
+		overlay_version += 1
 	if what == NOTIFICATION_TRANSFORM_CHANGED and _body.is_valid():
 		PhysicsServer3D.body_set_state(_body, PhysicsServer3D.BODY_STATE_TRANSFORM,
 				global_transform)
@@ -757,9 +771,13 @@ func _free_body() -> void:
 
 func _enter_tree() -> void:
 	_live_tiles += 1
+	overlay_tiles[get_instance_id()] = self
+	overlay_version += 1
 
 
 func _exit_tree() -> void:
+	overlay_tiles.erase(get_instance_id())
+	overlay_version += 1
 	_free_body()
 	_release_multimeshes()
 	_live_tiles -= 1

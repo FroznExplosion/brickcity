@@ -2,6 +2,9 @@ shader_type spatial;
 render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 #include "res://shaders/weather.gdshaderinc"
 #include "res://shaders/print_underside.gdshaderinc"
+#ifdef TERRAIN_BOX
+#include "res://shaders/brick_boxed.gdshaderinc"
+#endif
 
 // L in heightfield_test: tint every piece of ground by its LOD level. 0 is
 // the detailed tiles; a coarse block says its own level per instance.
@@ -232,7 +235,79 @@ varying float l_spec;
 varying float l_rim;
 #endif
 
+#ifdef TERRAIN_BOX
+// THE BRICK OVERLAY (Docs/BrickOverlay.md): this copy draws the real bricks
+// laid over the flat ground near the camera (TerrainBricks), one instanced
+// bevelled box a brick (BrickNear.bevel_box_mesh), scaled to the brick. What
+// the flat mesh's vertices carry comes from the instance instead:
+//   transform     the brick's box (scale its size, origin its middle)
+//   COLOR         whole numbers: r its colour (8 bits a channel, red at bit
+//                 0), g its faces' block light (face f at bit 4 f), a
+//                 material * 2 + 1 if its top has studs
+//   CUSTOM        its faces' sky light, 4 bits a face's corner: face f's
+//                 corner c is level 4 f + c, six to a word
+// Faces: +x 0, -x 1, +y 2, -y 3, +z 4, -z 5; a face's corner: bit 0 its u
+// max, bit 1 its v max (x faces u z, v y; y faces u x, v z; z faces u x, v
+// y). A bevel's facet takes the light of the face its normal leans to most.
+// UV and UV2 are the box face's (brick_box_uv): one brick a face, so the seam
+// and the print are the brick's own.
+// The words are whole numbers, exact in a float: read as they are (`+ 0.5`
+// rounds 2^24 - 1 up to 2^24 in a float, and a lit word read as 0).
+int tb_nibble(float word, int n) {
+    return (int(word) >> (4 * n)) & 15;
+}
+#endif
+
 void vertex() {
+#ifdef TERRAIN_BOX
+    vec3 box_size = brick_box_size(MODEL_MATRIX);
+    vec3 box_safe = max(box_size, vec3(1e-6));
+    // Metres from the brick's middle, the 13 mm bevel taken off.
+    vec3 box_at = VERTEX * box_size - sign(VERTEX) * brick_box_inset(UV.x, box_size);
+    vec4 box_uv = brick_box_uv(box_size, box_at, NORMAL);
+    v_uv = box_uv.xy;
+    v_face = box_uv.zw;
+    v_facet = 0.0;
+    if (UV.y > 0.5) {
+        // A bevel's facet: no piece (no seam, no shaded chamfer), plain on a
+        // top's bevel. Its normal is 45 degrees in metres; the instance's
+        // scale would lean it towards the brick's long side.
+        v_uv = vec2(0.5, 1.0);
+        v_face = vec2(-1.0);
+        v_facet = 1.0;
+        NORMAL = NORMAL / box_safe;
+    }
+    // Its face (by the mesh's own normal, a facet's to y first) and its
+    // corner in that face.
+    vec3 box_n = abs(UV.y > 0.5 ? NORMAL * box_safe : NORMAL);
+    int box_face;
+    int box_c;
+    if (box_n.y >= box_n.x - 1e-4 && box_n.y >= box_n.z - 1e-4) {
+        box_face = (UV.y > 0.5 ? (NORMAL * box_safe).y : NORMAL.y) > 0.0 ? 2 : 3;
+        box_c = (VERTEX.x > 0.0 ? 1 : 0) | (VERTEX.z > 0.0 ? 2 : 0);
+    } else if (box_n.x >= box_n.z) {
+        box_face = (UV.y > 0.5 ? (NORMAL * box_safe).x : NORMAL.x) > 0.0 ? 0 : 1;
+        box_c = (VERTEX.z > 0.0 ? 1 : 0) | (VERTEX.y > 0.0 ? 2 : 0);
+    } else {
+        box_face = (UV.y > 0.5 ? (NORMAL * box_safe).z : NORMAL.z) > 0.0 ? 4 : 5;
+        box_c = (VERTEX.x > 0.0 ? 1 : 0) | (VERTEX.y > 0.0 ? 2 : 0);
+    }
+    VERTEX = box_at / box_safe;
+    int box_code = int(COLOR.a + 0.5);
+    v_studded = float(box_code & 1);
+    v_material = float(box_code >> 1) / 255.0;
+    v_smooth_far = 0.0;
+    v_flat_normal = normalize(mat3(MODEL_MATRIX) * NORMAL);
+#ifdef SKY_LIGHT
+    int box_l = box_face * 4 + box_c;
+    v_sky = float(tb_nibble(INSTANCE_CUSTOM[box_l / 6], box_l % 6)) / 15.0;
+    v_block = float(tb_nibble(COLOR.g, box_face)) / 15.0;
+#endif
+    int box_rgb = int(COLOR.r);
+    COLOR = vec4(float(box_rgb & 255), float((box_rgb >> 8) & 255), float((box_rgb >> 16) & 255),
+            255.0 * float(box_code & 1)) / 255.0;
+    v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+#else
     v_uv = UV;
     v_face = UV2;
     v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
@@ -244,6 +319,7 @@ void vertex() {
 #ifdef SKY_LIGHT
     v_sky = CUSTOM0.a;
     v_block = CUSTOM0.g < 0.25 ? CUSTOM0.g * (255.0 / 60.0) : 0.0;
+#endif
 #endif
 }
 
@@ -325,8 +401,17 @@ void fragment() {
         binormal = normalize((dp_y * duv_x.x - dp_x * duv_y.x) / det);
     }
 
+#ifdef TERRAIN_BOX
+    // Real bevels: the drawn seam and shaded chamfer only fade in with range.
+    float outline_w = smoothstep(outline_blend_begin, outline_blend_end, dist);
+    // The model's axes without the instance's scale (the underside's walk).
+    mat3 model3 = mat3(normalize(MODEL_MATRIX[0].xyz), normalize(MODEL_MATRIX[1].xyz),
+            normalize(MODEL_MATRIX[2].xyz));
+#else
     float outline_w = geo_bevel > 0.5
             ? smoothstep(outline_blend_begin, outline_blend_end, dist) : 1.0;
+    mat3 model3 = mat3(MODEL_MATRIX);
+#endif
     if (seams_enabled && !no_piece) {
         // UV is wrapped by UV2 first. For a real piece UV never leaves
         // [0, UV2), so this changes nothing -- but it lets a coarse LOD hand
@@ -458,7 +543,7 @@ void fragment() {
                 bool on_wall = false;
                 float pfade = 1.0 - smoothstep(under_parallax_range * 0.6, under_parallax_range, dist);
                 if (pfade > 0.0) {
-                    vec3 dv = transpose(mat3(MODEL_MATRIX)) * (mat3(INV_VIEW_MATRIX) * normalize(VERTEX));
+                    vec3 dv = transpose(model3) * (mat3(INV_VIEW_MATRIX) * normalize(VERTEX));
                     if (dv.y > 0.02) {
                         vec2 run = dv.xz / dv.y * pfade;
                         float rl = max(length(run), 1e-4);
