@@ -324,6 +324,10 @@ func _ready() -> void:
 			_run_seams_gate()
 		elif "--gate=bricks" in OS.get_cmdline_user_args():
 			_run_bricks_gate()
+		elif "--gate=mem" in OS.get_cmdline_user_args():
+			# Where the memory goes (Docs/TerrainRegions.md 2, A0).
+			set_meta(&"mem_probe", load("res://tools/probes/terrain_mem_probe.gd").new())
+			get_meta(&"mem_probe").run(self)
 		else:
 			_run_gate()
 

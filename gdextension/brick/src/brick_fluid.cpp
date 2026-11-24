@@ -2764,6 +2764,27 @@ Dictionary BrickFluid::stats() {
     return d;
 }
 
+Dictionary BrickFluid::memory_stats() {
+    std::lock_guard<std::recursive_mutex> lk(g_state);
+    int64_t bytes = 0;
+    int64_t written = 0;
+    int64_t wet = 0;
+    for (const auto &e : g_sec) {
+        const Section &s = *e.second;
+        bytes += (int64_t)(sizeof(Section) + s.c.capacity() * sizeof(Cell) + s.ready.capacity()
+                + s.gtop.capacity() * 2 + s.spring.capacity() * 2 + s.lake.capacity() * 2
+                + s.real.capacity() + s.queued.capacity()) + 48;
+        written += s.written ? 1 : 0;
+        wet += s.wet > 0 ? 1 : 0;
+    }
+    Dictionary d;
+    d["sections"] = (int64_t)g_sec.size();
+    d["bytes"] = bytes;
+    d["written"] = written;
+    d["wet"] = wet;
+    return d;
+}
+
 int BrickFluid::active_count() { return g_active; }
 
 int BrickFluid::section_count() {
@@ -2906,6 +2927,7 @@ void BrickFluid::_bind_methods() {
     ClassDB::bind_static_method("BrickFluid", D_METHOD("sea_mask", "x0", "z0", "size"), &BrickFluid::sea_mask);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("changed_columns"), &BrickFluid::changed_columns);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("stats"), &BrickFluid::stats);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("memory_stats"), &BrickFluid::memory_stats);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("active_count"), &BrickFluid::active_count);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("section_count"), &BrickFluid::section_count);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("still_units", "fluid"), &BrickFluid::still_units);

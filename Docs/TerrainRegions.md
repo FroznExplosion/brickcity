@@ -84,6 +84,50 @@ meshes dominate, they are cut before anything else in this plan, and the
 store must pay for itself out of what it removes (the packs become part of
 the region cache, section 3.4).
 
+### 2.1 A0 measured (2026-11-24)
+
+`res://scenes/terrain_test.tscn -- --gate=mem` (windowed: video memory is
+only real with a renderer; `tools/probes/terrain_mem_probe.gd`, run by the
+gate). Default preset, near radius 4, keep radius 6; spawn, then a 480 m
+flight along X at 40 m, 40 cells carved, then 25 m underground. Debug build,
+other chats' runs going (LOW RAM samples): bytes are right, ms are not.
+
+| what | at spawn | after the flight | note |
+|---|---|---|---|
+| **reflection atlas** (video textures) | 0 | **+536 MB** once one probe shows | the first visible ReflectionProbe makes the whole atlas (256 px x 64 slots); process private +830 MB (the Z1 shares RAM). Every probe in the game is ambient-only (`cull_mask = 0`): the atlas holds nothing. The mine world's held-item box (`MineWorld._held_light`) shows one as soon as the eye is dim |
+| other video textures | 548 MB | 548 MB | materials' own textures only 50 MB (9 ImageTextures ~5.6 MB); the rest is the renderer's (shadow maps, screen targets, sky) |
+| video buffers | 143 MB | 115 MB | |
+| water sections (C++) | 24 MB, 272 | **122 MB, 1,359** | ~90 KB a section; **wet sections are never evicted** (`evict_far` keeps written or wet), so a flight over sea grows it without end (1,030 wet) |
+| near tiles' kept `_data` (CPU) | 74 MB | 35 MB | the bake's whole Dictionary, mesh arrays included, kept after upload |
+| near tiles' meshes (GPU) | 36 MB | 13 MB | 144 -> 217 tiles |
+| near tiles' MultiMeshes (studs, tufts) | 8 MB | 12 MB | 103k -> 154k instances |
+| far rings' meshes (GPU) | 28 MB | 20 MB | 335 meshes |
+| packed tiles (C++ `PackStore`) | 2.3 MB, 144 | 9.9 MB, 704 | 30 B a piece, ~14 KB a pack |
+| trees | 2.1 + 0.7 MB | 2.1 + 0.3 MB | |
+| collision boxes | 4,941 | 5,708 | ~2 MB at an estimated 400 B a box |
+| brick overlay | 0.04 MB | 0.04 MB | |
+| edit table | 0.025 MB | 0.025 MB | 120 edits |
+| Godot static | 464 MB | 457 MB | |
+| process private | 2.2 GB | 2.4 GB (3.0 GB with the atlas) | |
+
+Stage A's store, counted from the real cells (every resident tile and deep
+section sampled as a bake samples it, its columns' material runs counted,
+3 B a run twice plus 2 B a column):
+
+| | runs a column | store each | all resident | a sample today (transient) |
+|---|---|---|---|---|
+| surface band (141 plates) | 6.2 | 39 KB | 8.7 MB, 217 tiles | 378 KB, 4.6 ms |
+| deep section (93 plates) | 2.5 | 17 KB | 4.3 MB, 247 sections | 253 KB, 3.2 ms |
+
+So the store is ~13 MB, smaller than the section estimate (15 MB), and less
+than the packs (10 MB, which it replaces) plus the tiles' kept `_data`
+(35-74 MB, whose mesh arrays it makes unneeded).
+
+What this says to do first: the reflection atlas (one setting, ~530 MB of
+video and ~800 MB of RAM, not terrain: the lighting rig's) and the water's
+wet sections (W3, moved up: unbounded) are bigger than everything the
+terrain keeps put together.
+
 ## 3. Stage B -- bricks fitted per region, regions offset every course
 
 ### 3.1 The rule
