@@ -301,6 +301,13 @@ Both passes must move vertices alike: `WaterShaders.sync_all()` (MineWater, ever
 copies each colour material's uniforms to its depth pass, about 0.15 ms. Other scenes draw
 their water opaque, as before.
 
+**MSAA** (the user plays at 2x): the colour pass is tested per sample against the depth pass's
+one depth per pixel, and looking out low over the water a sample off the pixel's centre lay
+behind it, so far water vanished past a line that moved with the view. The depth pass now also
+steps back by its own change across the pixel (`- 1.5 * fwidth(FRAGCOORD.z)`). The sea gate's
+`sea_look_along_msaa.png` shoots it at MSAA 2x; `WaterShaders.set_debug(true)` draws each
+material's alpha (tiers orange, fluid blue), `sea_look_along_alpha.png`.
+
 ### 7.5 Spreading water eases per cell (2026-11-23)
 
 A new top rises from its floor; a changed one eases from its last height. The easing was keyed
@@ -308,6 +315,14 @@ by grid corner, which two neighbouring cells share: with flat tops at different 
 cell took its neighbour's last height there, flashed up to a brick and dropped, its corners at
 different heights (gaps). Now each cell's four corners are its own keys; merged flat rects
 merge only tops easing alike; a side's foot on a neighbour's top follows that top's easing.
+
+Easing goes on from where a corner is DRAWN when the next mesh is built, not from where it
+was heading: water meshes again every tick, and each new mesh snapped every cell still rising to
+its full height (the "jump up" as water and lava enter a cell). The mesher keeps per corner its
+height, the offset it eased from and that mesh's start (`Ease`, Time ticks, the shader's clock);
+the tile's `swap_s` is the build's time (`built_s`), so both reckon alike. Ease times per fluid
+(`BrickFluid.ease_seconds()`, set as `ease_s`): water 0.2 s, lava 0.5 s -- about a tick of each
+(lava ticks every 5th), so a front creeps on instead of stepping. `fluid_probe` section 0.
 
 ## 8. The LOD
 
