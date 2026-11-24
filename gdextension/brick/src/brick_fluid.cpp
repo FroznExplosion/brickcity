@@ -67,7 +67,7 @@ const FluidDef DEFS[3] = { { 0, 0, false, false }, { 5, 0, true, true }, { 6, 3,
 
 struct Cell {
     uint8_t solid = 0;   ///< bit per plate (0 bottom), from the terrain
-    uint8_t st = 0;      ///< fluid (2 bits) | kind << 2 | ocean << 4
+    uint8_t st = 0;      ///< fluid (2 bits) | kind << 2 | ocean << 4 | held << 5
     uint8_t amt = 0;     ///< units of fluid (half plates), 0..CU
     uint8_t aux = 0;     ///< FLOW: distance. STILL: low 6 bits the edge distance
                          ///< (E_NONE: none known), 0x80 = drying timer set
@@ -76,6 +76,12 @@ struct Cell {
 inline int c_fluid(const Cell &c) { return c.st & 3; }
 inline int c_kind(const Cell &c) { return (c.st >> 2) & 3; }
 inline bool c_ocean(const Cell &c) { return ((c.st >> 4) & 1) != 0; }
+/// FED water over a pond: the pond's own still units under it (0-6), given
+/// back when the feed goes. Infinite water adds water nowhere (the user's
+/// R6, Docs/MineWaterNext.md): a river over a pond leaves its volume as it
+/// was -- it took the cell's water and gave back as much as the river held.
+inline int c_held(const Cell &c) { return (c.st >> 5) & 7; }
+inline uint8_t with_held(uint8_t st, int held) { return (uint8_t)((st & 31) | (held << 5)); }
 inline uint8_t mk_st(int fluid, int kind, bool ocean) {
     return (uint8_t)(fluid | (kind << 2) | (ocean ? 16 : 0));
 }
@@ -240,19 +246,6 @@ inline bool c_lava(const Cell &c) { return c_wet(c) && c_fluid(c) == F_LAVA; }
 
 std::unordered_set<int64_t> g_mesh_requests;
 std::unordered_set<int64_t> g_far_requests;   ///< tiles wanting the coarse mesh
-/// Pits filling from rivers (4.5, stage 8): falls that landed -> the tick
-/// each is next looked at. Looked at every PIT_EVERY ticks while due, until
-/// it stops being a fall. One found OPEN (its body spills somewhere) waits
-/// PIT_OPEN_WAIT ticks before the next look: it used to stay due, so every
-/// waterfall onto open ground was flood-filled (up to PIT_MAX cells) once a
-/// second for good, wherever it was -- and only the first PIT_LOOKS in the
-/// set's order were ever looked at, so past that many such falls a real pit
-/// elsewhere never filled. Landings past the sim radius wait for the player.
-std::unordered_map<int64_t, uint32_t> g_landings;
-constexpr int PIT_EVERY = 10;
-constexpr int PIT_LOOKS = 32;       ///< landings looked at a time
-constexpr int PIT_MAX = 4096;       ///< cells a closed body may have
-constexpr uint32_t PIT_OPEN_WAIT = 30;   ///< ticks before an open landing is looked at again
 
 /// Multiplayer groundwork (MineWater.md 11.5): the cells whose drawn state
 /// changed, with the write count at the time, kept while `g_log_on`. A peer
@@ -877,9 +870,7 @@ void eval(int x, int b, int z) {
         }
     }
     // Still water as deep as what would feed it, or deeper, stays still
-    // (4.2.5 "whose top is lower"; stage 8): a river does not turn a pond
-    // into a river, and a fall lands on a full pit as on ground, so the pit
-    // can fill (pits_fill).
+    // (4.2.5 "whose top is lower"): a river does not turn a pond into a river.
     if (best_fluid != 0 && best_kind != K_SOURCE && c_wet(cur) && c_kind(cur) == K_STILL
             && c_fluid(cur) == best_fluid && (int)cur.amt >= best_amt) {
         best_fluid = 0;
@@ -887,19 +878,18 @@ void eval(int x, int b, int z) {
     if (deferred && best_fluid == 0) {
         g_defer_lava.push_back(pack3(x, b, z));
     }
-    if (best_fluid != 0 && best_kind == K_FALL) {
-        // Where a fall meets ground or a full pit: a pit may be filling.
-        const Cell &d = wcell(x, b - 1, z);
-        if (floor_of(cur.solid) > 0 || (d.solid & 4)
-                || (c_wet(d) && c_kind(d) == K_STILL && floor_u(d.solid) + d.amt >= CU)) {
-            g_landings.emplace(pack3(x, b, z), g_tick);   // kept: an open one's wait stands
-        }
-    }
     if (best_fluid != 0) {
         Cell n = cur;
         int amt = best_amt;
-        if (c_wet(cur) && c_kind(cur) == K_STILL) amt = std::max(amt, (int)cur.amt);
-        n.st = mk_st(best_fluid, best_kind, best_ocean);
+        // The pond under it: a still cell taken over keeps its units as
+        // `held`, a fed one keeps what it held (a source holds nothing: it
+        // is infinite).
+        int held = 0;
+        if (best_kind != K_SOURCE && c_wet(cur) && c_fluid(cur) == best_fluid) {
+            held = c_kind(cur) == K_STILL ? (int)cur.amt : c_held(cur);
+        }
+        amt = std::max(amt, held);
+        n.st = with_held(mk_st(best_fluid, best_kind, best_ocean), held);
         n.amt = (uint8_t)std::min(amt, cap);
         n.aux = (uint8_t)(best_kind == K_FLOW ? best_d : 0);
         if (n.st != cur.st || n.amt != cur.amt || n.aux != cur.aux) {
@@ -909,17 +899,24 @@ void eval(int x, int b, int z) {
     }
     if (!c_wet(cur)) return;
     if (c_kind(cur) == K_FLOW || c_kind(cur) == K_FALL) {
-        // Its feed is gone: what is left is a water brick's water (4.1.6).
+        // Its feed is gone: running water goes, cell by cell from where it
+        // was cut, as Minecraft's does -- infinite water never leaves water
+        // behind (R6; it used to become still water, 4.1.6). A pond it ran
+        // over is given back as it was.
+        const int held = c_held(cur);
         Cell n = cur;
-        n.st = mk_st(cf, K_STILL, false);
-        n.aux = E_NONE;
-        // A stream keeps only a tile, so it dries (13.3); a two-plate stream
-        // cell kept whole was a 2-deep core its tile-deep edges never dried
-        // round. Water deeper than the stream's own level was a pond the
-        // river ran over: it stays (4.2.5). A fall keeps all, to drain.
-        if (c_kind(cur) == K_FLOW) {
-            const int lvl = flow_level(cf, c_dist(cur));
-            if ((int)cur.amt <= lvl) n.amt = 1;
+        if (cf == F_LAVA) {
+            // Lava is not R6's: cut off, it comes to rest a unit deep where
+            // it ran (deeper where it stood), and cools into stone (4.6).
+            n.st = mk_st(cf, K_STILL, false);
+            n.aux = E_NONE;
+            if (c_kind(cur) == K_FLOW && (int)cur.amt <= flow_level(cf, c_dist(cur))) n.amt = 1;
+        } else if (held > 0) {
+            n.st = mk_st(cf, K_STILL, false);
+            n.amt = (uint8_t)held;
+            n.aux = E_NONE;
+        } else {
+            n = Cell{ cur.solid, 0, 0, 0 };
         }
         g_sets.push_back({ x, b, z, n });
         return;
@@ -1471,18 +1468,20 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
         return e.y + e.off * (float)(1.0 - k);
     };
     // Corner (ox, oz) (0 or 1) of cell (x, z)'s top, course b, fluid f, is at
-    // y now; it was at prev (or, new, at `base`, so a new cell rises from its
-    // floor). Keyed by the CELL's corner, not the shared grid corner: two
+    // y now; it was drawn at prev's eased height. A NEW top pops in at its
+    // height and holds it, easing only when its level changes: rising from
+    // its floor, a cell that took water rose and at once fell again as it
+    // passed water on -- the choppy flow (the user, 2026-11-24). Keyed by the CELL's corner, not the shared grid corner: two
     // cells with flat tops at different levels share a grid corner, and a new
     // cell took its neighbour's last height there -- it flashed up to a brick
     // and dropped, its corners at different heights (the user, 2026-11-23).
     auto ckey = [](int x, int b, int z, int ox, int oz, int f) -> int64_t {
         return pack3(2 * x + ox, b * 4 + f, 2 * z + oz);
     };
-    auto moved = [&](int x, int b, int z, int ox, int oz, int f, float y, float base) -> float {
+    auto moved = [&](int x, int b, int z, int ox, int oz, int f, float y) -> float {
         const int64_t k = ckey(x, b, z, ox, oz, f);
         auto it = prev.find(k);
-        const float off = (it != prev.end() ? shown(it->second, f) : base) - y;
+        const float off = it != prev.end() ? shown(it->second, f) - y : 0.0f;
         now[k] = Ease{ y, off, t_now };
         return off;
     };
@@ -1565,11 +1564,11 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
                                 && h00 == h10 && h10 == h11 && h11 == h01) {
                             // One easing for the whole top (a rect merges only
                             // tops moving alike); all four corners recorded.
-                            const float y = h00 * P - TOP_SINK, yb0 = (float)bottom * P;
-                            const float mv = moved(x, b, z, 0, 0, f, y, yb0);
-                            moved(x, b, z, 1, 0, f, y, yb0);
-                            moved(x, b, z, 0, 1, f, y, yb0);
-                            moved(x, b, z, 1, 1, f, y, yb0);
+                            const float y = h00 * P - TOP_SINK;
+                            const float mv = moved(x, b, z, 0, 0, f, y);
+                            moved(x, b, z, 1, 0, f, y);
+                            moved(x, b, z, 0, 1, f, y);
+                            moved(x, b, z, 1, 1, f, y);
                             flat[lx + SX * lz] = { true, h00, cc, f, mv };
                             any_flat = true;
                         } else if (top_open && !(c_ocean(c) && own == g_sea_b * CU)) {
@@ -1578,9 +1577,8 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
                             Vector3 nrm = (d - a).cross(bb - a);
                             if (nrm.y < 0) nrm = -nrm;
                             nrm = nrm.normalized();
-                            const float yb0 = (float)bottom * P;
-                            m.quad(a, d, cq, bb, nrm, cc, moved(x, b, z, 0, 0, f, a.y, yb0), moved(x, b, z, 0, 1, f, d.y, yb0),
-                                    moved(x, b, z, 1, 1, f, cq.y, yb0), moved(x, b, z, 1, 0, f, bb.y, yb0));
+                            m.quad(a, d, cq, bb, nrm, cc, moved(x, b, z, 0, 0, f, a.y), moved(x, b, z, 0, 1, f, d.y),
+                                    moved(x, b, z, 1, 1, f, cq.y), moved(x, b, z, 1, 0, f, bb.y));
                         }
                         // Sides: down to whatever covers the neighbour.
                         const float ch[4][2] = { { h10, h11 }, { h00, h01 }, { h01, h11 }, { h00, h10 } };
@@ -1607,17 +1605,16 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
                             const int o0x = (int)std::lround(p0.x / STUD_M) - x, o0z = (int)std::lround(p0.z / STUD_M) - z;
                             const int o1x = (int)std::lround(p1.x / STUD_M) - x, o1z = (int)std::lround(p1.z / STUD_M) - z;
                             // The foot on a neighbour's water top follows that
-                            // top as it eases (no gap under a rising cell).
+                            // top as it eases (no gap under a rising one).
                             float f0 = 0.0f, f1 = 0.0f;
                             if (wet_n && cover >= bottom) {
-                                const float nb0 = (float)(b * CU + floor_u(n.solid)) * P;
                                 const float yn = (float)cover * P - TOP_SINK;
-                                f0 = std::min(was(nx, b, nz, o0x - DX[i], o0z - DZ[i], f, nb0) - yn, 0.0f);
-                                f1 = std::min(was(nx, b, nz, o1x - DX[i], o1z - DZ[i], f, nb0) - yn, 0.0f);
+                                f0 = std::min(was(nx, b, nz, o0x - DX[i], o0z - DZ[i], f, yn) - yn, 0.0f);
+                                f1 = std::min(was(nx, b, nz, o1x - DX[i], o1z - DZ[i], f, yn) - yn, 0.0f);
                             }
                             m.quad(Vector3(p0.x, y0, p0.z), Vector3(p1.x, y0, p1.z),
                                     Vector3(p1.x, yb, p1.z), Vector3(p0.x, ya, p0.z), nrm, cc,
-                                    f0, f1, moved(x, b, z, o1x, o1z, f, yb, y0), moved(x, b, z, o0x, o0z, f, ya, y0));
+                                    f0, f1, moved(x, b, z, o1x, o1z, f, yb), moved(x, b, z, o0x, o0z, f, ya));
                         }
                         // Bottom over open air (a fall seen from under it).
                         if (floor_of(c.solid) == 0) {
@@ -1734,80 +1731,6 @@ int tile_coord(int64_t k, bool z) {
 
 // --- the tick ------------------------------------------------------------------------
 
-/// Pits filling from rivers (4.5): the running water round a landed fall,
-/// at its course, is a closed body when nothing in it can leave -- no drop
-/// beside it, no dry floor lower than its top that it could spread onto, no
-/// source or other fluid joined to it. Then the course becomes still water,
-/// full, and the fall lands on that next: the pit rises a course at a time
-/// until it reaches its rim, where the body is open and spills.
-void check_pits() {
-    if (g_landings.empty() || g_tick % PIT_EVERY != 0) return;
-    std::vector<int64_t> done;
-    // The due ones in reach, the longest waiting first.
-    std::vector<std::pair<uint32_t, int64_t>> due;
-    for (const auto &e : g_landings) {
-        if (e.second > g_tick) continue;
-        int x, b, z;
-        unpack3(e.first, x, b, z);
-        if (dist2_centre(x, z) > g_sim_r * g_sim_r) continue;
-        due.push_back({ e.second, e.first });
-    }
-    if (due.size() > (size_t)PIT_LOOKS) {
-        std::nth_element(due.begin(), due.begin() + PIT_LOOKS, due.end());
-        due.resize(PIT_LOOKS);
-    }
-    for (const auto &d : due) {
-        const int64_t k = d.second;
-        int x, b, z;
-        unpack3(k, x, b, z);
-        const Cell &c = wcell(x, b, z);
-        if (!c_wet(c) || c_kind(c) != K_FALL) { done.push_back(k); continue; }
-        const int f = c_fluid(c);
-        std::vector<int64_t> body{ k };
-        std::unordered_set<int64_t> seen{ k };
-        bool open = false;
-        for (size_t h = 0; h < body.size() && !open; ++h) {
-            if (body.size() > (size_t)PIT_MAX) { open = true; break; }
-            int bx, bb, bz;
-            unpack3(body[h], bx, bb, bz);
-            const Cell &bc = wcell(bx, b, bz);
-            const int top = b * CU + floor_u(bc.solid) + bc.amt;
-            for (int i = 0; i < 4 && !open; ++i) {
-                const int nx = bx + DX[i], nz = bz + DZ[i];
-                const Cell &n = wcell(nx, b, nz);
-                if (c_cap(n) <= 0) continue;
-                if (c_wet(n)) {
-                    if (c_fluid(n) != f || c_kind(n) == K_SOURCE) { open = true; break; }
-                    if (c_kind(n) == K_STILL) continue;
-                    const int64_t nk = pack3(nx, b, nz);
-                    if (seen.insert(nk).second) body.push_back(nk);
-                    continue;
-                }
-                // Dry floor is part of the basin (the stream may not cover
-                // it: water reaches 5 studs); only a drop lets it out.
-                if (!supported(nx, b, nz, n)) { open = true; break; }
-                (void)top;
-                const int64_t nk = pack3(nx, b, nz);
-                if (seen.insert(nk).second) body.push_back(nk);
-            }
-        }
-        if (open) {
-            g_landings[k] = g_tick + PIT_OPEN_WAIT;
-            continue;
-        }
-        for (int64_t bk : body) {
-            int bx, bb, bz;
-            unpack3(bk, bx, bb, bz);
-            Cell n = wcell(bx, bb, bz);
-            n.st = mk_st(f, K_STILL, false);
-            n.amt = (uint8_t)std::max(0, c_cap(n));
-            n.aux = E_NONE;
-            g_sets.push_back({ bx, bb, bz, n });
-        }
-        done.push_back(k);
-    }
-    for (int64_t k : done) g_landings.erase(k);
-}
 
 /// SECTIONS FAR AWAY ARE LET GO. Every column the water ever sampled kept its
 /// section for good -- the flow's look for a drop, priming, the sea's floor
@@ -2014,8 +1937,6 @@ void do_tick() {
         eval(x, b, z);
     }
 
-    if (g_simulate) check_pits();
-
     // Apply (MineWater.md 4.2: sets first, then the moves that still hold).
     std::unordered_set<int64_t> set_now;
     std::unordered_set<int64_t> by_op;
@@ -2206,7 +2127,6 @@ double BrickFluid::reset(double sea_m, bool sea_on) {
     g_dirty_tiles.clear();
     g_mesh_requests.clear();
     g_far_requests.clear();
-    g_landings.clear();
     g_lava_total.store(0);
     {
         std::lock_guard<std::mutex> ll(g_lava_mx);
