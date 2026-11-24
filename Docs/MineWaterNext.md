@@ -155,7 +155,9 @@ have needed work before.
 
 1. **V0** the user's bug list and decisions A-C.
 2. **V1+** the visual fixes.
-3. **S1** R6: the three fed-to-finite rules off. `fluid_probe`: a cut-off
+3. **S1 -- done 2026-11-24.** R6: the three fed-to-finite rules off (water only; lava still
+   comes to rest and cools). A pond under a river is kept in the cell (`held`) and given back
+   exactly. Was: `fluid_probe`: a cut-off
    stream leaves no water; a fall into a pit never fills it; a river over a
    pond leaves its volume as it was.
 4. **S2** R9: full still water beside a source becomes source (decision B).
