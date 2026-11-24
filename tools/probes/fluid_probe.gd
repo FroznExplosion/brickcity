@@ -5,7 +5,7 @@ extends SceneTree
 ##     godot --headless --path . --script res://tools/probes/fluid_probe.gd
 ##
 ## - spreading water's new tops rise from their floor, level (no flash up to a
-##   brick, no tilted corners);
+##   brick, no tilted corners), and keep rising when meshed again mid-way;
 ## Every test stands on a flat stone floor laid by terrain edits high above
 ## the generated world (course FLOOR), so the ground under it is known
 ## exactly. What each check is for:
@@ -112,6 +112,7 @@ func _run() -> void:
 	var worst_up := 0.0
 	var tilted := 0
 	var tops := 0
+	var rising := 0
 	for t in 14:
 		BrickFluid.tick_now(1)
 		var em: Dictionary = BrickFluid.build_tile_mesh(-250, 0)
@@ -121,10 +122,13 @@ func _run() -> void:
 		var v: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
 		var n: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
 		var c: PackedFloat32Array = arr[Mesh.ARRAY_CUSTOM0]
+		rising = 0
 		for q in range(0, v.size(), 4):
 			if n[q].y < 0.9:
 				continue
 			tops += 1
+			if c[q * 4] < -0.01:
+				rising += 1
 			var s0 := v[q].y + c[q * 4]
 			for k in range(1, 4):
 				if absf(v[q + k].y + c[(q + k) * 4] - s0) > 0.001:
@@ -134,6 +138,10 @@ func _run() -> void:
 				worst_up = maxf(worst_up, c[(q + k) * 4])
 	_ok("spreading tops ease up from their floor, level", tops > 50 and worst_up <= 0.001 and tilted == 0,
 			"%d tops, worst start %.3f m above, %d tilted" % [tops, worst_up, tilted])
+	# Meshed again and again within milliseconds, the tops are still on their
+	# way up: each mesh eases on from where the last was DRAWN (it snapped a
+	# rising cell to its full height -- the user, 2026-11-23, "jumps up").
+	_ok("a tile meshed mid-ease keeps its tops rising", rising > 20, "%d still rising" % rising)
 	# Its water away again: later sections clear the terrain's edits, and a
 	# source without its floor would pour onto the generated world below.
 	for x in range(-8010, -7959):
