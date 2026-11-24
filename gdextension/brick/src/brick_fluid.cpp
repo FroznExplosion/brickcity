@@ -925,10 +925,21 @@ void eval(int x, int b, int z) {
     // --- still water: a volume in whole tiles (4.2)
     const int a = cur.amt;
     // Touching a SOURCE of its own fluid (the sea, a lake, a spring) it joins
-    // it: a tile a tick drains into the infinite body (4.2.4).
+    // it: a FULL cell becomes source itself (R9, the user 2026-11-24: a
+    // source in a brim-full pond makes it a lake -- the next full cells turn
+    // the tick after, through the whole full body); a part-full one drains
+    // into the infinite body a unit a tick (4.2.4). Water only: still lava
+    // beside its source drains in as before.
     for (int i = 0; i < 4; ++i) {
         const Cell &n = wcell(x + DX[i], b, z + DZ[i]);
         if (c_wet(n) && c_fluid(n) == cf && c_kind(n) == K_SOURCE) {
+            if (DEFS[cf].renew && floor_u(cur.solid) + a >= CU) {
+                Cell k = cur;
+                k.st = mk_st(cf, K_SOURCE, false);
+                k.aux = 0;
+                g_sets.push_back({ x, b, z, k });
+                return;
+            }
             Cell k = cur;
             k.amt = (uint8_t)(a - 1);
             g_sets.push_back({ x, b, z, k });
