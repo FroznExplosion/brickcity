@@ -36,7 +36,8 @@ extends Node3D
 ##   water source, water brick, lava source (creative): RMB pours one in
 ##      every stud of the block, LMB takes the fluid looked at.
 ## Blocks placed into water delete it (13.4): the builder's aim passes
-## through water.
+## through water. Not where they would float: a block in water must stand
+## on ground or hang under it (floats_on_water, R3).
 ##
 ## Creative (`inv.creative`, the default): nothing is used up and breaking
 ## gives nothing. Survival: a block of n x n studs uses n*n of the stack
@@ -322,6 +323,30 @@ func _cells(block: Vector3i) -> Array[Vector3i]:
 	return [lo, lo + Vector3i(s - 1, 2, s - 1)]
 
 
+## NO BRICKS ON WATER (Docs/MineWaterNext.md R3; decision A, the user
+## 2026-11-24): a block put where water (or lava) is must be built up from
+## ground under it or down from ground over it -- terrain bricks join only
+## top to bottom, so one laid sideways off a shore over water held nothing
+## and fell. Where it does go, it takes the water's place and the water
+## round it stays (R4: a beach there; broken, the body heals).
+func floats_on_water(to: Vector3i) -> bool:
+	var c := _cells(to)
+	var wet := false
+	for x in range(c[0].x, c[1].x + 1):
+		for z in range(c[0].z, c[1].z + 1):
+			if int(BrickFluid.cell_info(Vector3i(x, to.y, z)).fluid) != 0:
+				wet = true
+	if not wet:
+		return false
+	for x in range(c[0].x, c[1].x + 1):
+		for z in range(c[0].z, c[1].z + 1):
+			if int(BrickFluid.cell_info(Vector3i(x, to.y - 1, z)).solid) & 4:
+				return false            # built up from the ground under it
+			if int(BrickFluid.cell_info(Vector3i(x, to.y + 1, z)).solid) & 1:
+				return false            # down from the ground over it
+	return true
+
+
 func _is_fluid_item(k: String) -> bool:
 	return k == "bucket" or k == "source_bucket" or k == "fluid"
 
@@ -480,6 +505,9 @@ func place_target() -> bool:
 	if not inv.creative and inv.hand().count < s * s:
 		return false
 	if _blocks_player(to) or host.chests.overlaps(AABB(_cell_lo(to), _block_size_m())):
+		return false
+	if floats_on_water(to):
+		log_blocks.append("refused on water %s" % to)
 		return false
 	var res: Dictionary = BrickTerrain.fill_box(c[0], c[1], int(d.material), true)
 	if int(res.changed) == 0:
