@@ -70,5 +70,21 @@ sunken face is hard to see for that time.
 
 ## 5. Status
 
-- 2026-11-23: plan written; stage 1 started (branch `skylit-followups`,
-  worktree `C:\Users\lbaun\bc-skylit2`).
+- 2026-11-23: plan written. **Stage 1 done**: `build_tile` and
+  `build_section` return `overlay_bricks` (the key `bricks` was taken: the
+  curved ground's box bricks), 10 floats a brick -- min corner, max corner
+  (metres, absolute, the mine world's terrain frame), material, colour r g b.
+  Collected by `note_brick` (brick_terrain.cpp, a thread-local map set for
+  the bake's call): every `mask_faces` face's brick (the bond's rect by its
+  course, the plates of that course solid in the face's column; a piece's
+  course under its top) and every surface piece of kind BRICK or TILE (the
+  whole brick across a tile edge, so two tiles list the same brick: dedupe
+  by its corner and course), with the tile or plate laid on it as its own
+  one-plate brick. `tools/probes/terrain_bricks_probe.gd` (headless): deep
+  sections exact (every face on a brick, every brick with a face, no
+  overlaps); surface tiles leave 2-16 thin strips a tile on the tile's outer
+  edge (filler, no brick's) and 26-44 bricks with no face of their own (a
+  piece covered by the tile on it and its neighbours: listed, harmless).
+- **Next: stage 2** -- TerrainBricks (the pool, the pick by distance and
+  view, one MultiMesh buffer) and the `TERRAIN_BOX` copy of terrain.gdshader.
+  Branch `skylit-followups`, worktree `C:\Users\lbaun\bc-skylit2`.
