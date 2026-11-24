@@ -1126,6 +1126,7 @@ func _process(delta: float) -> void:
 		_flush_edits()
 	_flush_lava_light(delta)
 	var p0 := Time.get_ticks_usec()
+	_behind_follow(eye)
 	_streamer.follow(Vector2(eye.x, eye.z))
 	var pd := Time.get_ticks_usec()
 	_deep.follow(eye)
@@ -3005,6 +3006,12 @@ func _gpu_chamfered() -> Array:
 	return _streamer.find_children("SurfaceChamfered", "MeshInstance3D", true, false)
 
 
+## The faces behind the overlay's bricks (Docs/BrickOverlay.md 6b), tiles'
+## and sections'.
+func _gpu_behind() -> Array:
+	return _streamer.find_children("SurfaceBehind", "MeshInstance3D", true, false) 			+ _deep.find_children("SurfaceBehind", "MeshInstance3D", true, false)
+
+
 func _gpu_toggles() -> Array:
 	var vp := get_viewport()
 	var sun := _rig.sun
@@ -3035,6 +3042,7 @@ func _gpu_toggles() -> Array:
 		# The brick overlay (Docs/BrickOverlay.md 5): its boxes and the sunken
 		# flat ground, against the flat ground alone.
 		t.append(["brick overlay off", func(): bricks.set_enabled(false), func(): bricks.set_enabled(true)])
+		t.append(["behind faces hidden", func(): _gpu_hide(_gpu_behind()), _gpu_back])
 	t.append(["far tier hidden", func(): _gpu_hide([_far]), _gpu_back])
 	t.append(["deep tier hidden", func(): _gpu_hide([_deep]), _gpu_back])
 	t.append(["water (all) hidden", func(): _gpu_hide([water]), _gpu_back])
@@ -6129,6 +6137,46 @@ func _run_seams_gate() -> void:
 	print("[mine-seams] %s  %s on %d px, off %d px" % ["PASS" if ok else "FAIL",
 			"overlay" if _overlay_on else "chamfer", on[0], off[0]])
 	get_tree().quit()
+
+
+## THE FACES BEHIND THE OVERLAY'S BRICKS, only round the eye
+## (Docs/BrickOverlay.md 6b): the bake makes them for tiles within 2 of the
+## eye's tile (and sections within 128 plates of it); here, as the eye moves,
+## a tile or section that came into that ring without them is baked again,
+## and one 2 tiles (or 64 plates) past it drops them. Every tile and section
+## carrying them was ~200 MB more and the machine paged.
+var _behind_at := Vector3i(1 << 30, 0, 0)
+
+func _behind_follow(eye: Vector3) -> void:
+	if not BrickTerrain.get_behind_faces():
+		return
+	var stud := BrickWorld.get_stud_metres()
+	var span := BrickTerrain.get_tile_studs() * stud
+	var c := Vector3i(floori(eye.x / span), floori(eye.y / BrickWorld.get_plate_metres()), floori(eye.z / span))
+	BrickTerrain.set_behind_centre(c)
+	if c.x == _behind_at.x and c.z == _behind_at.z and absi(c.y - _behind_at.y) < 32:
+		return
+	_behind_at = c
+	for k in _streamer._tiles:
+		var tile: TerrainTile = _streamer._tiles[k]
+		if tile == null:
+			continue
+		if BrickTerrain.behind_wanted(k.x, -2147483648, k.y):
+			if not tile.behind_baked:
+				_streamer.refresh(Rect2i(k, Vector2i.ONE))
+		elif tile.behind_baked and maxi(absi(k.x - c.x), absi(k.y - c.z)) > 3:
+			tile.drop_behind()
+	var sp := BrickTerrain.get_deep_section_plates()
+	for k in _deep._secs:
+		var sec: TerrainTile = _deep._secs[k]
+		if sec == null:
+			continue
+		if BrickTerrain.behind_wanted(k.x, k.y, k.z):
+			if not sec.behind_baked:
+				_deep.rebake(k)
+		elif sec.behind_baked and (maxi(absi(k.x - c.x), absi(k.z - c.z)) > 3
+				or k.y * sp > c.y + 192 or (k.y + 1) * sp < c.y - 192):
+			sec.drop_behind()
 
 
 ## -- --gate=slits: see-through slits in the OPEN ground near the eye (the

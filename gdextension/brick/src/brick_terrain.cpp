@@ -1081,6 +1081,19 @@ bool g_bond_top = false;
 static std::atomic<bool> g_sky_light{ false };
 /// Bake behind faces (BrickTerrain.set_behind_faces; the mine world).
 static std::atomic<bool> g_behind_faces{ false };
+/// ...only round the eye (set_behind_centre): they are drawn only within the
+/// overlay's 12 m, and every tile and section carrying them was ~200 MB more
+/// (the machine paged: --gate=deep's worst frame 82 -> 1538 ms). Tiles within
+/// BEHIND_RING of the eye's tile; sections also within BEHIND_PLATES of its
+/// plate.
+static std::atomic<int> g_behind_cx{ 0 }, g_behind_cz{ 0 }, g_behind_cy{ 0 };
+constexpr int BEHIND_RING = 2;
+constexpr int BEHIND_PLATES = 128;
+static bool behind_tile(int tx, int tz) {
+    return g_behind_faces.load(std::memory_order_relaxed)
+            && std::abs(tx - g_behind_cx.load(std::memory_order_relaxed)) <= BEHIND_RING
+            && std::abs(tz - g_behind_cz.load(std::memory_order_relaxed)) <= BEHIND_RING;
+}
 
 bool g_deep_tier = false;
 
@@ -2979,6 +2992,24 @@ void BrickTerrain::set_behind_faces(bool on) {
 
 bool BrickTerrain::get_behind_faces() { return g_behind_faces.load(std::memory_order_relaxed); }
 
+void BrickTerrain::set_behind_centre(Vector3i tile_plate) {
+    g_behind_cx.store(tile_plate.x, std::memory_order_relaxed);
+    g_behind_cy.store(tile_plate.y, std::memory_order_relaxed);
+    g_behind_cz.store(tile_plate.z, std::memory_order_relaxed);
+}
+
+bool BrickTerrain::behind_wanted(int tx, int sy, int tz) {
+    if (!behind_tile(tx, tz)) {
+        return false;
+    }
+    if (sy == INT_MIN) {
+        return true;
+    }
+    const int lo = sy * DEEP_SECTION_PLATES, hi = lo + DEEP_SECTION_PLATES;
+    const int cy = g_behind_cy.load(std::memory_order_relaxed);
+    return hi > cy - BEHIND_PLATES && lo < cy + BEHIND_PLATES;
+}
+
 void BrickTerrain::set_plate_steps(bool on) { g_plate_steps = on; }
 bool BrickTerrain::get_plate_steps() { return g_plate_steps; }
 
@@ -4320,6 +4351,33 @@ void push_stud(PackedFloat32Array &buf, float px, float py, float pz, const Colo
 void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &owner,
         const std::vector<Piece> &pieces, uint32_t seed, PackedFloat32Array &studs, int &stud_count);
 
+/// The plates of a sample where solid can meet open air: one under its
+/// lowest open cell (the sky over it counts) to its highest solid one + 1.
+/// Most of a sample is rock under that or air over it.
+static void face_band(const TileSample &s, int &lo, int &hi) {
+    int lo_open = INT_MAX, hi_solid = INT_MIN;
+    const int ytop = s.y0 + s.ysize;
+    for (int lz = -MARGIN; lz < TILE + MARGIN; ++lz) {
+        for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
+            for (int yp = s.y0; yp < ytop && yp < lo_open; ++yp) {
+                if (s.open[(size_t)s.vidx(lx, yp, lz)] != 0) {
+                    lo_open = yp;
+                    break;
+                }
+            }
+            for (int yp = ytop - 1; yp >= s.y0 && yp > hi_solid; --yp) {
+                if (s.vox[(size_t)s.vidx(lx, yp, lz)] != MAT_AIR) {
+                    hi_solid = yp;
+                    break;
+                }
+            }
+        }
+    }
+    lo_open = std::min(lo_open, ytop);
+    lo = lo_open - 1;
+    hi = hi_solid + 1;
+}
+
 /// Every cell of every brick open air touches (a face of it drawn: the
 /// overlay's bricks), in the sample's vox layout. A brick is its bond
 /// rectangle (the `tops` view, as the main pass draws it) and the solid
@@ -4332,9 +4390,12 @@ static void exposed_brick_cells(const TileSample &s, bool tops, std::vector<uint
     BondView view(s, tops);
     const int gx0 = s.tx * TILE, gz0 = s.tz * TILE;
     const int ylo = s.y0, yhi = s.y0 + s.ysize;
+    int band_lo = 0, band_hi = 0;
+    face_band(s, band_lo, band_hi);
+    const int scan_lo = std::max(ylo, band_lo), scan_hi = std::min(yhi, band_hi);
     for (int lz = -MARGIN; lz < TILE + MARGIN; ++lz) {
         for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
-            for (int yp = ylo; yp < yhi; ++yp) {
+            for (int yp = scan_lo; yp < scan_hi; ++yp) {
                 const size_t i = (size_t)s.vidx(lx, yp, lz);
                 if (out[i] != 0 || s.vox[i] == MAT_AIR) {
                     continue;
@@ -4471,9 +4532,27 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
 
     // The plates this sample draws (a guard plate past a deep-tier boundary
     // is sampled for its faces but drawn by its owner).
-    // The behind pass looks only where the exposed bricks are.
-    const int y0 = t_behind != nullptr ? std::max(s.lo_owned(), t_behind_lo) : s.lo_owned();
-    const int y1 = t_behind != nullptr ? std::min(s.hi_owned(), t_behind_hi) : s.hi_owned();
+    const int y0 = s.lo_owned();
+    const int y1 = s.hi_owned();
+    // THE PLATES WORTH SCANNING (Docs/MineWorld.md 21, item 4). A face is
+    // where solid meets open air, and most of a sample is rock under every
+    // open cell or sky over every solid one: scanning all of it in six
+    // directions was 3.7 ms of a 7 ms bake. From one under the lowest open
+    // cell to the highest solid one; the behind pass, where its exposed
+    // bricks are. y0/y1 stay the sample's own plates (the edge tests below).
+    int sy0 = y0, sy1 = y1;
+    if (t_behind != nullptr) {
+        sy0 = std::max(y0, t_behind_lo);
+        sy1 = std::min(y1, t_behind_hi);
+    } else {
+        int lo = 0, hi = 0;
+        face_band(s, lo, hi);
+        sy0 = std::max(y0, lo);
+        sy1 = std::min(y1, hi);
+    }
+    if (sy1 < sy0) {
+        sy1 = sy0;
+    }
     std::vector<uint8_t> face_buf;
     std::vector<int64_t> key_buf;
 
@@ -4629,13 +4708,13 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
         (void)u_count;
 
         // Iterate slices along the normal axis.
-        const int w_lo = (dx != 0) ? 0 : ((dy != 0) ? y0 : 0);
-        const int w_hi = (dx != 0) ? TILE : ((dy != 0) ? y1 : TILE);
+        const int w_lo = (dx != 0) ? 0 : ((dy != 0) ? sy0 : 0);
+        const int w_hi = (dx != 0) ? TILE : ((dy != 0) ? sy1 : TILE);
 
         for (int w = w_lo; w < w_hi; ++w) {
             // Mask of this slice: material where a face is exposed, 0 where not.
             const int su = TILE;
-            const int sv = (dy != 0) ? TILE : (y1 - y0);
+            const int sv = (dy != 0) ? TILE : (sy1 - sy0);
             // One buffer for every slice of every direction. Allocating per
             // slice was six directions times ~85 slices of churn a tile.
             face_buf.assign((size_t)su * sv, 0);
@@ -4647,11 +4726,11 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                 for (int u = 0; u < su; ++u) {
                     int lx, yp, lz;
                     if (dx != 0) {        // slice at x = w, u along z, v along y
-                        lx = w; lz = u; yp = y0 + v;
+                        lx = w; lz = u; yp = sy0 + v;
                     } else if (dy != 0) { // slice at y = w, u along x, v along z
                         lx = u; lz = v; yp = w;
                     } else {              // slice at z = w, u along x, v along y
-                        lx = u; lz = w; yp = y0 + v;
+                        lx = u; lz = w; yp = sy0 + v;
                     }
                     if (!s.solid(lx, yp, lz)) {
                         continue;
@@ -4775,11 +4854,11 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                     // Back to world space.
                     int lx, yp, lz;
                     if (dx != 0) {
-                        lx = w; lz = u; yp = y0 + v;
+                        lx = w; lz = u; yp = sy0 + v;
                     } else if (dy != 0) {
                         lx = u; lz = v; yp = w;
                     } else {
-                        lx = u; lz = w; yp = y0 + v;
+                        lx = u; lz = w; yp = sy0 + v;
                     }
                     Color col = cell_colour(lx, yp, lz);
                     // The brick this face is part of: a piece's (bit 63), or
@@ -7165,8 +7244,9 @@ Dictionary BrickTerrain::build_section(int tx, int sy, int tz) {
         const std::vector<Piece> pieces;
         mask_faces(m, s, owner, pieces, g_field.seed, studs, stud_count);
         std::vector<uint8_t> behind;
-        if (g_behind_faces.load(std::memory_order_relaxed) && g_face_bevel <= 0.0f) {
+        if (behind_wanted(tx, sy, tz) && g_face_bevel <= 0.0f) {
             behind_faces(m, s, false, behind);
+            out["behind_baked"] = true;
         }
         cave_boxes = add_cave_boxes(s, boxes, true, nullptr);
         sky_light_pass(m, s, false, out, &studs);
@@ -8172,7 +8252,8 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
     int cave_stud_count = 0;
     mask_faces(m, s, owner, pieces, g_field.seed, cave_studs, cave_stud_count);
     std::vector<uint8_t> behind;
-    if (g_behind_faces.load(std::memory_order_relaxed) && g_face_bevel <= 0.0f && t_bricks != nullptr) {
+    const bool behind_baked = behind_tile(tx, tz) && g_face_bevel <= 0.0f && t_bricks != nullptr;
+    if (behind_baked) {
         behind_faces(m, s, !pieces.empty(), behind);
     }
     struct BehindReset { ~BehindReset() { t_behind = nullptr; } } behind_reset;
@@ -8478,6 +8559,7 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
     Dictionary out = sky;
     out["mesh"] = mesh;
     out["behind_mesh"] = behind_mesh;
+    out["behind_baked"] = behind_baked;
     out["behind_cells_ms"] = t_behind_cells_ms;
     out["behind_mask_ms"] = t_behind_mask_ms;
     // The bricks it drew a face of (Docs/BrickOverlay.md).
@@ -9146,6 +9228,8 @@ void BrickTerrain::_bind_methods() {
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_edits", "bytes"), &BrickTerrain::set_edits);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_behind_faces", "on"), &BrickTerrain::set_behind_faces);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_behind_faces"), &BrickTerrain::get_behind_faces);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_behind_centre", "tile_plate"), &BrickTerrain::set_behind_centre);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("behind_wanted", "tx", "sy", "tz"), &BrickTerrain::behind_wanted);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("fill_box", "lo", "hi", "material", "only_air"),
         &BrickTerrain::fill_box);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("ray_cell", "from", "dir", "max_metres"),
