@@ -338,6 +338,16 @@ the tile's `swap_s` is the build's time (`built_s`), so both reckon alike. Ease 
 
 ## 8. The LOD
 
+**Water drops at a terrain LOD (2026-11-24; the user: "drop at LOD 2 rather than a distance",
+an option for other computers).** Options > Video > **Water Drops At**: LOD 1 / LOD 2 (default)
+/ LOD 3. A tile's water is drawn while its ground is drawn at a lower LOD (`MineWater.tile_lod`:
+0 a detailed tile, else the coarse tier's ring by distance, TerrainCoarse.relod's rule: 1 within
+`FIRST` = 16 tiles, ~180 m, one more each doubling). At LOD 1 the water also runs on the detailed
+ground only (sim radius cut to the detail tiles + half a tile): the cheapest. At 2 and 3 inland
+water (not the open sea, which the tiers draw) keeps its sections out to that ring's corner
+(`BrickFluid.set_keep_inland`), so its frozen far mesh shows on the coarse ground; sea-only and
+dry sections still go at 1.5 x the sim radius (W3). Water gate: the `water LOD` line.
+
 **Water goes with its ground (2026-11-23).** A tile's water and lava (and its lava light) are
 drawn only while the terrain draws that tile's detail (`TerrainStreamer.has_tile`). Before, a
 tile once meshed kept a far mesh for good, at any distance, over coarse ground or none (the user:

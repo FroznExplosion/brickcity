@@ -4722,6 +4722,26 @@ func _run_water_gate() -> void:
 	# never unloaded).
 	var pt := Vector2i(floori(float(o.x) / 32.0), floori(float(o.y) / 32.0))
 	var home := _eye()
+	# Water drops at the chosen terrain LOD (Options > Video > Water Drops
+	# At): 160 m off, the platform's ground is coarse (LOD 1): at the default
+	# (drop at LOD 2) its water still shows; set to drop at LOD 1, it goes.
+	var W := Water
+	_fly_to(home + Vector3(160, 0, 0), Vector3(1, 0, 0))
+	var lw := 0
+	while lw < 900 and _streamer.has_tile(pt):
+		await get_tree().process_frame
+		lw += 1
+	await _frames(60)
+	var shown_lod2: bool = water.has_tile_drawn(pt)
+	var bare2: int = water.drawn_on_bare()
+	W.drop_lod = 1
+	await _frames(60)
+	var shown_lod1: bool = water.has_tile_drawn(pt)
+	W.drop_lod = 2
+	await _frames(60)
+	print("[water-gate] water LOD: 160 m off (ground LOD %d), platform water drawn at drop LOD 2 %s (want true), at LOD 1 %s (want false), back %s; past the drop LOD %d (want 0)" % [
+			Water.tile_lod(pt, Vector2i(floori(_eye().x / (32.0 * stud)), floori(_eye().z / (32.0 * stud))), _streamer),
+			shown_lod2, shown_lod1, water.has_tile_drawn(pt), bare2])
 	_fly_to(home + Vector3(400, 0, 0), Vector3(1, 0, 0))
 	var waited := 0
 	while waited < 900 and (_streamer.has_tile(pt) or water.has_tile_drawn(pt)):
