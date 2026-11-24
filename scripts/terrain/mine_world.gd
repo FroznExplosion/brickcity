@@ -322,6 +322,8 @@ func _ready() -> void:
 			_run_skylit_gate()
 		elif "--gate=seams" in OS.get_cmdline_user_args():
 			_run_seams_gate()
+		elif "--gate=slits" in OS.get_cmdline_user_args():
+			_run_slits_gate()
 		elif "--gate=bricks" in OS.get_cmdline_user_args():
 			_run_bricks_gate()
 		elif "--gate=mem" in OS.get_cmdline_user_args():
@@ -6037,6 +6039,115 @@ func _run_seams_gate() -> void:
 	print("[mine-seams] %s  %s on %d px, off %d px" % ["PASS" if ok else "FAIL",
 			"overlay" if _overlay_on else "chamfer", on[0], off[0]])
 	get_tree().quit()
+
+
+## -- --gate=slits: see-through slits in the OPEN ground near the eye (the
+## user, 2026-11-24: "see through seams at the grid", gone with the chamfer
+## off). The sky is a flat MAGENTA; scoped views look down across tile edges
+## and corners from 2-10 m, so every pixel is ground: a magenta one is a slit.
+## Counted three ways: the overlay off (flat ground, nothing sunk), the
+## overlay's recess with its bricks hidden (what is open where no brick is
+## laid: behind the eye, past the view), and the overlay whole. Fixed by
+## the recess along the eye's ray (terrain.gdshader): 39359 px whole and
+## 600288 px with its bricks hidden before, as the flat ground (~46) after.
+func _run_slits_gate() -> void:
+	await _frames(10)
+	var dev := UserPaths.DEV
+	DirAccess.make_dir_recursive_absolute(dev)
+	_time = 0.42
+	set_on_foot(false)
+	view.process_mode = Node.PROCESS_MODE_DISABLED
+	view.rig.visible = false
+	if view.arms != null:
+		view.arms.visible = false
+	_hud_layer.visible = false
+	if kit != null:
+		for layer: CanvasLayer in [kit.hud, kit._aggro_layer]:
+			if layer != null:
+				layer.visible = false
+	collapse.process_mode = Node.PROCESS_MODE_DISABLED
+	var env: Environment = _rig.env
+	env.background_mode = Environment.BG_COLOR
+	env.background_color = Color(1, 0, 1)
+	env.fog_enabled = false
+	env.volumetric_fog_enabled = false
+	var stud := BrickWorld.get_stud_metres()
+	var ts := BrickTerrain.get_tile_studs()
+	var e := _eye()
+	var t := Vector2i(floori(e.x / (ts * stud)), floori(e.z / (ts * stud)))
+	# The edges and corner of the eye's tile: points on the ground there.
+	var marks: Array[Vector2i] = []
+	for k in 4:
+		marks.append(Vector2i((t.x + 1) * ts, t.y * ts + 4 + k * 8))   # +x edge
+		marks.append(Vector2i(t.x * ts + 4 + k * 8, (t.y + 1) * ts))   # +z edge
+	marks.append(Vector2i((t.x + 1) * ts, (t.y + 1) * ts))             # corner
+	var views := []
+	for m in marks:
+		var at := Vector3(m.x * stud, _ground_m(m.x, m.y), m.y * stud)
+		for a in 6:
+			var yaw := TAU * (a + 0.5) / 6.0
+			for d in [2.0, 5.0, 9.0]:
+				var from := at + Vector3(sin(yaw) * d, 1.7 + d * 0.25, cos(yaw) * d)
+				views.append(Transform3D(Basis(), from).looking_at(at))
+	var centre := Vector3((t.x + 1) * ts * stud, e.y, (t.y + 1) * ts * stud)
+	_fly_to(centre + Vector3(0, 3, 0), Vector3(0, 0, -1))
+	_streamer.settle(Vector2(centre.x, centre.z))
+	await _frames(90)
+	var cam0 := get_viewport().get_camera_3d()
+	var shot_cam := Camera3D.new()
+	add_child(shot_cam)
+	shot_cam.attributes = cam0.attributes
+	shot_cam.near = 0.02
+	shot_cam.fov = 20.0
+	shot_cam.current = true
+	var count := func(tag: String) -> int:
+		var total := 0
+		var hit := 0
+		var worst := 0
+		for i in views.size():
+			shot_cam.global_transform = to_global_t(views[i])
+			await _frames(4)
+			await RenderingServer.frame_post_draw
+			var img := get_viewport().get_texture().get_image()
+			var n := 0
+			for y in img.get_height():
+				for x in img.get_width():
+					var c := img.get_pixel(x, y)
+					if c.r > 0.45 and c.b > 0.45 and c.g < 0.6 * minf(c.r, c.b):
+						n += 1
+			total += n
+			hit += 1 if n > 0 else 0
+			if n > worst:
+				worst = n
+				img.save_png(dev + "mine_slits_%s.png" % tag)
+		print("[mine-slits] %-8s magenta %d px over %d views (%d views with any, worst %d)" % [tag, total, views.size(), hit, worst])
+		return total
+	var on_ := _overlay_on
+	if on_:
+		bricks.set_enabled(false)
+	await _frames(30)
+	var off: int = await count.call("off")
+	var recess := -1
+	var whole := -1
+	if on_:
+		bricks.set_enabled(true)
+		await _frames(30)
+		whole = await count.call("whole")
+		bricks._mmi.visible = false
+		await _frames(10)
+		recess = await count.call("recess")
+		bricks._mmi.visible = true
+	# The flat ground alone keeps a few 1-3 px pinholes (T-junctions, ~50 over
+	# the 162 views, too small to see); the overlay must add none: whole, or
+	# sunk with its bricks hidden, within a few pixels of it.
+	var ok := whole <= off + 10 and recess <= off + 10
+	print("[mine-slits] %s  off %d px, overlay whole %d px, recess with no bricks %d px" % [
+			"PASS" if ok else "FAIL", off, whole, recess])
+	get_tree().quit()
+
+
+func to_global_t(t: Transform3D) -> Transform3D:
+	return global_transform * t
 
 
 ## -- --gate=seams --deep: the same count in a hall cut deep underground,
