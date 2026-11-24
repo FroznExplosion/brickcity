@@ -10,27 +10,24 @@ extends RefCounted
 ## TowerBlockout lays it): built for real into a scratch BrickWorld chunk and
 ## read back brick by brick, so its walls, floors, columns, windows and
 ## stairwell are the ones measured to stand. Each brick becomes the plate cells
-## of its box, in the terrain material whose filament is nearest its colour
-## (Terrain has a material a cell, not a colour: terrain_material_for).
-## Glass (PETG, translucent) is left out: its windows are open.
+## of its box in the BUILDING material of its colour (brick_terrain.h
+## MAT_FIL_BASE + its filament: the city's colours, a city brick's strength in
+## the collapse), and is marked one placed brick (BrickTerrain.mark_placed), so
+## it breaks and falls whole. Glass (PETG, translucent) is left out: its
+## windows are open.
 ##
 ## The plot is levelled first: the footprint cleared from the building's base
 ## up past its roof, and stone laid under the base down to the lowest ground
 ## of the footprint, so the building stands on, and is joined to, the ground.
 
-## The terrain materials a building's colours are matched to: stone and the
-## generator's earth tones, wood, snow (white) -- not grass or dirt, whose
-## tops grow.
-const CANDIDATES := ["MAT_STONE", "MAT_DARK_STONE", "MAT_SANDSTONE", "MAT_TERRA_CREAM", "MAT_TERRA_RED",
-		"MAT_TERRA_ORANGE", "MAT_CLAY", "MAT_SNOW", "MAT_GRAVEL", "MAT_GRANITE", "MAT_DIORITE", "MAT_WOOD",
-		"MAT_OBSIDIAN"]
 ## Brick material index of PETG, the translucent one (brick_grid.h): glass.
 const GLASS_MATERIAL := 4
 ## Plates of stone under the base past the footprint's lowest ground.
 const FOUNDATION_DEPTH := 3
+## brick_terrain.h MAT_FIL_BASE: building material = this + filament index.
+const BUILDING_MATERIAL_BASE := 64
 
 static var _mat_ids := {}
-static var _match := {}
 
 
 ## The terrain material ids (BrickTerrain's enum, by name).
@@ -47,26 +44,6 @@ static func _terrain_ids() -> Dictionary:
 		for i in order.size():
 			_mat_ids[order[i]] = i
 	return _mat_ids
-
-
-## The terrain material for a building brick's colour (a filament index):
-## the candidate whose filament colour is nearest.
-static func terrain_material_for(colour_index: int) -> int:
-	if _match.has(colour_index):
-		return _match[colour_index]
-	var ids := _terrain_ids()
-	var want := BrickWorld.get_filament_colour(colour_index)
-	var best := int(ids.MAT_STONE)
-	var best_d := INF
-	for n in CANDIDATES:
-		var m := int(ids[n])
-		var c := BrickWorld.get_filament_colour(BrickTerrain.material_filament_index(m))
-		var d := Vector3(c.r - want.r, c.g - want.g, c.b - want.b).length_squared()
-		if d < best_d:
-			best_d = d
-			best = m
-	_match[colour_index] = best
-	return best
 
 
 ## The tower's bricks as boxes of plate cells relative to its corner:
@@ -106,7 +83,7 @@ static func tower_cells(p: Dictionary) -> Array:
 		var a := Vector3i(lo.x / ts, lo.y / tp, lo.z / ts)
 		@warning_ignore("integer_division")
 		var b := Vector3i((hi.x + ts - 1) / ts - 1, (hi.y + tp - 1) / tp - 1, (hi.z + ts - 1) / ts - 1)
-		out.append([a, b, terrain_material_for(world.get_block_colour(c, id))])
+		out.append([a, b, BUILDING_MATERIAL_BASE + world.get_block_colour(c, id)])
 	world.release_chunk(c)
 	return out
 
@@ -138,11 +115,17 @@ static func stamp(host: Node, corner: Vector2i, p: Dictionary) -> Dictionary:
 	host.terrain_edited(BrickTerrain.fill_box(Vector3i(lo.x, t_min - FOUNDATION_DEPTH, lo.z),
 			Vector3i(hi.x, base - 1, hi.z), int(ids.MAT_STONE), false))
 	var n := 0
+	var placed := 0
 	for cbox: Array in cells:
 		var a: Vector3i = cbox[0]
 		var b: Vector3i = cbox[1]
-		var res: Dictionary = BrickTerrain.fill_box(Vector3i(corner.x + a.x, base + a.y, corner.y + a.z),
-				Vector3i(corner.x + b.x, base + b.y, corner.y + b.z), int(cbox[2]), false)
+		var blo := Vector3i(corner.x + a.x, base + a.y, corner.y + a.z)
+		var bhi := Vector3i(corner.x + b.x, base + b.y, corner.y + b.z)
+		var res: Dictionary = BrickTerrain.fill_box(blo, bhi, int(cbox[2]), false)
 		n += int(res.get("changed", 0))
+		# One brick, kept whole (only whole courses of it: a brick off the
+		# ground's course lines stays bond cells).
+		placed += BrickTerrain.mark_placed(blo, bhi, int(cbox[2]))
 		host.terrain_edited(res)
-	return {"base": base, "lo": lo, "hi": hi, "bricks": cells.size(), "cells": n, "ground": t_min}
+	return {"base": base, "lo": lo, "hi": hi, "bricks": cells.size(), "cells": n, "ground": t_min,
+			"placed": placed}

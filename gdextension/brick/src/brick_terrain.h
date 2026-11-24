@@ -138,10 +138,35 @@ enum Material {
     MATERIAL_COUNT
 };
 
+/// BUILDING MATERIALS (Docs/TerrainBuildings.md, stage 2): one a filament
+/// colour, MAT_FIL_BASE + the filament's index, so a building stamped into
+/// the ground keeps the city's colours (a cell holds a material, not a
+/// colour). Plastic bricks: studded, strong-bonded, and in the collapse
+/// survey as strong as the city's bricks, not the ground's x4.
+constexpr int MAT_FIL_BASE = 64;
+constexpr int MATERIAL_LIMIT = MAT_FIL_BASE + FILAMENT_PALETTE_SIZE;
+static_assert(MATERIAL_LIMIT <= 256, "terrain materials are a byte");
+static_assert(MATERIAL_COUNT <= MAT_FIL_BASE, "the ground's materials stay under the building range");
+
+inline bool is_building_material(int m) {
+    return m >= MAT_FIL_BASE && m < MATERIAL_LIMIT;
+}
+
+/// A material byte as stored: a ground material, or a building one.
+inline int clamp_material(int m) {
+    if (is_building_material(m)) {
+        return m;
+    }
+    return std::min(std::max(m, 0), (int)MATERIAL_COUNT - 1);
+}
+
 /// Filament index per material. Terrain does not get a colour table of its
 /// own: a terrain brick and a building brick printed in the same filament have
 /// to be the same colour, or the world stops reading as one set of parts.
 inline int material_filament(int m) {
+    if (is_building_material(m)) {
+        return m - MAT_FIL_BASE;
+    }
     switch (m) {
         case MAT_GRASS: return FIL_GREEN;
         case MAT_DIRT: return FIL_BROWN;

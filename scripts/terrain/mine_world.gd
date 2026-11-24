@@ -5805,8 +5805,8 @@ func _run_buildings_gate() -> void:
 	var base: int = info.base
 	var lo: Vector3i = info.lo
 	var hi: Vector3i = info.hi
-	print("[mine-buildings] %d floors, 20 x 20 studs: %d bricks, %d cells, base plate %d (ground %d..), %.1f m tall; stamped in %.0f ms"
-			% [floors, info.bricks, info.cells, base, info.ground, (hi.y - base + 1) * plate, stamp_ms])
+	print("[mine-buildings] %d floors, 20 x 20 studs: %d bricks, %d cells (%d course cells kept as placed bricks), base plate %d (ground %d..), %.1f m tall; stamped in %.0f ms"
+			% [floors, info.bricks, info.cells, info.placed, base, info.ground, (hi.y - base + 1) * plate, stamp_ms])
 	var ok: bool = int(info.cells) > 1000
 	check.call(ok, "the tower is in the ground (%d cells)" % int(info.cells))
 	fails += 0 if ok else 1

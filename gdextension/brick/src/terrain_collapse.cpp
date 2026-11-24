@@ -149,7 +149,7 @@ double ms_since(std::chrono::steady_clock::time_point t) {
 }
 
 Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool last_side,
-        double tension, double mass_per_cell, TopCache &tops) {
+        double tension, double mass_per_cell, double building_times, TopCache &tops) {
     Attempt a;
     const auto t0 = std::chrono::steady_clock::now();
     const int lob = fdiv(lo.y, PPB), hib = fdiv(hi.y, PPB);
@@ -505,15 +505,19 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
     // One archetype a size, baked as met: the top pieces come in the
     // packer's sizes (2x6, 2x3, 1x4 ...), the bond's in 2x4 and its parts.
     std::unordered_map<int, int> arch_of;
-    auto arch_for = [&](int sx, int sz) -> int {
-        const int k = sx * 64 + sz;
+    // A building material's brick weighs `building_times` its cells
+    // (Docs/TerrainBuildings.md 2): at the ground's tension it holds as a
+    // city brick does.
+    auto arch_for = [&](int sx, int sz, bool building) -> int {
+        const int k = (sx * 64 + sz) * 2 + (building ? 1 : 0);
         auto it = arch_of.find(k);
         if (it != arch_of.end()) {
             return it->second;
         }
         const Vector3i size(sx, PPB, sz);
+        const double times = building ? building_times : 1.0;
         const int a2 = w->bake_archetype(String("terrain_v") + String::num_int64(k), size,
-                (float)(size.x * size.y * size.z * mass_per_cell));
+                (float)(size.x * size.y * size.z * mass_per_cell * times));
         arch_of[k] = a2;
         return a2;
     };
@@ -528,7 +532,7 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
         cells.set((int64_t)i * 3, b.x);
         cells.set((int64_t)i * 3 + 1, b.y * PPB);
         cells.set((int64_t)i * 3 + 2, b.z);
-        archs.set((int64_t)i, arch_for(b.sx, b.sz));
+        archs.set((int64_t)i, arch_for(b.sx, b.sz, is_building_material(b.m)));
         cols.set((int64_t)i, 0);
     }
     const PackedInt32Array ids = w->place_blocks(ch, Vector3i(0, 0, 0), cells, archs, cols);
@@ -609,7 +613,8 @@ int TerrainCollapse::material_class(int m) {
     return bond_group(m);
 }
 
-Dictionary TerrainCollapse::survey(Vector3i lo, Vector3i hi, double tension, double mass_per_cell) {
+Dictionary TerrainCollapse::survey(Vector3i lo, Vector3i hi, double tension, double mass_per_cell,
+        double building_times) {
     const Vector3i l(std::min(lo.x, hi.x), std::min(lo.y, hi.y), std::min(lo.z, hi.z));
     const Vector3i h(std::max(lo.x, hi.x), std::max(lo.y, hi.y), std::max(lo.z, hi.z));
     Attempt a;
@@ -619,7 +624,7 @@ Dictionary TerrainCollapse::survey(Vector3i lo, Vector3i hi, double tension, dou
     TopCache tops;
     for (int k = 0; k <= 2 * (GROW_TIMES + GROW_SIDE_TIMES) + 2; ++k) {
         a = run(l, h, ABOVE + GROW_UP * up, REACH + GROW_SIDE * side, up >= up_max,
-                side >= side_max, tension, mass_per_cell, tops);
+                side >= side_max, tension, mass_per_cell, building_times, tops);
         sample_ms += a.sample_ms;
         solve_ms += a.solve_ms;
         tops_ms += a.tops_ms;
@@ -669,7 +674,8 @@ Dictionary TerrainCollapse::survey(Vector3i lo, Vector3i hi, double tension, dou
 
 void TerrainCollapse::_bind_methods() {
     ClassDB::bind_static_method("TerrainCollapse",
-            D_METHOD("survey", "lo", "hi", "tension", "mass_per_cell"), &TerrainCollapse::survey);
+            D_METHOD("survey", "lo", "hi", "tension", "mass_per_cell", "building_times"),
+            &TerrainCollapse::survey, DEFVAL(1.0));
     ClassDB::bind_static_method("TerrainCollapse", D_METHOD("material_class", "material"),
             &TerrainCollapse::material_class);
     BIND_CONSTANT(REACH);

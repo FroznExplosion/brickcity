@@ -296,7 +296,9 @@ func _start_survey() -> void:
 	_holder = holder
 	_job = WorkerThreadPool.add_task(func() -> void:
 			var t0 := Time.get_ticks_usec()
-			var r: Dictionary = TerrainCollapse.survey(lo, hi, t, m)
+			# A building's bricks (Docs/TerrainBuildings.md 2) hold as the city's:
+			# x TERRAIN_TIMES their mass at the ground's x TERRAIN_TIMES tension.
+			var r: Dictionary = TerrainCollapse.survey(lo, hi, t, m, TERRAIN_TIMES)
 			r["ms"] = (Time.get_ticks_usec() - t0) / 1000.0
 			holder[0] = r, true, "ground survey")
 

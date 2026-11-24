@@ -3126,7 +3126,7 @@ int BrickTerrain::set_edits(const PackedByteArray &bytes) {
             v[a] = (int32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16)
                     | ((uint32_t)p[3] << 24));
         }
-        const int m = std::min((int)r[k * 13 + 12], (int)MATERIAL_COUNT - 1);
+        const int m = clamp_material((int)r[k * 13 + 12]);
         set_edit(v[0], v[1], v[2], m);
     }
     return (int)n;
@@ -3233,7 +3233,7 @@ int BrickTerrain::set_placed(const PackedInt32Array &cells) {
 
 Dictionary BrickTerrain::fill_box(Vector3i lo, Vector3i hi, int material, bool only_air) {
     Dictionary out;
-    const int mat = std::min(std::max(material, 0), (int)MATERIAL_COUNT - 1);
+    const int mat = clamp_material(material);
     std::set<std::pair<int, int>> touched;
     int changed = 0;
     // A placed block is at most a few studs across; refuse anything huge.
