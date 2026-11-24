@@ -124,9 +124,9 @@ func setup(p_host: Node) -> void:
 	_lava_mat.set_shader_parameter("lava", true)
 	# How long a new height takes to ease in: the mesher eases on from where
 	# a corner is drawn, on the same numbers (BrickFluid.ease_seconds).
-	var ease := BrickFluid.ease_seconds()
-	_water_mat.set_shader_parameter("ease_s", ease[1])
-	_lava_mat.set_shader_parameter("ease_s", ease[2])
+	var ease_s := BrickFluid.ease_seconds()
+	_water_mat.set_shader_parameter("ease_s", ease_s[1])
+	_lava_mat.set_shader_parameter("ease_s", ease_s[2])
 	# The pawn asks with global positions; the water is in the mine world's
 	# terrain frame (its origin shift, Docs/MineWorld.md 15).
 	Pawn.water_probe = func(p: Vector3) -> float: return surface_at(host.to_local(p))

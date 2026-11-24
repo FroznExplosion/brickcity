@@ -17,6 +17,10 @@ extends SceneTree
 ##     inside a box, or a walker falls through ground that is drawn.
 ##   * both again with the deep tier on (tiles over their floor, then the
 ##     sections under them), and after shots have broken bricks.
+##   * kept generated cells (Docs/MineWorld.md 21, item 1): a tile built from
+##     the kept noise is the same, byte for byte, as one built from the noise
+##     afresh -- after shots, a pit dug under the kept cells (deep tier off)
+##     and a block placed above every column.
 ##   * studs (Docs/MineWorld.md 20): the surface keeps a mix of studded and
 ##     smooth top pieces; cave floors carry studs, more often than the
 ##     surface; a top piece that a higher column stands on (its bond
@@ -41,7 +45,10 @@ func _initialize() -> void:
 	_audit("deep tier on", true)
 	_shoot_some()
 	_audit("after shots", true)
+	_kept_same("deep tier on, after shots", true)
 	BrickTerrain.set_deep_tier(false)
+	_dig_and_place()
+	_kept_same("deep tier off, a pit and a placed block", false)
 	BrickTerrain.clear_terrain_edits()
 
 	BrickTerrain.set_generator(0)
@@ -138,6 +145,53 @@ func _shoot_some() -> void:
 			var res: Dictionary = BrickTerrain.clear_runs(runs)
 			n += int(res.get("removed", 0))
 	print("[audit] shots removed %d cells" % n)
+
+
+## A pit far down (under what a first sample keeps) and a column of blocks
+## above the ground, in the first few tiles.
+func _dig_and_place() -> void:
+	var tiles := _tiles()
+	for i in 4:
+		var t: Vector2i = tiles[i]
+		var x := t.x * 32 + 10
+		var z := t.y * 32 + 12
+		var top := BrickTerrain.surface_plate(x, z)
+		BrickTerrain.fill_box(Vector3i(x, top - 120, z), Vector3i(x + 2, top, z + 2), 0, false)
+		BrickTerrain.fill_box(Vector3i(x + 6, top + 1, z), Vector3i(x + 6, top + 40, z), 2, true)
+
+
+## Every tile (and with the deep tier on, the top 3 sections under it) built
+## twice: from the kept cells, then with the field's serial bumped
+## (reset_gen_params: the same params) so the noise is sampled afresh.
+func _kept_same(label: String, deep: bool) -> void:
+	var warm := {}
+	var sp := BrickTerrain.get_deep_section_plates()
+	for t in _tiles():
+		BrickTerrain.build_tile(t.x, t.y)   # keeps the cells if not kept yet
+		warm[t] = _bytes(BrickTerrain.build_tile(t.x, t.y))
+		if deep:
+			var sy0 := floori(float(BrickTerrain.deep_top(t.x, t.y) - 1) / sp)
+			for sy in range(sy0, sy0 - 3, -1):
+				BrickTerrain.build_section(t.x, sy, t.y)
+				warm[Vector3i(t.x, sy, t.y)] = _bytes(BrickTerrain.build_section(t.x, sy, t.y))
+	var stats := BrickTerrain.get_tile_pack_stats(true)
+	BrickTerrain.reset_gen_params()
+	var differ := 0
+	for k in warm:
+		var d: Dictionary = BrickTerrain.build_tile(k.x, k.y) if k is Vector2i 				else BrickTerrain.build_section(k.x, k.y, k.z)
+		if _bytes(d) != warm[k]:
+			differ += 1
+	var hits := int(stats.get("gen_hits", 0)) + int(stats.get("gen_sec_hits", 0))
+	_expect(differ == 0 and int(stats.get("gen_hits", 0)) > 0 and (not deep or int(stats.get("gen_sec_hits", 0)) > 0),
+			"%s: %d of %d tiles and sections differ built from kept cells (%d kept-cell hits)"
+			% [label, differ, warm.size(), hits])
+
+
+func _bytes(d: Dictionary) -> PackedByteArray:
+	var out := var_to_bytes(d.get("mesh", []))
+	out.append_array(var_to_bytes(d.get("boxes", PackedFloat32Array())))
+	out.append_array(var_to_bytes(d.get("overlay_bricks", PackedFloat32Array())))
+	return out
 
 
 func _expect(ok: bool, what: String) -> void:

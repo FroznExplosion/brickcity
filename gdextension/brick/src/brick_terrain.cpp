@@ -1094,6 +1094,91 @@ static int tile_floor_of(const std::vector<BColumn> &bcols) {
     return std::min(lo + 1 - SECTION_BELOW, deep);
 }
 
+// --- generated tiles -------------------------------------------------------
+//
+// A tile's GENERATED cells, kept (Docs/MineWorld.md 21, item 1). The noise is
+// nearly all of a sample (~5 ms of 5.1), and no edit changes it: a shot
+// re-sampled the whole tile from noise for find_brick and again for the
+// rebuild. Kept, a re-sample is a copy plus the edits.
+namespace {
+struct GenTile {
+    int lo = 0, hi = 0, deep = 0;   ///< sample_tile's bounds from the columns
+    int gy0 = 0, gys = 0;           ///< the plates `vox` holds
+    std::vector<uint8_t> vox;       ///< SPAN * gys * SPAN, TileSample's layout
+    std::vector<int16_t> top;       ///< generated top plate a column, gy0 - 1: none
+};
+struct GenStore {
+    std::mutex lock;
+    struct Entry {
+        uint32_t field = 0;
+        uint64_t used = 0;
+        std::shared_ptr<const GenTile> gen;
+    };
+    std::unordered_map<uint64_t, Entry> tiles;
+    uint64_t clock = 0;
+    int64_t hits = 0, made = 0;
+};
+/// Surface tiles: ~180 KB each (36 x 36 columns, ~140 plates). The tiles
+/// sampled again are the ones being dug, near the eye; streaming passes
+/// through. Deep sections (Docs/MineWorld.md 16): one store of their own, so
+/// a cave's sections and the ground over it do not push each other out.
+GenStore g_gen, g_gen_sec;
+constexpr size_t GEN_MAX = 64;
+
+std::shared_ptr<const GenTile> gen_find(GenStore &st, uint64_t k, uint32_t field) {
+    std::lock_guard<std::mutex> lk(st.lock);
+    auto it = st.tiles.find(k);
+    if (it == st.tiles.end() || it->second.field != field) {
+        return nullptr;
+    }
+    it->second.used = ++st.clock;
+    ++st.hits;
+    return it->second.gen;
+}
+
+void gen_keep(GenStore &st, uint64_t k, uint32_t field, std::shared_ptr<const GenTile> gen) {
+    std::lock_guard<std::mutex> lk(st.lock);
+    ++st.made;
+    if (st.tiles.size() >= GEN_MAX && st.tiles.find(k) == st.tiles.end()) {
+        std::vector<uint64_t> used;
+        used.reserve(st.tiles.size());
+        for (const auto &e : st.tiles) {
+            used.push_back(e.second.used);
+        }
+        const size_t q = used.size() / 4;
+        std::nth_element(used.begin(), used.begin() + q, used.end());
+        const uint64_t cut = used[q];
+        for (auto it = st.tiles.begin(); it != st.tiles.end();) {
+            it = it->second.used <= cut ? st.tiles.erase(it) : std::next(it);
+        }
+    }
+    st.tiles[k] = GenStore::Entry{ field, ++st.clock, std::move(gen) };
+}
+} // namespace
+
+/// The edits over a sample's generated cells, from the deepest edit of its
+/// tile and the neighbours (the margin reaches into them) up: under it
+/// nothing was edited, and most of a sample's plates are under it.
+static void apply_edits(TileSample &out) {
+    const int dug_to = deepest_edit_near(out.tx, out.tz);
+    if (dug_to == INT_MAX) {
+        return;
+    }
+    const int gx0 = out.tx * TILE, gz0 = out.tz * TILE;
+    const int ylo = std::max(out.y0, dug_to);
+    for (int lz = -MARGIN; lz < TILE + MARGIN; ++lz) {
+        for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
+            const int gx = gx0 + lx, gz = gz0 + lz;
+            for (int yp = ylo; yp < out.y0 + out.ysize; ++yp) {
+                const int e = edit_at(pack_cell(gx, yp, gz));
+                if (e >= 0) {
+                    out.vox[out.vidx(lx, yp, lz)] = (uint8_t)e;
+                }
+            }
+        }
+    }
+}
+
 void sample_tile(const Field &f, int tx, int tz, TileSample &out) {
     out.tx = tx;
     out.tz = tz;
@@ -1111,7 +1196,15 @@ void sample_tile(const Field &f, int tx, int tz, TileSample &out) {
     const bool biomes = biomes_on();
     std::vector<BColumn> bcols;
     int deep = 1000000;
-    if (biomes) {
+    // The field's serial: configure, the generator and its params bump it.
+    const uint32_t field = (uint32_t)(tile_version(tx, tz) >> 32);
+    const uint64_t gkey = (uint64_t)tile_key(tx, tz);
+    std::shared_ptr<const GenTile> gen = biomes ? gen_find(g_gen, gkey, field) : nullptr;
+    if (gen) {
+        hi = gen->hi;
+        lo = gen->lo;
+        deep = gen->deep;
+    } else if (biomes) {
         bcols.resize((size_t)SPAN * SPAN);
         for (int lz = -MARGIN; lz < TILE + MARGIN; ++lz) {
             for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
@@ -1168,7 +1261,32 @@ void sample_tile(const Field &f, int tx, int tz, TileSample &out) {
     // cave test and the edit lookup remain per cell.
     const bool no_edits = edits_empty() || g_flat_mode;
     out.gtp.assign(SPAN * SPAN, (int16_t)(out.y0 - 1));
-    if (biomes) {
+    // The kept cells reach as deep as this sample's, or they are made again
+    // (a pit dug past them, the deep tier off).
+    if (gen && out.y0 < gen->gy0) {
+        gen = nullptr;
+        bcols.resize((size_t)SPAN * SPAN);
+        for (int lz = -MARGIN; lz < TILE + MARGIN; ++lz) {
+            for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
+                bcols[TileSample::idx(lx, lz)] = biome_column(f.seed, gx0 + lx, gz0 + lz);
+            }
+        }
+    }
+    if (gen) {
+        // Row by row (a row is SPAN columns of one plate): what the kept
+        // tile has; above it, air (it reaches past every column's bound).
+        const int ylast = std::min(out.y0 + out.ysize, gen->gy0 + gen->gys);
+        for (int lz = 0; lz < SPAN; ++lz) {
+            for (int yp = out.y0; yp < ylast; ++yp) {
+                std::memcpy(&out.vox[(size_t)SPAN * ((yp - out.y0) + (size_t)out.ysize * lz)],
+                        &gen->vox[(size_t)SPAN * ((yp - gen->gy0) + (size_t)gen->gys * lz)], SPAN);
+            }
+        }
+        for (int i = 0; i < SPAN * SPAN; ++i) {
+            out.gtp[i] = gen->top[i] >= out.y0 ? gen->top[i] : (int16_t)(out.y0 - 1);
+        }
+    }
+    if (biomes && !gen) {
         for (int lz = -MARGIN; lz < TILE + MARGIN; ++lz) {
             for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
                 const int gx = gx0 + lx, gz = gz0 + lz;
@@ -1189,17 +1307,23 @@ void sample_tile(const Field &f, int tx, int tz, TileSample &out) {
                     if (v != MAT_AIR) {
                         gen_top = (int16_t)yp;
                     }
-                    if (!no_edits) {
-                        const int e = edit_at(pack_cell(gx, yp, gz));
-                        if (e >= 0) {
-                            v = (uint8_t)e;
-                        }
-                    }
                     out.vox[out.vidx(lx, yp, lz)] = v;
                 }
                 out.gtp[TileSample::idx(lx, lz)] = gen_top;
             }
         }
+        auto made = std::make_shared<GenTile>();
+        made->lo = lo;
+        made->hi = hi;
+        made->deep = deep;
+        made->gy0 = out.y0;
+        made->gys = out.ysize;
+        made->vox = out.vox;
+        made->top = out.gtp;
+        gen_keep(g_gen, gkey, field, std::move(made));
+    }
+    if (biomes && !no_edits) {
+        apply_edits(out);
     }
     for (int lz = -MARGIN; lz < TILE + MARGIN && !biomes; ++lz) {
         for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
@@ -3323,6 +3447,25 @@ Dictionary BrickTerrain::get_tile_pack_stats(bool reset) {
     d["hits"] = g_packs.hits;
     d["packs"] = g_packs.packs;
     d["kept"] = (int64_t)g_packs.tiles.size();
+    {
+        std::lock_guard<std::mutex> glk(g_gen.lock);
+        d["gen_hits"] = g_gen.hits;
+        d["gen_made"] = g_gen.made;
+        d["gen_kept"] = (int64_t)g_gen.tiles.size();
+        if (reset) {
+            g_gen.hits = 0;
+            g_gen.made = 0;
+        }
+    }
+    {
+        std::lock_guard<std::mutex> glk(g_gen_sec.lock);
+        d["gen_sec_hits"] = g_gen_sec.hits;
+        d["gen_sec_made"] = g_gen_sec.made;
+        if (reset) {
+            g_gen_sec.hits = 0;
+            g_gen_sec.made = 0;
+        }
+    }
     if (reset) {
         g_packs.hits = 0;
         g_packs.packs = 0;
@@ -5676,9 +5819,19 @@ static bool sample_section(int tx, int sy, int tz, TileSample &out) {
     if (!biomes_on()) {
         return false;
     }
+    // The kept cells (see GenTile): the section's plates are the
+    // generator's alone, so a kept one is always the whole of it.
+    const uint32_t field = (uint32_t)(tile_version(tx, tz) >> 32);
+    const uint64_t gkey = (uint64_t)tile_key(tx, tz) * 0x9E3779B97F4A7C15ULL ^ (uint64_t)(uint32_t)sy;
+    std::shared_ptr<const GenTile> gen = gen_find(g_gen_sec, gkey, field);
     std::vector<BColumn> bcols;
-    span_columns(tx, tz, bcols);
-    const int top = tile_floor_of(bcols);
+    int top;
+    if (gen) {
+        top = gen->hi;
+    } else {
+        span_columns(tx, tz, bcols);
+        top = tile_floor_of(bcols);
+    }
     const int lo = std::max(sy * DEEP_SECTION_PLATES, biome_bedrock_plate());
     const int hi = std::min((sy + 1) * DEEP_SECTION_PLATES, top);
     if (lo >= hi) {
@@ -5688,34 +5841,41 @@ static bool sample_section(int tx, int sy, int tz, TileSample &out) {
     out.own_hi = hi;
     out.y0 = lo - 1;
     out.ysize = hi - lo + 2;
-    out.vox.assign((size_t)SPAN * out.ysize * SPAN, (uint8_t)MAT_AIR);
     const bool no_edits = edits_empty();
     const int gx0 = tx * TILE, gz0 = tz * TILE;
-    for (int lz = -MARGIN; lz < TILE + MARGIN; ++lz) {
-        for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
-            const int gx = gx0 + lx, gz = gz0 + lz;
-            const BColumn &c = bcols[TileSample::idx(lx, lz)];
-            int last_b = INT_MIN;
-            uint8_t last_v = (uint8_t)MAT_AIR;
-            for (int yp = out.y0; yp < out.y0 + out.ysize; ++yp) {
-                uint8_t v = (uint8_t)MAT_AIR;
-                if (yp <= c.bound_p) {
-                    const int yb = floor_div(yp, PLATES_PER_CELL);
-                    if (yb != last_b) {
-                        last_b = yb;
-                        last_v = (uint8_t)biome_cell(c, g_field.seed, gx, yb, gz);
+    if (gen) {
+        out.vox = gen->vox;
+    } else {
+        out.vox.assign((size_t)SPAN * out.ysize * SPAN, (uint8_t)MAT_AIR);
+        for (int lz = -MARGIN; lz < TILE + MARGIN; ++lz) {
+            for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
+                const int gx = gx0 + lx, gz = gz0 + lz;
+                const BColumn &c = bcols[TileSample::idx(lx, lz)];
+                int last_b = INT_MIN;
+                uint8_t last_v = (uint8_t)MAT_AIR;
+                for (int yp = out.y0; yp < out.y0 + out.ysize; ++yp) {
+                    uint8_t v = (uint8_t)MAT_AIR;
+                    if (yp <= c.bound_p) {
+                        const int yb = floor_div(yp, PLATES_PER_CELL);
+                        if (yb != last_b) {
+                            last_b = yb;
+                            last_v = (uint8_t)biome_cell(c, g_field.seed, gx, yb, gz);
+                        }
+                        v = last_v;
                     }
-                    v = last_v;
+                    out.vox[out.vidx(lx, yp, lz)] = v;
                 }
-                if (!no_edits) {
-                    const int e = edit_at(pack_cell(gx, yp, gz));
-                    if (e >= 0) {
-                        v = (uint8_t)e;
-                    }
-                }
-                out.vox[out.vidx(lx, yp, lz)] = v;
             }
         }
+        auto made = std::make_shared<GenTile>();
+        made->hi = top;
+        made->gy0 = out.y0;
+        made->gys = out.ysize;
+        made->vox = out.vox;
+        gen_keep(g_gen_sec, gkey, field, std::move(made));
+    }
+    if (!no_edits) {
+        apply_edits(out);
     }
     // Open air: every side of a section is open to its neighbours,
     // conservatively (only a pocket entirely inside it is sealed).

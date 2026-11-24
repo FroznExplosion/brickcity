@@ -5718,8 +5718,8 @@ func _run_bricks_gate() -> void:
 			if layer != null:
 				layer.visible = false
 	var fails := 0
-	var check := func(ok: bool, what: String) -> void:
-		print("[mine-bricks] %s  %s" % ["ok  " if ok else "FAIL", what])
+	var check := func(passed: bool, what: String) -> void:
+		print("[mine-bricks] %s  %s" % ["ok  " if passed else "FAIL", what])
 	if bricks == null or not _overlay_on:
 		print("[mine-bricks] FAIL  the overlay is off (Chamfered brick edges off, or --old-chamfer)")
 		get_tree().quit()
@@ -5738,12 +5738,12 @@ func _run_bricks_gate() -> void:
 	_streamer.settle(Vector2(mid.x, mid.z))
 	await _frames(90)
 	var cam0 := get_viewport().get_camera_3d()
-	var cam := Camera3D.new()
-	add_child(cam)
-	cam.attributes = cam0.attributes
-	cam.near = 0.02
-	cam.fov = cam0.fov
-	cam.current = true
+	var shot_cam := Camera3D.new()
+	add_child(shot_cam)
+	shot_cam.attributes = cam0.attributes
+	shot_cam.near = 0.02
+	shot_cam.fov = cam0.fov
+	shot_cam.current = true
 	# Inside: two corners, a wall straight on, floor and roof edges.
 	var views := []
 	var c0 := Vector3((o.x + 1) * stud, (b + 3) * plate, (o.y - 8) * stud)
@@ -5782,13 +5782,13 @@ func _run_bricks_gate() -> void:
 			for f in 6:
 				# The face's middle: on the room's inside (its box, edges in)?
 				var fc := c
-				var ax := f / 2
+				var ax := f >> 1
 				fc[ax] = bhi[ax] if f % 2 == 0 else blo[ax]
 				var inside := fc.x > rlo.x - 0.01 and fc.x < rhi.x + 0.01 and fc.y > rlo.y - 0.01 \
 						and fc.y < rhi.y + 0.01 and fc.z > rlo.z - 0.01 and fc.z < rhi.z + 0.01
 				for corner in 4:
 					var n := f * 4 + corner
-					var l := (int(rb[k + 16 + n / 6]) >> (4 * (n % 6))) & 15
+					var l := (int(rb[k + 16 + int(n / 6.0)]) >> (4 * (n % 6))) & 15
 					lv.append(l)
 					if inside and l >= 6:
 						any = true
@@ -5807,7 +5807,7 @@ func _run_bricks_gate() -> void:
 	var out_count := 0
 	for v: Array in views:
 		var t: Transform3D = v[1]
-		cam.global_transform = t
+		shot_cam.global_transform = t
 		if str(v[0]) == "ground":
 			_streamer.settle(Vector2(t.origin.x, t.origin.z))
 		for on in [true, false]:
@@ -5843,7 +5843,7 @@ func _run_bricks_gate() -> void:
 	var most := 0
 	for i in 24:
 		var yaw := TAU * i / 24.0
-		cam.global_transform = Transform3D(Basis(), mid).looking_at(mid + Vector3(sin(yaw), -0.2, cos(yaw)))
+		shot_cam.global_transform = Transform3D(Basis(), mid).looking_at(mid + Vector3(sin(yaw), -0.2, cos(yaw)))
 		await get_tree().process_frame
 		sum += bricks.fill_ms
 		most = maxi(most, bricks.count)
@@ -5857,7 +5857,7 @@ func _run_bricks_gate() -> void:
 	# Every instance within range of the eye (its box), from the buffer this
 	# script wrote: the transform's origin and scale.
 	var buf: PackedFloat32Array = bricks.buffer
-	var e := to_local(cam.global_position)
+	var e := to_local(shot_cam.global_position)
 	var worst_d := 0.0
 	for i in bricks.count:
 		var k := i * TerrainBricks.STRIDE
@@ -5871,10 +5871,10 @@ func _run_bricks_gate() -> void:
 	# A shot (stage 6): the brick goes the frame it is hit, its hole drawn by
 	# the overlay till the rebuilt tile is; pictures the next frame and once
 	# the hole is the ground's own (mine_bricks_shot_now / _later).
-	cam.global_transform = views[4][1]
-	_streamer.settle(Vector2(cam.global_position.x, cam.global_position.z))
+	shot_cam.global_transform = views[4][1]
+	_streamer.settle(Vector2(shot_cam.global_position.x, shot_cam.global_position.z))
 	await _frames(20)
-	var aim := to_local(cam.global_position) + (-cam.global_transform.basis.z) * 2.5
+	var aim := to_local(shot_cam.global_position) + (-shot_cam.global_transform.basis.z) * 2.5
 	var sc := Vector2i(floori(aim.x / stud), floori(aim.z / stud))
 	var shot_at := Vector3((sc.x + 0.5) * stud, _ground_m(sc.x, sc.y) - 0.02, (sc.y + 0.5) * stud)
 	var hid0 := bricks.hidden_total

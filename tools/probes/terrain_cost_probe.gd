@@ -91,6 +91,10 @@ func _run(sky: bool, stud: float) -> void:
 		var res: Dictionary = BrickTerrain.clear_runs(runs)
 		_add(sums, "clear_runs (main)", _ms(t0))
 		tiles_named += (res.get("tiles", PackedInt32Array()) as PackedInt32Array).size() / 2
+		# The next shot, before the rebuild: the edit made the pack stale.
+		t0 = Time.get_ticks_usec()
+		BrickTerrain.find_brick(p + Vector3(-stud * 3, 0, 0), Vector3.UP)
+		_add(sums, "find_brick (right after an edit)", _ms(t0))
 		t0 = Time.get_ticks_usec()
 		BrickTerrain.build_tile(tx, tz)
 		_add(sums, "build_tile (after edit)", _ms(t0))
