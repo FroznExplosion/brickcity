@@ -370,3 +370,57 @@ saved state for every chunk ever visited, where today an untouched world
 saves nothing; and the far tier and the water would need the same ids or
 disagree. Worth revisiting if the region fit's seams at region edges show,
 or if bricks wanted across whole cave walls.
+
+## 10. GDScript or C++? An audit (2026-11-24)
+
+The user asked what in the terrain, water and bricks should move from
+GDScript to C++. Read from the code and the costs the docs have measured;
+nothing new was timed (no Godot in the container this was written in).
+
+**The finding first: GDScript is not what makes breaks slow or frames long.**
+- The frame is GPU-bound (12.5 of 16.6 ms on the Legion Go before anything
+  happens, MineWorld.md 9). The whole world's main-thread share is 1.0-1.4 ms
+  a frame, and an edit's worst main-thread step 1.1-1.5 ms.
+- A break's latency is on the workers (the find, the whole-tile rebake from
+  the noise, the swap), all C++ already. Its GDScript (`_break_from_box`,
+  `terrain_edited`, `_flush_edits`) is a few calls. Stage A and C fix the
+  break; moving its GDScript would not.
+- The heavy work is already C++: generation, bakes, packing, the collapse
+  survey and solver, the overlay's pick (moved 2026-11-23: it was a 5 ms
+  GDScript loop), the water's rules, its mesher and its locks. Waits on
+  workers in the mine world are all checked with `is_task_completed` first.
+
+**What is worth moving**, by how often it runs and what it costs:
+
+| # | What | Where | Why | Verdict |
+|---|---|---|---|---|
+| 1 | Falling sand | `ground_collapse.gd` `_fall_sand` | every frame, per column: a physics ray, a `solid_at` per plate fallen, and a `set_instance_transform` per cell (one renderer call each). A sand cliff let go is hundreds of columns, thousands of cells. Not measured. | **move**: one C++ step for all columns (solid tests from the store, one buffer out, `multimesh.buffer` set once). Measure first with a big sand fall. |
+| 2 | Tree scatter | `trees.gd` `Trees.scatter`, called by `terrain_trees.gd` | per 128-stud cell, on the main thread: a Callable per grid point (biome chance), four `surface_plate` per tree (each a generator column). The 'budget' is checked between cells, so one cell is never split. Not measured. | **move** to C++ on a worker (pure function of seed and ground), main thread only places; with stage A, `surface_plate` reads the store |
+| 3 | Laying a fallen piece | `ground_collapse.gd` `_let_group_go` | GDScript loops build the runs and the BrickWorld arrays from the survey's result: ~1 ms a 1,000 bricks, main (TerrainCollapse.md 6) | **move into the survey**: it returns the runs and arrays ready, on its worker |
+| 4 | Collision boxes of a tile | `terrain_tile.gd` | one `PhysicsServer3D.body_add_shape` a box from GDScript (~65 a tile; 670 measured 0.77 ms) | small; a C++ helper adding a tile's boxes in one call, if a profile shows it |
+| 5 | Lava rock | `mine_water.gd` `apply` | one `fill_box` a cell in a GDScript loop | small; one batched call |
+| 6 | Floaters, pieces' physics | `floaters.gd`, `planet_pieces.gd` | per body, a few native calls a tick; capped (100 pieces laid) | **leave**: glue on bodies, which are main-thread anyway |
+| 7 | Sky light on things | `mine_sky_lit.gd` | budgeted, 250 us a frame | **leave** |
+| 8 | Water glue | `mine_water.gd`, `water_sea.gd` | swaps meshes (6 a frame), copies wave numbers, burns at 10 Hz | **leave**; the water's work is C++ |
+
+**Outside the mine world, measured, other areas** (for their chats; listed in
+Docs/WhereWorkRuns.md 2 and EngineChoice.md):
+- The city's destruction: the island tick (worst 8-12 ms), fracture spawning
+  and promotion (42 ms) -- GDScript plus node and body creation, the largest
+  measured GDScript costs in the project. EngineChoice.md's first
+  recommendation is moving them to C++ and making fewer nodes and bodies.
+- `BuildingShell.build_arrays`: geometry in GDScript, 2.7-5.7 ms
+  (HandoffPerf.md).
+- Snow lying on the ground (`snow_cover.gd`, city and planets, not the mine
+  world): 1,024 physics rays a square from GDScript, 2.4 ms a tick while it
+  fills. On brick terrain it needs no rays: the ground's top is known (the
+  store, or `surface_plate`).
+- `TerrainCoarse.field_changed` waits for its bakes on the main thread
+  (`wait_for_group_task_completion`, then `_rebuild_ring` bakes and waits
+  again). The mine world uses the non-blocking `field_changed_soon`; the
+  city (`city_scene.gd`) and the heightfield scene still call the blocking
+  one on every terrain edit -- a CLAUDE.md "no waiting on a worker" break.
+
+**Order**: 3 goes with stage D (the survey's output); 1 and 2 after stage A
+(they read the store); 4 and 5 only if a profile asks. The coarse tier's
+blocking edit is the terrain area's, small, and can go any time.
