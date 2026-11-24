@@ -10,7 +10,7 @@ extends SceneTree
 ##
 ##   * find_brick (worker in play): samples the whole hit tile to find one piece.
 ##   * clear_runs (main thread): the cells cleared, the edit recorded.
-##   * build_tile + build_tile_chamfered (workers): the whole tile again, twice.
+##   * build_tile (a worker): the whole tile again.
 ##   * TerrainCollapse.survey (worker): the ground round the edit.
 ##   * the tiles an edit names (a brick at a tile edge rebuilds its neighbour).
 ## With sky light on and off, so its share shows. Timings are only fair on a
@@ -82,9 +82,6 @@ func _run(sky: bool, stud: float) -> void:
 			var ix = m[Mesh.ARRAY_INDEX]
 			tris += (ix.size() if ix != null else (m[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()) / 3
 		boxes += (d.get("boxes", PackedFloat32Array()) as PackedFloat32Array).size() / 6
-		t0 = Time.get_ticks_usec()
-		BrickTerrain.build_tile_chamfered(tx, tz, TerrainTile.BEVEL)
-		_add(sums, "build_tile_chamfered (first)", _ms(t0))
 		# A shot into the middle of the tile, down onto its top.
 		var cx := tx * tile + 9 + k
 		var cz := tz * tile + 11
@@ -107,9 +104,6 @@ func _run(sky: bool, stud: float) -> void:
 		t0 = Time.get_ticks_usec()
 		BrickTerrain.build_tile(tx, tz)
 		_add(sums, "build_tile (after edit)", _ms(t0))
-		t0 = Time.get_ticks_usec()
-		BrickTerrain.build_tile_chamfered(tx, tz, TerrainTile.BEVEL)
-		_add(sums, "build_tile_chamfered (after edit)", _ms(t0))
 		t0 = Time.get_ticks_usec()
 		BrickTerrain.find_brick(p + Vector3(stud * 3, 0, 0), Vector3.UP)
 		_add(sums, "find_brick (tile kept)", _ms(t0))

@@ -140,11 +140,19 @@ sunken face is hard to see for that time.
     52 C): on foot 5.45 ms with the overlay, 6.06 ms with the old chamfered
     tier (0.90 vs 0.93 M tris); 25 m up 3.99 vs 4.00. Its own row ("brick
     overlay off") is inside the gate's noise.
-- **Stage 7 (as the user asked, 2026-11-23): the old chamfer is OFF everywhere
-  but its code is KEPT** (build_tile_chamfered, add_bevel, the streamer's
-  _bevel_step, mask_faces' bevel/skirt/backing paths, TerrainTile.bevel_*):
-  delete only when the user says so. Reached only with `-- --old-chamfer`
-  or by setting TerrainBricks.overlay_default false.
+- **Stage 7 done 2026-11-24: the old chamfer is DELETED** (the user's call):
+  build_tile_chamfered, set_face_bevel / get_face_bevel, the per-thread
+  bevel, MeshBuf::quad's facets, mask_faces' convex/square/bound edge rules,
+  skirts and backing, the packer's cut corners, skirts and upright facets,
+  the curved ground's chamfer floor; TerrainTile.add_bevel / bevel_enabled /
+  the chamfered near surface; the streamer's chamfer bakes; the mine world's
+  --old-chamfer, the GPU gate's chamfered row; terrain_bench's G key and its
+  chamfer shots; terrain_probe's chamfer-width check; terrain.gdshader's
+  geo_bevel. ~940 lines. The overlay is the only real bevel; the world
+  setting Chamfered brick edges turns it off. Probes: terrain_bricks,
+  terrain (same 2 failures as before), mine_world, terrain_audit,
+  terrain_cost; --gate=bricks, --gate=seams, --deep --at-top,
+  bevel_gap_probe, ground_tools_probe.
 - Not done: the city on terrain was not looked at in a picture (its streamer
   makes the overlay as every scene does); --gate=breaklag --streaming does
   not report the overlay.
