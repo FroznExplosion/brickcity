@@ -331,6 +331,18 @@ func leave_vehicle(hurt := 0.0) -> void:
 	city.camera.allow_walk = city.camera.capture_mouse
 	if v != null and is_instance_valid(v):
 		v.rodeo.all_off("driver out")
+		# And a friend who hopped in its gunner's seat (CityScene._hop_in):
+		# he rode with the player and gets out with them, a step down the hull
+		# from the hatch the player is put at. A crew the tank came with stays.
+		# He stayed in, before: a parked tank the player had left with one of
+		# theirs shut in it (2026-11-24, --vehicles).
+		if v is Tank:
+			var t := v as Tank
+			for s in t.crew:
+				var p = t.crew[s]
+				if p != null and is_instance_valid(p) and (p as Pawn).get_meta(&"hopped_in", null) == v:
+					(p as Pawn).remove_meta(&"hopped_in")
+					t.seat_get_out(s, 0.0, 1)
 		city._enter_pawn(v.mount_point())
 		if hurt > 0.0 and city._player_pawn != null and city._player_pawn.health != null:
 			city._player_pawn.health.apply_impact(hurt, &"")

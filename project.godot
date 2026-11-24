@@ -349,6 +349,7 @@ common/physics_interpolation=true
 [rendering]
 
 limits/global_shader_variables/buffer_size=262144
+reflections/reflection_atlas/reflection_size=32
 
 [shader_globals]
 

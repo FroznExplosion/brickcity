@@ -435,23 +435,30 @@ func _quiet() -> void:
 ## Everybody out, at the hatch; `hurt` for climbing out of a wreck.
 func crew_get_out(hurt := 0.0) -> Array[Pawn]:
 	var out: Array[Pawn] = []
-	var b := _yb()
 	var i := 0
 	for s in crew:
-		var p = crew[s]
-		crew[s] = null
-		if p == null or not is_instance_valid(p):
-			continue
-		var at := mount_point() + b.z * (1.2 * i)
-		i += 1
-		if services != null and services.ai_nav != null:
-			at = services.ai_nav.snap(at)
-		_unstow(p, at)
-		if hurt > 0.0 and p.health != null:
-			p.health.apply_impact(hurt, &"")
-		out.append(p)
-		crew_out.emit(p)
+		var p := seat_get_out(s, hurt, i)
+		if p != null:
+			out.append(p)
+			i += 1
 	return out
+
+
+## Whoever is in `seat` out at the hatch, `along` places down the hull from it
+## (crew_get_out puts them in a row); `hurt` for a wreck. Null if nobody was.
+func seat_get_out(seat: int, hurt := 0.0, along := 0) -> Pawn:
+	var p = crew[seat]
+	crew[seat] = null
+	if p == null or not is_instance_valid(p):
+		return null
+	var at := mount_point() + _yb().z * (1.2 * along)
+	if services != null and services.ai_nav != null:
+		at = services.ai_nav.snap(at)
+	_unstow(p, at)
+	if hurt > 0.0 and p.health != null:
+		p.health.apply_impact(hurt, &"")
+	crew_out.emit(p)
+	return p
 
 
 ## A boarder has the hatch open (VehicleDeck): the crew are dragged out, hurt --

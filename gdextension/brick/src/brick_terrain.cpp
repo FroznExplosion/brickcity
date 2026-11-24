@@ -772,6 +772,15 @@ public:
 
     size_t size() const { return count_.load(std::memory_order_relaxed); }
 
+    /// Bytes held: every table not yet freed (the old ones stay, for readers).
+    size_t bytes() const {
+        size_t b = 0;
+        for (const auto &t : owned_) {
+            b += (t->mask + 1) * (sizeof(uint64_t) + sizeof(int32_t));
+        }
+        return b;
+    }
+
     /// The writer only: every entry.
     template <typename F> void each(F f) const {
         const Table *t = cur_.load(std::memory_order_relaxed);
@@ -6291,6 +6300,8 @@ static void sky_light_pass(MeshBuf &m, const TileSample &s, bool surface, Dictio
     std::vector<OutBrick *> obs;
     std::vector<Vector3> bpts;
     std::vector<Vector3> bnrm;
+    // Each sample's brick (index into obs), face and corner.
+    std::vector<std::array<int, 3>> bref;
     if (t_bricks != nullptr) {
         obs.reserve(t_bricks->size());
         bpts.reserve(t_bricks->size() * 24);
@@ -6301,6 +6312,11 @@ static void sky_light_pass(MeshBuf &m, const TileSample &s, bool surface, Dictio
             OutBrick &b = kv.second;
             obs.push_back(&b);
             for (int f = 0; f < 6; ++f) {
+                // Only what the bake drew is ever seen: a face drawn by none
+                // takes the brick's brightest drawn face's light (below).
+                if (b.drawn[f] == 0) {
+                    continue;
+                }
                 const int ax = f / 2;   // 0 x, 1 y, 2 z
                 // The face's whole rect in its axes.
                 int u0, v0, u1, v1;
@@ -6350,6 +6366,7 @@ static void sky_light_pass(MeshBuf &m, const TileSample &s, bool surface, Dictio
                     }
                     bpts.push_back(q);
                     bnrm.push_back(NRM[f]);
+                    bref.push_back({ (int)obs.size() - 1, f, c });
                 }
             }
         }
@@ -6510,12 +6527,37 @@ static void sky_light_pass(MeshBuf &m, const TileSample &s, bool surface, Dictio
             }
             wsum += w;
         }
-        OutBrick &ob = *obs[(size_t)(k / 24)];
-        const int f = (k / 4) % 6, cc = k % 4;
+        OutBrick &ob = *obs[(size_t)bref[(size_t)k][0]];
+        const int f = bref[(size_t)k][1], cc = bref[(size_t)k][2];
         const float lv = wsum > 1e-5f ? sum / wsum : 0.0f;
         ob.sky[f][cc] = (uint8_t)std::clamp((int)std::lround(lv), 0, SKY_MAX);
         const int bl = (int)std::lround(wsum > 1e-5f ? bs / wsum : 0.0f);
         ob.blk[f] = (uint8_t)std::clamp(std::max((int)ob.blk[f] * (cc > 0 ? 1 : 0), bl), 0, SKY_MAX);
+    }
+    // Faces drawn by none: the brightest drawn face's light, all over.
+    for (OutBrick *ob : obs) {
+        int sky = -1, blk = 0;
+        for (int f = 0; f < 6; ++f) {
+            if (ob->drawn[f] == 0) {
+                continue;
+            }
+            for (int c = 0; c < 4; ++c) {
+                sky = std::max(sky, (int)ob->sky[f][c]);
+            }
+            blk = std::max(blk, (int)ob->blk[f]);
+        }
+        if (sky < 0) {
+            continue;
+        }
+        for (int f = 0; f < 6; ++f) {
+            if (ob->drawn[f] != 0) {
+                continue;
+            }
+            for (int c = 0; c < 4; ++c) {
+                ob->sky[f][c] = (uint8_t)sky;
+            }
+            ob->blk[f] = (uint8_t)blk;
+        }
     }
     out["sky_ms"] = (double)(Time::get_singleton()->get_ticks_usec() - t0) / 1000.0;
     out["sky_filled"] = g.cells_filled;
@@ -6687,7 +6729,7 @@ static inline float pack_rgb(float r, float g, float b) {
 }
 
 Dictionary BrickTerrain::overlay_pick(const Array &lists, Vector3 eye, Vector3 forward, double range_m,
-        double cos_half, int max_bricks) {
+        double cos_half, int max_bricks, const PackedVector3Array &hidden) {
     constexpr int IN = 17, OUT = 20;
     struct Cand {
         float d2;
@@ -6728,6 +6770,19 @@ Dictionary BrickTerrain::overlay_pick(const Array &lists, Vector3 eye, Vector3 f
             const float rad = (hi - lo).length() * 0.5f;
             const float tl = to.length();
             if (tl > rad && to.dot(f) < tl * ch - rad) {
+                continue;
+            }
+            // Inside a hidden box (a millimetre's give): left out.
+            bool gone = false;
+            for (int64_t q = 0; q + 1 < hidden.size(); q += 2) {
+                const Vector3 &a = hidden[q], &e = hidden[q + 1];
+                if (lo.x >= a.x - 1e-3f && lo.y >= a.y - 1e-3f && lo.z >= a.z - 1e-3f
+                        && hi.x <= e.x + 1e-3f && hi.y <= e.y + 1e-3f && hi.z <= e.z + 1e-3f) {
+                    gone = true;
+                    break;
+                }
+            }
+            if (gone) {
                 continue;
             }
             const uint64_t k = ((uint64_t)(uint32_t)(int32_t)std::lround(lo.x / STUD_M) & 0x1FFFFFULL)
@@ -7417,6 +7472,16 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
             const bool boxed = g_face_bevel <= 0.0f && (p.kind == PIECE_BRICK || p.kind == PIECE_TILE);
             if (boxed) {
                 m.facet = BOXED_FACE;
+                // Its top and four lips, as the faces this tile draws of it.
+                const int bx = gx0 + p.brick_x(), bz = gz0 + p.brick_z();
+                const int ax0 = gx0 + p.ox, ax1 = gx0 + p.ox + p.sx;
+                const int az0 = gz0 + p.oz, az1 = gz0 + p.oz + p.sz;
+                const int lp = p.top + 1;
+                note_face(bx, bz, lp, 2, ax0, az0, ax1, az1);
+                note_face(bx, bz, lp, 1, az0, lp, az1, lp + 1);
+                note_face(bx, bz, lp, 0, az0, lp, az1, lp + 1);
+                note_face(bx, bz, lp, 5, ax0, lp, ax1, lp + 1);
+                note_face(bx, bz, lp, 4, ax0, lp, ax1, lp + 1);
             }
             // The top's bevel runs down onto the overlay's OWN lip walls
             // (always drawn), so it needs nobody else; the lips are square.
@@ -7583,8 +7648,7 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                         }
                     }
                 }
-                // Its top: its brick's box (sides are left flat: one can
-                // run down past its brick, where no box is).
+                // Its top and sides (below): its brick's box.
                 const bool boxed = g_face_bevel <= 0.0f && (p.kind == PIECE_BRICK || p.kind == PIECE_TILE);
                 if (boxed) {
                     m.facet = BOXED_FACE;
@@ -7705,9 +7769,28 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                     const Vector3 pb = Vector3(xb, 0.0f, zb) - dir * sb;
                     const Vector2 f(blen, BRICK_M);
                     const auto at = [](const Vector3 &q, float y) { return Vector3(q.x, y, q.z); };
+                    // One brick tall, on the piece's brick: its box covers it.
+                    if (boxed) {
+                        m.facet = BOXED_FACE;
+                        // What of the brick's side this draws (note_face's axes).
+                        const int sxa = gx0 + (int)std::lround(xa / STUD_M), sxb = gx0 + (int)std::lround(xb / STUD_M);
+                        const int sza = gz0 + (int)std::lround(za / STUD_M), szb = gz0 + (int)std::lround(zb / STUD_M);
+                        const int f = face_index((int)n.x, 0, (int)n.z);
+                        const int pb0 = p.top - (PLATES_PER_CELL - 1);
+                        if (n.x != 0.0f) {
+                            note_face(gx0 + p.brick_x(), gz0 + p.brick_z(), pb0, f, std::min(sza, szb),
+                                    pb0, std::max(sza, szb), p.top + 1);
+                        } else {
+                            note_face(gx0 + p.brick_x(), gz0 + p.brick_z(), pb0, f, std::min(sxa, sxb),
+                                    pb0, std::max(sxa, sxb), p.top + 1);
+                        }
+                    }
                     m.quad(n, col, f, at(pa, yb), at(pb, yb), at(pb, yt), at(pa, yt),
                         Vector2(u0 + sa, 0), Vector2(u0 + len - sb, 0), Vector2(u0 + len - sb, f.y),
                         Vector2(u0 + sa, f.y), 0, 0xF);
+                    if (boxed) {
+                        m.facet = 0;
+                    }
                     if (g_face_bevel > 0.0f) {
                         const Vector2 r(blen, yb - yr);
                         m.raw_quad(n, col, r, at(pa, yr), at(pb, yr), at(pb, yb), at(pa, yb),
@@ -8410,7 +8493,99 @@ Dictionary BrickTerrain::audit_tile(int tx, int tz, int sy) {
     return out;
 }
 
+// --- Memory (Docs/TerrainRegions.md 2, A0: terrain_mem_probe) --------------
+
+namespace {
+template <typename T> size_t vec_bytes(const std::vector<T> &v) { return v.capacity() * sizeof(T); }
+
+size_t sample_bytes(const brick::TileSample &s) {
+    return vec_bytes(s.vox) + vec_bytes(s.open) + vec_bytes(s.h) + vec_bytes(s.tp) + vec_bytes(s.gtp)
+            + vec_bytes(s.mat) + vec_bytes(s.col) + vec_bytes(s.sl_r) + vec_bytes(s.sl_len)
+            + vec_bytes(s.sl_d) + vec_bytes(s.sl_fall) + vec_bytes(s.plate) + vec_bytes(s.ramp)
+            + vec_bytes(s.smooth);
+}
+
+/// Runs of one material up each owned column of the tile (margin left out):
+/// what a run-length store of the cells would keep (stage A's estimate).
+void count_runs(const brick::TileSample &s, int64_t &runs, int64_t &columns, int64_t &solid) {
+    const int lo = s.lo_owned();
+    const int hi = s.hi_owned();
+    for (int lz = 0; lz < brick::TILE; ++lz) {
+        for (int lx = 0; lx < brick::TILE; ++lx) {
+            int last = -1;
+            for (int yp = lo; yp < hi; ++yp) {
+                const int m = s.vox[s.vidx(lx, yp, lz)];
+                if (m != last) {
+                    ++runs;
+                    last = m;
+                }
+                if (m != 0) {
+                    ++solid;
+                }
+            }
+            ++columns;
+        }
+    }
+}
+
+Dictionary sample_report(const brick::TileSample &s, uint64_t us) {
+    Dictionary d;
+    int64_t runs = 0, columns = 0, solid = 0;
+    count_runs(s, runs, columns, solid);
+    d["ms"] = (double)us / 1000.0;
+    d["bytes"] = (int64_t)sample_bytes(s);
+    d["vox_bytes"] = (int64_t)(vec_bytes(s.vox) + vec_bytes(s.open));
+    d["plates"] = s.hi_owned() - s.lo_owned();
+    d["runs"] = runs;
+    d["columns"] = columns;
+    d["solid_cells"] = solid;
+    return d;
+}
+} // namespace
+
+Dictionary BrickTerrain::memory_stats() {
+    Dictionary d;
+    {
+        std::lock_guard<std::mutex> lk(g_packs.lock);
+        int64_t bytes = 0;
+        int64_t pieces = 0;
+        for (const auto &e : g_packs.tiles) {
+            const brick::TilePack &p = *e.second.pack;
+            bytes += (int64_t)(sizeof(brick::TilePack) + vec_bytes(p.pieces) + vec_bytes(p.owner) + vec_bytes(p.top));
+            bytes += 64;   // the map node, the shared_ptr's control block
+            pieces += (int64_t)p.pieces.size();
+        }
+        d["packs_kept"] = (int64_t)g_packs.tiles.size();
+        d["packs_bytes"] = bytes;
+        d["packs_pieces"] = pieces;
+        d["piece_bytes"] = (int64_t)sizeof(brick::Piece);
+    }
+    d["edits"] = (int64_t)g_edits.size();
+    d["edits_bytes"] = (int64_t)g_edits.bytes();
+    return d;
+}
+
+Dictionary BrickTerrain::sample_stats(int tx, int tz) {
+    brick::TileSample s;
+    const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
+    brick::sample_tile(g_field, tx, tz, s);
+    return sample_report(s, Time::get_singleton()->get_ticks_usec() - t0);
+}
+
+Dictionary BrickTerrain::section_sample_stats(int tx, int sy, int tz) {
+    brick::TileSample s;
+    const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
+    if (!sample_section(tx, sy, tz, s)) {
+        return Dictionary();
+    }
+    return sample_report(s, Time::get_singleton()->get_ticks_usec() - t0);
+}
+
 void BrickTerrain::_bind_methods() {
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("memory_stats"), &BrickTerrain::memory_stats);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("sample_stats", "tx", "tz"), &BrickTerrain::sample_stats);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("section_sample_stats", "tx", "sy", "tz"),
+        &BrickTerrain::section_sample_stats);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("audit_tile", "tx", "tz", "sy"),
         &BrickTerrain::audit_tile);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("configure", "world_seed"),
@@ -8614,8 +8789,8 @@ void BrickTerrain::_bind_methods() {
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("build_section", "tx", "sy", "tz"),
         &BrickTerrain::build_section);
     ClassDB::bind_static_method("BrickTerrain",
-        D_METHOD("overlay_pick", "lists", "eye", "forward", "range_m", "cos_half", "max_bricks"),
-        &BrickTerrain::overlay_pick);
+        D_METHOD("overlay_pick", "lists", "eye", "forward", "range_m", "cos_half", "max_bricks", "hidden"),
+        &BrickTerrain::overlay_pick, DEFVAL(PackedVector3Array()));
     ClassDB::bind_static_method("BrickTerrain",
         D_METHOD("build_coarse", "tx0", "tz0", "span", "step"),
         &BrickTerrain::build_coarse);

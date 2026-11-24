@@ -6,10 +6,11 @@ extends RefCounted
 ## every catalog item is a small 3D model, laid out FRAMES times in a row --
 ## each copy turned a further 1/FRAMES of a circle about its up -- one row an
 ## item, in one SubViewport with an orthographic camera at a 3/4 view. One
-## render draws every icon and every spin frame. The viewport is then left
-## alone (UPDATE_ONCE: it keeps what it drew) and slots draw their frame
-## straight from its texture -- no `get_image()`, no read-back
-## (CLAUDE.md "No renderer read-backs during play").
+## render draws every icon and every spin frame. The picture is then copied
+## ONCE into an ImageTexture (a read-back at load, which CLAUDE.md allows;
+## none during play) and the viewport freed: kept alive, its 3D buffers at
+## MSAA 4x over 1792x2408 px held ~300 MB of video memory for a picture of
+## ~17 MB (Docs/TerrainRegions.md 2.1). Slots draw their frame from it.
 ##
 ## A slot spins its icon by choosing the frame (`draw_icon(.., angle)`):
 ## zylanntest's SlotHoverFx spins only the hovered slot and eases it home
@@ -91,7 +92,12 @@ static func build(host: Node) -> void:
 	if not is_instance_valid(vp):
 		return
 	models.queue_free()
-	texture = vp.get_texture()
+	var img := vp.get_texture().get_image()
+	vp.queue_free()
+	_viewport = null
+	if img == null or img.is_empty():
+		return
+	texture = ImageTexture.create_from_image(img)
 	ready = true
 
 

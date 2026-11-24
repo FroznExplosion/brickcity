@@ -153,6 +153,9 @@ public:
     static int64_t lava_total();
 
     static Dictionary stats();
+    /// MEMORY (terrain_mem_probe): sections, their bytes, how many were
+    /// ever written or are wet. Probes only: it takes the state lock.
+    static Dictionary memory_stats();
     static int active_count();
     static int section_count();
     /// Still fluid, in plates (units), of one fluid.

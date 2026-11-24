@@ -202,8 +202,25 @@ var _worst_coll_ms := 0.0
 var _worst_swap_ms := 0.0
 
 
+## THE BRICK OVERLAY (Docs/BrickOverlay.md) for this ground: real bevelled
+## bricks near the camera over the flat tiles, in place of the old chamfered
+## near tier (TerrainTile.bevel_enabled goes off; its code is kept). Made in
+## setup when `auto_overlay` and TerrainBricks.overlay_default are on; a scene
+## that makes its own (the mine world, which also lays it over its deep
+## sections and hides shot bricks) turns `auto_overlay` off first.
+var auto_overlay := true
+var bricks: TerrainBricks = null
+
+
 func setup(material: Material) -> void:
 	_material = material
+	if auto_overlay and TerrainBricks.overlay_default and material is ShaderMaterial:
+		TerrainTile.bevel_enabled = false
+		bricks = TerrainBricks.new()
+		bricks.name = "Bricks"
+		add_child(bricks)
+		bricks.setup(self, material as ShaderMaterial,
+				(material as ShaderMaterial).shader == TerrainTile.sky_light_shader())
 	for i in max_in_flight + EDIT_SLOTS:
 		_slots.append({})
 		_slot_task.append(-1)

@@ -70,9 +70,16 @@ func setup(p_host) -> void:
 	if streams:
 		_slider("Detail radius (tiles)", 1, 12, 1, host._streamer.near_radius,
 			func(v: float) -> void: host.set_detail_radius(int(v)))
-	_check("Real chamfers near the camera", TerrainTile.bevel_enabled, func(on: bool) -> void:
-		TerrainTile.bevel_enabled = on
-		host.rebuild_detail())
+	# The brick overlay's real bricks when the ground has one (Docs/
+	# BrickOverlay.md), else the old chamfered near tier.
+	var overlay: TerrainBricks = host._streamer.bricks if streams and host._streamer != null else null
+	_check("Real chamfers near the camera", overlay.enabled if overlay != null else TerrainTile.bevel_enabled,
+		func(on: bool) -> void:
+			if overlay != null:
+				overlay.set_enabled(on)
+			else:
+				TerrainTile.bevel_enabled = on
+				host.rebuild_detail())
 	_smooth_step = BrickTerrain.get_coarse_smooth_step()
 	_option("Smooth far terrain from", ["off", "every 8 studs (LOD 2+)", "every 16 studs (LOD 3+)",
 			"every 4 studs (LOD 1+)"], [0, 8, 16, 4].find(_smooth_step),

@@ -1,0 +1,539 @@
+# Terrain regions -- ground kept in memory, bricks fitted per region
+
+Written 2026-11-24. Plan only: nothing here is built yet.
+Scene: `scenes/terrain_test.tscn` (the mine world, Docs/MineWorld.md).
+Area: Terrain and water (`brick_terrain.*`, `terrain_bond.h`, `brick_fluid.*`,
+`scripts/terrain/`, `scripts/water/`).
+
+## 0. What the user asked for
+
+- The world is a grid of 1x1 brick cells. Generation makes every cell, cuts
+  caves, overhangs and cliffs, then **groups cells into real brick shapes**
+  (2x2, 1x2, 2x4 ...) in **random sizes and orientations** that follow the
+  caves and the terrain, then draws them.
+- The cells of a shape are bonded for good; stress is checked only between
+  bricks, at their tops and bottoms (where the studs are). Side connections
+  (as in workshop.tscn) are a special case, for later.
+- Tiles (1/3 of a brick) only on the surface and in caves, never in the bulk.
+- Teardown as the model for destruction and stress.
+- Two problems this has to help with: **a broken brick takes too long to
+  disappear**, and **the terrain uses too much memory and frame time**.
+- The water gets the same audit.
+
+Chosen (2026-11-24): bricks fitted **per region, regions offset every
+course** (section 3). Storing a brick id per cell as world state is kept as
+an idea (section 9).
+
+## 1. Where things stand (what the plan changes)
+
+| | now | after |
+|---|---|---|
+| ground cells | not kept: every bake, `find_brick` and water read samples the tile again from the noise plus the edit table (`sample_tile`, ~4.5 ms a tile) | kept for the near tiles, compact, edits written in (section 2) |
+| brick shapes below the top | `brick::bond_rect`: a fixed 4x4-block lattice, 4x2 / 2x2 / 1x2 / 1x1, parity-offset seams (Docs/TerrainBond.md) | a random fit per region, worked out from the generated cells (section 3) |
+| top course | the packer's size ladder, or the bond (`set_bond_top`) | the same region fit, tiles allowed (section 3.5) |
+| a broken brick | ~38-57 ms before the hole is drawn (MineWorld.md 21: find on a worker, whole-tile rebake from the noise, swap) | the hole in the shot's own frame, the rebake following (section 4) |
+| stress | `TerrainCollapse.survey`: virtual bricks from `bond_rect`, the buildings' solver | the same solver, bricks read from the region cache (section 5) |
+| water's view of the ground | `sample_column` reads the noise and the edits again per column (the real-sea square ~12 ms a tile, springs ~10 ms a tile) | a lookup in the same store (section 7) |
+
+What does NOT change: the plate grid (x, z in studs, y in plates, so tiles
+live in it), the solver (`solve_structure`, tension only at stud joints), the
+pieces (`PlanetPieces`), the brick overlay (Docs/BrickOverlay.md), the far
+tier, saving edits as differences from the seed.
+
+## 2. Stage A -- the ground kept in memory (the Teardown / Minecraft part)
+
+MineWorld.md 21 item 1, now unblocked: it was waiting on the brick overlay,
+and the overlay is in (the old chamfered bake is off while it is on, so item
+3 there, "one task for the flat and chamfered mesh", mostly goes away).
+
+**What is kept.** For every tile the streamer keeps (`keep_radius`, ~240
+tiles), the plate cells **as they are now (edits applied)** and **as
+generated**, column by column, as runs: `(top plate, material)` pairs from
+the bottom of the sampled band up. A generated column is a handful of runs
+(air, grass, dirt, stone, a cave, stone, deepslate, ores); the generator is
+already column-based, so a column is made in one go.
+
+| form | per tile | ~240 tiles |
+|---|---|---|
+| `TileSample` as sampled today (`vox` + `open`, 2 bytes a plate, plus margin) | ~250-300 KB, made again per bake, per worker | not kept (transient, but paid on every bake) |
+| runs, ~10 a column, 3 bytes a run, twice (now and generated) | ~60 KB | **~15 MB** |
+
+These are estimates; stage A0 measures them. If the runs turn out slow to
+read for the mesher, the fallback is 16^3 palettised sections (Docs/Terrain.md
+2): more memory, faster random access. Both are much smaller than keeping
+samples.
+
+**Who reads it.** `sample_tile` fills a `TileSample` from the store instead
+of the noise (a copy, ~0.2 ms instead of ~4.5); `find_brick`, the collapse
+survey, sky light, `solid_at` near the player and the water (section 7) read
+it directly. Tiles outside the store fall back to the noise, as now.
+
+**Edits** write the store and the edit table together (the table stays: it
+is what is saved, and what rebuilds a tile that left the store). One writer
+(the main thread), readers by tile version, as the edit table already works
+(MineWater.md 11.8).
+
+**A0 -- measure first.** No measurement of the mine world's terrain memory
+exists. Before building: a headless `terrain_mem_probe` (tools/probes/) that
+prints, for the default preset after a walk: tile meshes (vertex bytes),
+collision shapes, studs' MultiMeshes, the overlay's buffer, the deep
+sections, the coarse rings, `PackStore` (up to 768 packs, 10-30 KB each,
+~8-23 MB), the edit table, the water's sections, plus Godot's static and
+video memory. That table decides what to cut first: if the packs or the
+meshes dominate, they are cut before anything else in this plan, and the
+store must pay for itself out of what it removes (the packs become part of
+the region cache, section 3.4).
+
+### 2.1 A0 measured (2026-11-24)
+
+`res://scenes/terrain_test.tscn -- --gate=mem` (windowed: video memory is
+only real with a renderer; `tools/probes/terrain_mem_probe.gd`, run by the
+gate). Default preset, near radius 4, keep radius 6; spawn, then a 480 m
+flight along X at 40 m, 40 cells carved, then 25 m underground. Debug build,
+other chats' runs going (LOW RAM samples): bytes are right, ms are not.
+
+| what | at spawn | after the flight | note |
+|---|---|---|---|
+| **reflection atlas** (video textures) | 0 | **+536 MB** once one probe shows | the first visible ReflectionProbe makes the whole atlas (256 px x 64 slots); process private +830 MB (the Z1 shares RAM). Every probe in the game is ambient-only (`cull_mask = 0`): the atlas holds nothing. The mine world's held-item box (`MineWorld._held_light`) shows one as soon as the eye is dim |
+| other video textures | 548 MB | 548 MB | materials' own textures only 50 MB (9 ImageTextures ~5.6 MB); the rest is the renderer's (shadow maps, screen targets, sky) |
+| video buffers | 143 MB | 115 MB | |
+| water sections (C++) | 24 MB, 272 | **122 MB, 1,359** | ~90 KB a section; **wet sections are never evicted** (`evict_far` keeps written or wet), so a flight over sea grows it without end (1,030 wet) |
+| near tiles' kept `_data` (CPU) | 74 MB | 35 MB | the bake's whole Dictionary, mesh arrays included, kept after upload |
+| near tiles' meshes (GPU) | 36 MB | 13 MB | 144 -> 217 tiles |
+| near tiles' MultiMeshes (studs, tufts) | 8 MB | 12 MB | 103k -> 154k instances |
+| far rings' meshes (GPU) | 28 MB | 20 MB | 335 meshes |
+| packed tiles (C++ `PackStore`) | 2.3 MB, 144 | 9.9 MB, 704 | 30 B a piece, ~14 KB a pack |
+| trees | 2.1 + 0.7 MB | 2.1 + 0.3 MB | |
+| collision boxes | 4,941 | 5,708 | ~2 MB at an estimated 400 B a box |
+| brick overlay | 0.04 MB | 0.04 MB | |
+| edit table | 0.025 MB | 0.025 MB | 120 edits |
+| Godot static | 464 MB | 457 MB | |
+| process private | 2.2 GB | 2.4 GB (3.0 GB with the atlas) | |
+
+Stage A's store, counted from the real cells (every resident tile and deep
+section sampled as a bake samples it, its columns' material runs counted,
+3 B a run twice plus 2 B a column):
+
+| | runs a column | store each | all resident | a sample today (transient) |
+|---|---|---|---|---|
+| surface band (141 plates) | 6.2 | 39 KB | 8.7 MB, 217 tiles | 378 KB, 4.6 ms |
+| deep section (93 plates) | 2.5 | 17 KB | 4.3 MB, 247 sections | 253 KB, 3.2 ms |
+
+So the store is ~13 MB, smaller than the section estimate (15 MB), and less
+than the packs (10 MB, which it replaces) plus the tiles' kept `_data`
+(35-74 MB, whose mesh arrays it makes unneeded).
+
+What this says to do first: the reflection atlas (one setting, ~530 MB of
+video and ~800 MB of RAM, not terrain: the lighting rig's) and the water's
+wet sections (W3, moved up: unbounded) are bigger than everything the
+terrain keeps put together.
+
+**Done 2026-11-24 (the reflection atlas):** project.godot
+`rendering/reflections/reflection_atlas/reflection_size = 32` (count left at
+64: a box per near bricked building, per near ship/station module, the held
+box -- 4 in --gate=light). `--gate=mem`'s line: one visible probe +16.9 MB
+(was +536). Pictures and numbers the same at 32 as at 256: planet
+--gate=light (room inside 0.550 both, pictures differ only in the HUD's fps),
+--gate=hull (cabin; the still views differ only in HUD text), mine
+--gate=deep (cave with the held gun, picture mean 0.044 / 0.046, the lava's
+flow differing).
+
+**Done 2026-11-24 (the rest of the video textures):** the ~550 MB left was
+NOT the renderer's buffers. Taken apart (terrain_mem_probe's "renderer"
+steps, tools/probes/vram_baseline_probe.gd):
+- an empty Godot window on this GPU already holds 186 MB of textures, a bare
+  3D view (camera, sky, shadowed sun) 264 MB; of that only the directional
+  shadow atlas shrinks (2048 at the default Shadow Quality: 16 MB). The
+  positional atlas, glow, sky radiance (1.7 MB), screen targets (13.6 MB at
+  render scale 0.75 -> 0.25) are small. The compressed PBR texture arrays
+  (~170 MB BPTC) are not in this counter at all.
+- **ItemIcons kept its 1792x2408 SubViewport alive, 3D, MSAA 4x**: ~300 MB of
+  multisampled buffers for a ~17 MB picture. Now copied once into an
+  ImageTexture at load (a read-back at load, allowed) and the viewport freed.
+  --gate=mem: video textures at spawn 597.9 -> 299.4 MB, video total 830 ->
+  492 MB. The icon sheet is pixel-identical (--gate=inventory saves it to
+  user://dev/mine_item_icons.png; INV-GATE PASS).
+- Left: ~264 MB the engine holds for any 3D window, ~35 MB of game textures
+  the counter sees (impostors 50 MB, grid light 16 MB counted elsewhere).
+
+## 3. Stage B -- bricks fitted per region, regions offset every course
+
+### 3.1 The rule
+
+- A **region** is 16 x 16 studs of one course (3 plates). On even courses
+  regions start on multiples of 16; on odd courses they are shifted 8 studs
+  in X and Z. A region edge is never over a region edge (the same parity
+  trick `bond_rect` uses for its seams, at a larger scale).
+- Inside a region, a **fit** groups its solid, bondable cells into bricks.
+  It is seeded from the region's coordinates and the world seed, and reads
+  **only the region's GENERATED cells**. So it is a pure function: any tile,
+  any load order, any thread gives the same bricks, and nothing is saved.
+- **Edits never refit.** A refit after a break would reshuffle the bricks
+  round the hole. A broken brick goes whole (as now); its neighbours keep
+  their shapes. A crater (`carve`) takes every brick it touches, whole,
+  rounded out to brick edges -- or, if that reads wrong, keeps a cut brick's
+  remaining cells as one fragment brick. That is a decision for the
+  first test (B3).
+- **Placed blocks** keep their own shape (`mark_placed`, as now); the fit
+  never sees them, because it reads generated cells.
+- **Loose ground** (sand, red sand, gravel) stays 1x1, joined up and down
+  only, so it falls in columns.
+
+### 3.2 The stagger rule
+
+A purely random fit makes seams that stand over the seams of the course
+below, and an overhang peels apart along them (TerrainBond.md 1: "a 2-course
+arm came apart in two"). The fit therefore knows the course under it (also a
+pure function: the region fits of the course below, generated cells only)
+and does not place a brick whose edge runs along a seam below for more than
+one stud. Where nothing else fits, a 1x1 is allowed (scored, section 3.3).
+
+### 3.3 Which fit -- measured, not guessed
+
+A headless `region_fit_probe` runs each candidate over the same 30 tiles
+(default preset, with caves and cliffs) and prints:
+
+| measure | why |
+|---|---|
+| share by size (1x1, 1x2, 2x2, 2x4, 2x6 ...) and mean brick size | the look; Terrain.md 6.2 got 50 % 2x4 and 4 % 1x1 with its ladder |
+| orientation balance | courses running both ways |
+| seams over seams per 1000 joints | the bond's strength (TerrainBond.md 3 checks this today: 0) |
+| test arms held (terrain_collapse_probe's stone arm, dirt arm, 40-stud arm) | what the stress feels like |
+| fit ms per region, per tile | the cost |
+| bricks per tile | what the overlay, the survey and the seams pay for |
+
+Candidates:
+1. **Largest first** (the surface packer's way): 2x6 / 2x4 everywhere they
+   fit, a hashed skip so they do not carpet; then 2x3, 2x2, 1x4 ...; 1x1 last.
+2. **All sizes at once**: visit cells in a hashed order, at each pick a size
+   and orientation by weights, place the first that fits; 1x1 last.
+3. **Largest first along walls**: as 1, but cells next to cave air or open
+   air are fitted first, so long bricks run along walls, cliffs and cave
+   roofs (they are what is seen).
+
+Every candidate: both orientations of every non-square size, chosen by hash;
+the material rule of the bond (a brick is one bond group; a 2x4 / 2x6 only
+in strong ground, medium ground up to 2x4 -- to be tuned in the probe).
+
+### 3.4 Where the fit lives
+
+The region cache: per region, the bricks (corner, size, material) and a
+cell -> brick index for the 256 cells. Made on demand (a tile's bake asks
+for its regions and the ones half over its edges), kept with the tile in the
+store, dropped with it. It replaces `bond_rect` for every caller (drawing,
+breaking, falling), so they keep agreeing, and it takes the place of the
+`PackStore` packs. A miss costs a fit of the region and the one under it
+(the stagger rule): microseconds per region, to be measured (B1).
+
+### 3.5 The top course and tiles
+
+The top course is fitted the same way, with tiles allowed: a cell whose top
+is a tile (ledge edges, corners, cave floors) fits into tile pieces, never
+into a brick. Tiles are generated only there (surface and cave floors), never
+in the bulk. A brick placed by the player one plate up, on a tile, is a
+placed block (`mark_placed`), so the fit is not involved; whether the
+builder allows it, and whether its joints solve right, is checked in B3.
+If not, the builder refuses it.
+
+### 3.6 Bricks across chunk edges -- measured (2026-11-24)
+
+The user asked: does it cost performance or generation time if bricks cross
+chunks, a 2x2 in up to 8 chunks? Measured with a standalone C++ bench in a
+Linux container (no Godot there): the REAL generator (`terrain_biomes.cpp`,
+`biome_column` + `biome_cell`, the default preset) linked with a stand-in
+region fit (largest first, 2x4 down to 1x1, hashed skip, the bond's groups;
+no stagger rule). Three areas of 6 x 6 tiles, the surface band (31-36
+courses). One thread, not the Legion Go: read the ratios, not the ms.
+
+- **At most 4 chunks, never 8.** Every vertical boundary is on a course
+  (deep sections are 96 plates = 32 courses; the surface floor and
+  `SECTION_BELOW` are multiples of 3), and a brick is one course tall. A
+  brick shorter than a tile is in 4 only at a tile corner.
+- **How many cross**: regions offset 8 on odd courses -> **3.3-3.5 %** of
+  bricks cross a tile edge, **0.04 %** are in 4 tiles. Each of those makes a
+  break rebuild 2 (or 4) tiles instead of 1: ~3-4 % more tile rebuilds over
+  all breaks. With quarter-tile rebuilds (C3) roughly twice that, still small.
+  The bond already crosses tile edges on odd courses (TerrainBond.md 1).
+- **Fit time**: 8.7-9.6 us a region with crossing, 11-12 us aligned to tiles
+  (the same work; the offset just cuts it differently): **~1.3 ms a tile**
+  for the surface band, once, cached. Not a reason either way.
+- **Generation time**: the bench's own sample, 4.8-5.8 ms a 32 x 32 tile,
+  agrees with `sample_tile`'s ~4.5 ms (MineWorld.md 21), so the generator in
+  the bench is the game's. Fitting a tile's offset regions needs cells 8
+  studs past its edges: from the noise that is a 48 x 48 sample, **10.7-13.1
+  ms** against 6.0-7.3 for today's 2-stud margin. With the store (stage A)
+  the neighbours' cells are already kept (the streamer keeps two tiles past
+  what it draws), so it costs nothing except at the outer edge of the kept
+  ring, which is never drawn.
+- **Stress**: none. The survey's region is a box round the edit, whatever
+  tiles it covers.
+- **And it is needed.** With no brick crossing a tile (regions aligned to
+  tiles), every tile edge is a seam in every course: a crack plane through
+  the whole ground. Allowing the crossing cut the seams over seams ON tile
+  edges by 40-44 % (12,441 -> 7,132; 12,817 -> 7,162; 10,881 -> 6,077).
+
+**The real open problem is the stagger, not the chunks.** The stand-in fit
+has 257-326 seams over seams per 1,000 joints (the bond today: 0). A simple
+rule (refuse a brick with more than a quarter of its edge over seams below)
+cascaded: once a course was mostly 1x1, every brick above it was refused, and
+96 % of bricks were 1x1. B1 must design the stagger (a parity rule like the
+bond's, or a fit that scores against the course below rather than refusing),
+and the probe of 3.3 must show it.
+
+The bench: `bench.cpp`, `noise.cpp` (the noise copied from brick_terrain.cpp),
+`stubs.cpp`, built with godot-cpp's headers only; not in the repo (tools/
+holds Godot scripts). B1's `region_fit_probe` replaces it.
+
+### 3.7 Stages
+
+- **B1** `region_fit` (C++, `terrain_bond.h` beside `bond_rect`) and the
+  probe of 3.3; all three candidates; pick one with the user, from the probe's
+  table and its pictures (`user://dev/region_fit/`).
+- **B2** The region cache; `bond_rect`'s callers switched to it behind a
+  world setting (old bond kept for A/B until B4).
+- **B3** Craters, placed blocks, the brick on a tile; `mine_world_probe`
+  `_check_bond` changed to check regions (every cell of a brick names it, no
+  seam over a seam, a buried break takes one brick); `terrain_collapse_probe`
+  arms; `--gate=collapse`.
+- **B4** The top course on the fit; the old bond and `set_bond_top` retired,
+  their checks removed with them (say why in the commit).
+
+## 4. Stage C -- the hole in the shot's frame
+
+What a break waits for today (MineWorld.md 21): the find on a worker (~5 ms,
+but queued), the whole tile rebaked from the noise (~9-10 ms), the swap. Best
+case ~47 ms, three frames; under fire more.
+
+With stages A and B:
+
+1. **Find on the main thread.** With the store and the region cache,
+   `find_brick` is a ray walk over kept cells and a cache lookup: well under
+   0.1 ms. It runs in the shot's frame, no worker, no queue.
+2. **Hide it in that frame.** The overlay drops the brick's instance at once
+   (BrickOverlay.md 4 stage 6). The flat mesh still has its faces until the
+   rebake: the terrain shader gets a small per-tile list of **cut boxes**
+   (uniforms written from the main thread, no read-back) and discards what is
+   inside them.
+3. **Fill what the hole opens, in that frame.** The bricks around the hole
+   whose faces were inside the ground are boxes in the region cache; the
+   overlay adds them as instances at once, so the hole has walls and a floor
+   before any mesh is rebuilt.
+4. **Then the rebake**, from the store (no noise), and only of the part of
+   the tile the edit touched (MineWorld.md 21 item 4: a 16 x 16 quarter, which
+   is now also a region's width). When it swaps, the cut boxes and the extra
+   instances go.
+
+Target: the hole drawn in the shot's frame (16 ms) or the next. Measured with
+`-- --gate=breaklag --burst` (it times trigger to drawn hole) against today's
+57 / 84 ms at a shot a frame and 50 / 62 ms at one every 6 frames.
+
+- **C1** find on the main thread from the store; breaklag.
+- **C2** cut boxes in terrain.gdshader + the overlay's instant fill; gate
+  pictures of a hole in the shot's frame (`--gate=handover` must stay 0 gaps,
+  0 drawn twice).
+- **C3** quarter-tile rebakes; breaklag, `--gate=handover`, `--gate=deep`.
+
+## 5. Stage D -- stress on the region bricks
+
+- The survey takes its bricks from the region cache (the bricks drawn and
+  broken), not `bond_rect`. The solver does not change: one node a brick,
+  joints where footprints overlap between courses, tension only. The cells
+  inside a brick are never checked against each other (they are one node).
+- Bigger bricks mean fewer nodes; the survey's region is the same.
+- **Side joints** (later): a placed part with side studs
+  (`BrickWorld.set_side_studs`) joins the brick its studs face. Ground the
+  generator makes never has them. Today `get_block_neighbours` joins
+  overlapping footprints up and down only; side joints are an extra list of
+  edges per block, from its archetype's side studs.
+
+## 6. What it buys, by the user's three problems
+
+**Breaks too slow to disappear.** The biggest win of the plan. Today ~13 of
+the ~24 ms of worker time a break costs is making ground again that did not
+change, and the find waits on workers. With A + C the hole is there in the
+shot's frame, before any mesh is made, and the rebake that follows is a
+quarter tile from memory.
+
+**Frame time.** The terrain's own main-thread share is already small
+(1.0-1.4 ms, MineWorld.md 21), so the frame wins are indirect but real on
+this machine:
+- This is an APU: worker heat comes out of the GPU's clocks, and the frame is
+  GPU-bound. Every bake that stops making ground from the noise (each tile
+  streamed in, each edit, each water section, each collapse survey) is CPU
+  that stops slowing the GPU.
+- Fewer, bigger bricks (B) are fewer overlay instances and fewer merged
+  faces, so fewer triangles and a cheaper overlay fill.
+- Quarter-tile rebakes (C3) are a quarter of the swap and upload.
+
+**Memory.** It depends on A0's table. The store is a new cost (~15 MB
+estimated); it is meant to pay for itself by removing the `PackStore` packs
+(up to ~23 MB) and the per-worker samples (~300 KB each, per bake in flight),
+and by letting meshes be rebuilt from it instead of being kept for tiles that
+are not drawn. If A0 shows the big costs are elsewhere (meshes, collision,
+the far tier, trees), those come first and this plan says so.
+
+**And the look.** Random sizes and directions that follow walls, cliffs and
+cave roofs, in place of the 4x4-block lattice that reads as regular.
+
+## 7. The water (audit, 2026-11-24)
+
+The water already works the way this plan wants the ground to work: its
+cells are kept (`BrickFluid` sections, 32 x 32 x 16 bricks, 48 KB each, only
+where water was changed or moves), only what changed runs (an active set),
+on its own thread, with its own small mesher, and calm water costs nothing
+(0.07 ms a tick, 0 awake). It is in good shape. What it would gain:
+
+1. **Read the ground from the store** (the biggest). `sample_column`
+   (brick_fluid.cpp) works out the biome column and the cave noise again, and
+   looks up the edit table per plate, under the edit lock, for every column
+   it fills: a new section, the real-sea square (~12 ms a tile, three tiles a
+   tick), springs (~10 ms a tile), cave pools, every terrain edit's re-read.
+   With stage A that is a copy of kept runs. It also means the ground and the
+   water can never disagree about which plates are solid.
+2. **Tick cost.** The only reading (MineWater.md 12) is ~2.3 us a cell, a
+   debug build with the editor open: 20k flowing cells ~18 ms a tick, the 64k
+   budget ~57 ms, against an estimate of 50 ns. Re-measure in a release build
+   with the editor closed. If it holds, profile it before guessing; the doc
+   already suggests lowering the budget to ~20k.
+3. **Written sections never go.** A section ever written, or wet, stays in
+   memory for the session (11.8 drops only dry, unwritten ones). A big flood
+   far away stays resident. Calm sections past the sim ring could be kept in
+   their save form (run-length, as `.fluid` stores them) and expanded when
+   the player comes back.
+4. **Water tops as bricks** (MineWater.md 2, "later"): still water and the
+   real-sea band packed into mixed pieces by the same region fit (tops only),
+   so a pond reads as laid bricks and has fewer quads. Optional, after B.
+5. **Its own lock and the edits.** The water reads the edit table under
+   `edit_lock()` shared; with the store, the store's tile version replaces
+   that lock for reads near the player.
+
+Water stages (after A): **W1** `sample_column` from the store; water gate and
+`fluid_probe`. **W2** the tick measured in a release build; profile if
+needed. **W3** far written sections compressed. **W4** water tops as pieces,
+with the user, after B.
+
+## 8. Order of work, and the checks each must pass
+
+1. **A0** memory table (headless). Report it before building anything.
+2. **A** the store; `sample_tile` from it. `terrain_audit_probe` (0 faults),
+   `terrain_probe`, `mine_world_probe`, `terrain_cost_probe` (bake ms before
+   and after), `--gate=handover`.
+3. **C1** find from the store; `--gate=breaklag --burst`.
+4. **W1** water from the store; the water gate, `fluid_probe`.
+5. **B1-B3** region fit, chosen with the user; probes of 3.7.
+6. **C2-C3** the hole in the shot's frame; quarter-tile rebakes.
+7. **D** stress on region bricks; `terrain_collapse_probe`, `--gate=collapse`.
+8. **B4**, **W2-W4**.
+
+Windowed gates one at a time with a heat check between (CLAUDE.md); timing
+runs (`--gate=gpu`, breaklag, cost probe) only with the editor closed.
+
+## 9. Kept as an idea: a brick id per cell, stored
+
+The other way to fit: run the fit once when a chunk is first generated, in
+any order, and **store** each cell's brick id as world state (saved with the
+world, sent to peers). No regions, no stagger across region edges to worry
+about, any fit at all (even one that looks across a whole cave).
+
+Why not now: a brick crossing a chunk edge needs both chunks generated, so
+the fit depends on the order the player walks in (two players, or one world
+reloaded, get different bricks unless the order is fixed); the ids are new
+saved state for every chunk ever visited, where today an untouched world
+saves nothing; and the far tier and the water would need the same ids or
+disagree. Worth revisiting if the region fit's seams at region edges show,
+or if bricks wanted across whole cave walls.
+
+## 10. GDScript or C++? An audit (2026-11-24)
+
+The user asked what in the terrain, water and bricks should move from
+GDScript to C++. Read from the code and the costs the docs have measured;
+nothing new was timed (no Godot in the container this was written in).
+
+**The finding first: GDScript is not what makes breaks slow or frames long.**
+- The frame is GPU-bound (12.5 of 16.6 ms on the Legion Go before anything
+  happens, MineWorld.md 9). The whole world's main-thread share is 1.0-1.4 ms
+  a frame, and an edit's worst main-thread step 1.1-1.5 ms.
+- A break's latency is on the workers (the find, the whole-tile rebake from
+  the noise, the swap), all C++ already. Its GDScript (`_break_from_box`,
+  `terrain_edited`, `_flush_edits`) is a few calls. Stage A and C fix the
+  break; moving its GDScript would not.
+- The heavy work is already C++: generation, bakes, packing, the collapse
+  survey and solver, the overlay's pick (moved 2026-11-23: it was a 5 ms
+  GDScript loop), the water's rules, its mesher and its locks. Waits on
+  workers in the mine world are all checked with `is_task_completed` first.
+
+**What is worth moving**, by how often it runs and what it costs:
+
+| # | What | Where | Why | Verdict |
+|---|---|---|---|---|
+| 1 | Falling sand | `ground_collapse.gd` `_fall_sand` | every frame, per column: a physics ray, a `solid_at` per plate fallen, and a `set_instance_transform` per cell (one renderer call each). A sand cliff let go is hundreds of columns, thousands of cells. Not measured. | **move**: one C++ step for all columns (solid tests from the store, one buffer out, `multimesh.buffer` set once). Measure first with a big sand fall. |
+| 2 | Tree scatter | `trees.gd` `Trees.scatter`, called by `terrain_trees.gd` | per 128-stud cell, on the main thread: a Callable per grid point (biome chance), four `surface_plate` per tree (each a generator column). The 'budget' is checked between cells, so one cell is never split. Not measured. | **move** to C++ on a worker (pure function of seed and ground), main thread only places; with stage A, `surface_plate` reads the store |
+| 3 | Laying a fallen piece | `ground_collapse.gd` `_let_group_go` | GDScript loops build the runs and the BrickWorld arrays from the survey's result: ~1 ms a 1,000 bricks, main (TerrainCollapse.md 6) | **move into the survey**: it returns the runs and arrays ready, on its worker |
+| 4 | Collision boxes of a tile | `terrain_tile.gd` | one `PhysicsServer3D.body_add_shape` a box from GDScript (~65 a tile; 670 measured 0.77 ms) | small; a C++ helper adding a tile's boxes in one call, if a profile shows it |
+| 5 | Lava rock | `mine_water.gd` `apply` | one `fill_box` a cell in a GDScript loop | small; one batched call |
+| 6 | Floaters, pieces' physics | `floaters.gd`, `planet_pieces.gd` | per body, a few native calls a tick; capped (100 pieces laid) | **leave**: glue on bodies, which are main-thread anyway |
+| 7 | Sky light on things | `mine_sky_lit.gd` | budgeted, 250 us a frame | **leave** |
+| 8 | Water glue | `mine_water.gd`, `water_sea.gd` | swaps meshes (6 a frame), copies wave numbers, burns at 10 Hz | **leave**; the water's work is C++ |
+
+**Outside the mine world, measured, other areas** (for their chats; listed in
+Docs/WhereWorkRuns.md 2 and EngineChoice.md):
+- The city's destruction: the island tick (worst 8-12 ms), fracture spawning
+  and promotion (42 ms) -- GDScript plus node and body creation, the largest
+  measured GDScript costs in the project. EngineChoice.md's first
+  recommendation is moving them to C++ and making fewer nodes and bodies.
+- `BuildingShell.build_arrays`: geometry in GDScript, 2.7-5.7 ms
+  (HandoffPerf.md).
+- Snow lying on the ground (`snow_cover.gd`, city and planets, not the mine
+  world): 1,024 physics rays a square from GDScript, 2.4 ms a tick while it
+  fills. On brick terrain it needs no rays: the ground's top is known (the
+  store, or `surface_plate`).
+- `TerrainCoarse.field_changed` waits for its bakes on the main thread
+  (`wait_for_group_task_completion`, then `_rebuild_ring` bakes and waits
+  again). The mine world uses the non-blocking `field_changed_soon`; the
+  city (`city_scene.gd`) and the heightfield scene still call the blocking
+  one on every terrain edit -- a CLAUDE.md "no waiting on a worker" break.
+
+**Order**: 3 goes with stage D (the survey's output); 1 and 2 after stage A
+(they read the store); 4 and 5 only if a profile asks. The coarse tier's
+blocking edit is the terrain area's, small, and can go any time.
+
+## 11. Decisions (the user, 2026-11-24, after A0)
+
+- **Bricks stay whole in cells.** No brick sits a plate off the course grid
+  in generated ground (a brick on a tile would rest, not connect, and an
+  off-course brick could be in 8 chunks). The surface and cave surfaces get
+  tiles and plates, smooth and studded.
+- **Taller bricks for the caves' look.** All-horizontal courses look uniform
+  in caves; bricks 2 and 3 courses tall break the lines. Fitted in LAYERS of
+  3 courses: a tall brick stays inside its layer, layers fitted bottom-up,
+  each staggered against the layer below only (deterministic, no long
+  dependency chains). A tall brick never crosses a deep-section boundary
+  (keeps the 4-chunk limit).
+- **Sizes wanted** (not built yet): footprints 1x1-1x6, 2x2-2x6, 3x3-3x6;
+  1, 2 and 3 bricks tall; plates (studded) and tiles (smooth) in the same
+  footprints. Drawing costs nothing per size (the overlay is one scaled box
+  a brick); the fit has more candidates to try (measure in
+  region_fit_probe).
+- **Connections cost by joint, not by cell.** A brick is one body: its cells
+  are never checked against each other. A face with nothing to connect
+  (sides, a smooth face) is no joint at all. So bigger and taller bricks make
+  the survey and the solve CHEAPER (fewer bodies, fewer joints).
+- **Faces say what they connect** (the stud model, below): studs on top
+  (joins what is above), sockets underneath (joins studs below), smooth
+  (joins nothing). A joint exists only where a studded face meets a socket
+  face; its strength is the studs that overlap. Kinds this allows:
+  - brick / plate: studs on top, sockets under (today's);
+  - tile: smooth top, sockets under;
+  - **smooth-top brick**: a brick with a tile's top, so areas can be smooth
+    without ever laying tiles;
+  - **smooth-bottom, studded-top** tile or brick: cave decoration that sits
+    on the ground and connects nothing below (like the city's light pieces),
+    something to build on.
+- **Studs as data, not part of a brick's shape (later; the design leaves
+  room).** Each brick face has a stud mask; the generated ground's masks
+  come from the brick's kind (nothing stored); only a changed brick stores
+  its masks, in an exception table saved like the edits. That allows a
+  future stud tool (add or take studs on tops, bottoms and sides; side studs
+  on the side-stud grid only, gated), and custom bricks such as a 2x4 with
+  7 studs. Studs are already drawn one instance a stud, so drawing from a
+  mask is natural; joints read the mask's overlap.

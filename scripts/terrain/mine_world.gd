@@ -324,6 +324,10 @@ func _ready() -> void:
 			_run_seams_gate()
 		elif "--gate=bricks" in OS.get_cmdline_user_args():
 			_run_bricks_gate()
+		elif "--gate=mem" in OS.get_cmdline_user_args():
+			# Where the memory goes (Docs/TerrainRegions.md 2, A0).
+			set_meta(&"mem_probe", load("res://tools/probes/terrain_mem_probe.gd").new())
+			get_meta(&"mem_probe").run(self)
 		else:
 			_run_gate()
 
@@ -424,6 +428,8 @@ func generate(s: Dictionary) -> void:
 	# the "fuzzy, blurry bricks" (Docs/MineWorld.md 11). Trees, the player and
 	# debris still cast onto it; underground the sun fades instead (_day_night).
 	_streamer.shadow_radius = -1
+	# Its overlay is this world's own (`bricks`: deep sections too, shots).
+	_streamer.auto_overlay = false
 	add_child(_streamer)
 	_streamer.setup(_mat)
 	_streamer.settle(spawn_xz)
@@ -707,6 +713,13 @@ func _mine(point: Vector3, dir: Vector3, _info) -> void:
 	var hole := -1
 	if bricks != null and _overlay_on:
 		hole = bricks.hide_at(at, global_transform.basis.inverse() * dir)
+	if hole >= 0:
+		# ...and the field is cleared now too, from the overlay's own box (a
+		# brick and the plate on it, whole plates): no worker's find_brick
+		# frame. clear_runs never takes bedrock (nothing removed: it comes
+		# back, the same frame).
+		_break_from_box(hole, bricks.hole_box(hole))
+		return
 	# High priority: at low, the shot waited behind every streaming bake
 	# (all high) before it knew what it hit (Docs/MineWorld.md 21).
 	var task := WorkerThreadPool.add_task(
@@ -764,6 +777,40 @@ func _land_breaks() -> void:
 				if _streamer.has_tile(c):
 					want[c] = int(_streamer._gen.get(c, 0))
 			logged["want"] = want
+
+
+## A shot brick of the overlay, cleared at once: its box as clear_runs' runs
+## (x, z, first plate, last plate a column).
+func _break_from_box(hole: int, box: AABB) -> void:
+	var t0 := Time.get_ticks_usec()
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var x0 := roundi(box.position.x / stud)
+	var x1 := roundi(box.end.x / stud)
+	var z0 := roundi(box.position.z / stud)
+	var z1 := roundi(box.end.z / stud)
+	var p0 := roundi(box.position.y / plate)
+	var p1 := roundi(box.end.y / plate) - 1
+	var runs := PackedInt32Array()
+	for z in range(z0, z1):
+		for x in range(x0, x1):
+			runs.append_array([x, z, p0, p1])
+	var res: Dictionary = BrickTerrain.clear_runs(runs)
+	if int(res.get("removed", 0)) == 0:
+		bricks.drop_hole(hole)
+		return
+	terrain_edited(res)
+	_hole_wait(hole, res)
+	if _streamer != null and _streamer.log_latency:
+		var want := {}
+		var tl: PackedInt32Array = res["tiles"]
+		for k in range(0, tl.size(), 2):
+			var c := Vector2i(tl[k], tl[k + 1])
+			if _streamer.has_tile(c):
+				want[c] = int(_streamer._gen.get(c, 0))
+		var now := Time.get_ticks_usec()
+		break_log.append({"shot": t0, "find_start": t0, "find_end": t0, "found": now, "hidden": t0,
+				"want": want})
 
 
 ## A hidden brick's hole stays till the tiles and sections the edit rebuilt
@@ -2122,6 +2169,10 @@ func _run_inventory_gate() -> void:
 		waited += 1
 	check.call("item icons rendered at load (stage 4)", ItemIcons.ready and ItemIcons.has_icon(&"granite")
 			and ItemIcons.has_icon(&"bucket"))
+	# The sheet, for a look (a read-back: a gate's).
+	if ItemIcons.ready and ItemIcons.texture != null:
+		DirAccess.make_dir_recursive_absolute(UserPaths.DEV)
+		ItemIcons.texture.get_image().save_png(UserPaths.DEV + "mine_item_icons.png")
 	await _key(KEY_B)
 	check.call("B: the items hands", builder.active)
 	await _key(KEY_E)
@@ -2955,6 +3006,10 @@ func _gpu_toggles() -> Array:
 	t.append(["near tiles hidden", func(): _gpu_hide([_streamer]), _gpu_back])
 	t.append(["studs/tufts/pebbles hidden", func(): _gpu_hide(_gpu_instances()), _gpu_back])
 	t.append(["chamfered near mesh hidden", func(): _gpu_hide(_gpu_chamfered()), _gpu_back])
+	if bricks != null and _overlay_on:
+		# The brick overlay (Docs/BrickOverlay.md 5): its boxes and the sunken
+		# flat ground, against the flat ground alone.
+		t.append(["brick overlay off", func(): bricks.set_enabled(false), func(): bricks.set_enabled(true)])
 	t.append(["far tier hidden", func(): _gpu_hide([_far]), _gpu_back])
 	t.append(["deep tier hidden", func(): _gpu_hide([_deep]), _gpu_back])
 	t.append(["water (all) hidden", func(): _gpu_hide([water]), _gpu_back])
@@ -4662,6 +4717,25 @@ func _run_water_gate() -> void:
 		await get_tree().process_frame
 		fw = maxf(fw, float(Time.get_ticks_usec() - f0) / 1000.0)
 	print("[water-gate] live: 120 frames, worst %.1f ms; %s" % [fw, water.report()])
+	# Far away the terrain lets the platform's tile go, and its water goes
+	# with it; back, both come back (the user, 2026-11-23: flowing water
+	# never unloaded).
+	var pt := Vector2i(floori(float(o.x) / 32.0), floori(float(o.y) / 32.0))
+	var home := _eye()
+	_fly_to(home + Vector3(400, 0, 0), Vector3(1, 0, 0))
+	var waited := 0
+	while waited < 900 and (_streamer.has_tile(pt) or water.has_tile_drawn(pt)):
+		await get_tree().process_frame
+		waited += 1
+	var gone: bool = not water.has_tile_drawn(pt)
+	var bare: int = water.drawn_on_bare()
+	_fly_to(home, Vector3(1, 0, 0))
+	waited = 0
+	while waited < 900 and not water.has_tile_drawn(pt):
+		await get_tree().process_frame
+		waited += 1
+	print("[water-gate] unload: platform tile water gone far away %s, drawn on bare ground %d (want 0), %d parked; back again %s" % [
+			gone, bare, water.parked_count(), water.has_tile_drawn(pt)])
 	# Saving (stage 7): the water written beside the edits, the world made
 	# again from its settings, the same water back.
 	water.manual = true
