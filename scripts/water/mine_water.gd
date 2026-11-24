@@ -111,6 +111,8 @@ var _spare_lights: Array[OmniLight3D] = []
 
 func setup(p_host: Node) -> void:
 	host = p_host
+	if not RenderingServer.frame_pre_draw.is_connected(_pre_draw):
+		RenderingServer.frame_pre_draw.connect(_pre_draw)
 	var shader: Shader = load("res://shaders/water_fluid.gdshader")
 	# See-through, Minecraft's way (Docs/MineWater.md 7.4); lava stays solid.
 	_water_mat = WaterShaders.material("res://shaders/water_fluid.gdshader", true)
@@ -180,6 +182,8 @@ func reset_world(sea_m: float, near_tiles: int, p_sea_on: bool, p_wave_scale := 
 
 
 func _exit_tree() -> void:
+	if RenderingServer.frame_pre_draw.is_connected(_pre_draw):
+		RenderingServer.frame_pre_draw.disconnect(_pre_draw)
 	_finish_field()
 	Pawn.water_probe = Callable()
 	Pawn.water_flow = Callable()
@@ -231,7 +235,6 @@ func _process_body(delta: float) -> void:
 		_follow_field(delta)
 	_swap_some()
 	_copy_sea_waves(delta)
-	WaterShaders.sync_all()
 	_underwater(eye)
 	_burn_in -= delta
 	if _burn_in <= 0.0:
@@ -430,6 +433,18 @@ func _burn(delta: float) -> void:
 ## The sea's wave numbers onto the fluid water (the band waves with the
 ## tiers): the clock every frame, the rest four times a second (the field and
 ## the mask move now and then). CPU-side material values, no read-back.
+## Just before the frame is drawn, after every node's _process: the sea's
+## clock onto the fluid water, then every see-through material's uniforms
+## onto its depth pass (WaterShaders). Copied earlier in the frame the depth
+## pass was a frame behind the waves, and the water behind its own depth
+## did not draw: the shore strip was bare and far water too clear (the user,
+## 2026-11-23).
+func _pre_draw() -> void:
+	if sea != null and sea.near != null and sea.near._mat != null:
+		_water_mat.set_shader_parameter("wave_time", sea.near._mat.get_shader_parameter("wave_time"))
+	WaterShaders.sync_all()
+
+
 func _copy_sea_waves(delta: float) -> void:
 	if sea == null or sea.near == null or sea.near._mat == null:
 		return

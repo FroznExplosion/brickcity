@@ -4611,6 +4611,14 @@ func _run_sea_gate() -> void:
 	walker.pitch = -0.12
 	await _frames(40)
 	await _shot(dev + "sea_band_low.png")
+	# Looking down at the shallows from 2.4 m (see-through water, MineWater.md
+	# 7.4): near and far water alike tinted by the water looked through, no
+	# line where one tier hands over to the next (the user, 2026-11-23).
+	walker.place(to_global(shore_m + Vector3(dir.x, 0, dir.y) * 2.0 + Vector3(0, 2.4, 0)),
+			Vector3(dir.x, 0, dir.y))
+	walker.pitch = -0.75
+	await _frames(40)
+	await _shot(dev + "sea_look_down.png")
 	walker.place(to_global(shore_m + Vector3(dir.x, 0, dir.y) * 1.0 + Vector3(0, 1.2, 0)),
 			(Vector3(dir.x, 0, dir.y) + along * 0.4).normalized())
 	walker.pitch = -0.15
