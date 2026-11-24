@@ -546,3 +546,26 @@ blocking edit is the terrain area's, small, and can go any time.
   Drawn as overlay instances within the overlay's 12 m (one draw call a
   kind, nothing stored); 12-45 m either plain baked faces or the step as
   now -- pictures decide; far rings never. Stage B5, after the fit.
+- **The fill (chosen 2026-11-24): a quota fit, not largest-first.** Each
+  world (its worldgen preset) names target shares BY COUNT, e.g. 20 % 2x4,
+  20 % 2x2, a few % of every other size, filled with 1x2 and 1x1. Inside a
+  region the fit visits cells in a hashed order and picks, among the shapes
+  that fit, by how far each is under its share (deficit-weighted), both
+  directions by hash; 1x2/1x1 fill last. Same mix at walls and inside them
+  (walls-first was dropped: bland caves, odd filler when digging). Loose:
+  regions are small samples, the world hits the shares on average.
+- **Stagger: option (c), scored, never refused.** The score's weight is a
+  per-world (or per-depth) knob: lower in caves means more seams over seams,
+  weaker roofs, the instability wanted there.
+- **Bricks cross every chunk seam**, tile edges and section boundaries alike
+  (tall bricks too: up to 8 chunks, rarely). Measure the extra rebuilds.
+- **Bricks jut into caves**: a wall brick may run 1-2 studs out into cave
+  air (hashed, strong ground, most of the brick in the wall). A pure part of
+  the fit, so the ground "as generated" is the generator plus the juts; it
+  waits until every reader takes the store (find_brick, light, collision,
+  water W1); the far tiers never see juts.
+- **Big groups float.** A loose group over N cells (per world, ~500) does not
+  fall: it is held as if grounded; groups under N fall as now. No 1,000-brick
+  breaks from one hit, and the survey can stop counting at N (cheaper than
+  today's 1.2 M-cell limit). Groups under N hanging by a neck are the
+  instability. Stage D, or earlier on its own (it is the survey only).
