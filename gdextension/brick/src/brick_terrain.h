@@ -949,6 +949,13 @@ public:
     /// (bricks shot and hidden till their tile is rebuilt, TerrainBricks).
     static Dictionary overlay_pick(const Array &lists, Vector3 eye, Vector3 forward, double range_m,
             double cos_half, int max_bricks, const PackedVector3Array &hidden);
+    /// The listed brick (overlay_bricks' 17 floats) whose box holds `point`,
+    /// from any of `lists` -- at any range, not only what overlay_pick laid
+    /// (a far shot). {brick: its floats, lo, hi: its box with any brick
+    /// stacked on or under it on the same footprint (a piece's plate or
+    /// tile), each face's light from the list that drew more of it}; empty
+    /// when none holds it.
+    static Dictionary overlay_find(const Array &lists, Vector3 point);
     /// FOR PROBES (Docs/MineWorld.md 20): the flat mesh and colliders of a
     /// tile (sy = INT32_MIN) or deep section, checked against the field.
     ///   exposed, undrawn   faces of owned solid cells against OPEN air, and

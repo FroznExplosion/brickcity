@@ -351,9 +351,12 @@ void vertex() {
     v_block = CUSTOM0.g < 0.25 ? CUSTOM0.g * (255.0 / 60.0) : 0.0;
 #endif
     float push = 0.0;
-    if (overlay_reach > 0.0 && abs(CUSTOM0.b * 255.0 - 64.0) < 0.5) {
+    // Covered faces: sunk near the eye, and folded where a hidden brick is
+    // at any range (a far shot has no box, TerrainBricks._hide_far).
+    if ((overlay_reach > 0.0 || overlay_holes > 0) && abs(CUSTOM0.b * 255.0 - 64.0) < 0.5) {
         float od = distance(v_world, INV_VIEW_MATRIX[3].xyz);
-        float ok = 1.0 - smoothstep(overlay_reach - overlay_fade, overlay_reach, od);
+        float ok = overlay_reach > 0.0
+                ? 1.0 - smoothstep(overlay_reach - overlay_fade, overlay_reach, od) : 0.0;
         // Where the face would lie sunk along its normal: the hole test's
         // place in its brick (below) is measured from there.
         vec3 sunk = VERTEX - normalize(NORMAL) * (OVERLAY_RECESS * ok);

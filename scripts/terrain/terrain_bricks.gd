@@ -83,6 +83,8 @@ const HOLE_NO_EDIT_MS := 600
 const HOLE_MAX_MS := 3000
 var holes: Array = []
 var hidden_total := 0
+## Of them, shots past the laid bricks (found in the tiles' lists).
+var far_hidden := 0
 var _hole_id := 0
 ## The holes' stand-in walls: bevelled boxes seen from inside (TERRAIN_CAVITY).
 var _cav_mm: MultiMesh = null
@@ -280,7 +282,7 @@ func readout() -> String:
 ## The shot at `point` (terrain frame) going `dir`: the overlay brick it hit,
 ## hidden now. Returns the hole's id, or -1 (no brick of the overlay there).
 func hide_at(point: Vector3, dir: Vector3) -> int:
-	if not enabled or count == 0:
+	if not enabled:
 		return -1
 	var q := point + dir.normalized() * 0.01
 	for i in count:
@@ -325,7 +327,51 @@ func hide_at(point: Vector3, dir: Vector3) -> int:
 		hidden_total += 1
 		_push_holes()
 		return _hole_id
-	return -1
+	return _hide_far(q)
+
+
+## A shot past the laid bricks (or out of their cone): the brick from the
+## drawn tiles' own lists (BrickTerrain.overlay_find), hidden as a laid one
+## is -- no box to move, the flat faces fold and the stand-in walls show.
+func _hide_far(q: Vector3) -> int:
+	var tile_m := float(BrickTerrain.get_tile_studs()) * BrickWorld.get_stud_metres()
+	var src: Array = []
+	for t in TerrainTile.overlay_tiles.values():
+		var tile := t as TerrainTile
+		if tile == null or tile.overlay.is_empty() or not tile.is_visible_in_tree():
+			continue
+		var o: Vector3 = world.to_local(tile.global_position)
+		# Its footprint and a stud round it (a brick across its edge).
+		if q.x < o.x - 1.5 or q.z < o.z - 1.5 or q.x > o.x + tile_m + 1.5 or q.z > o.z + tile_m + 1.5:
+			continue
+		src.append(tile.overlay)
+	if src.is_empty():
+		return -1
+	var r: Dictionary = BrickTerrain.overlay_find(src, q)
+	if r.is_empty():
+		return -1
+	var b: PackedFloat32Array = r.brick
+	var lo: Vector3 = r.lo
+	var hi: Vector3 = r.hi
+	# Its slot as overlay_pick would write it (for the stand-in walls).
+	var q8 := func(v: float) -> int: return clampi(roundi(v * 255.0), 0, 255)
+	var slot := PackedFloat32Array([b[3] - b[0], 0.0, 0.0, (b[0] + b[3]) * 0.5,
+			0.0, b[4] - b[1], 0.0, (b[1] + b[4]) * 0.5,
+			0.0, 0.0, b[5] - b[2], (b[2] + b[5]) * 0.5,
+			float(q8.call(b[7]) | (q8.call(b[8]) << 8) | (q8.call(b[9]) << 16)), b[15], 0.0,
+			b[6] * 2.0 + (1.0 if b[10] > 0.5 else 0.0),
+			b[11], b[12], b[13], b[14]])
+	var top_sky := 0.0
+	for corner in 4:
+		var n := 8 + corner
+		top_sky += float((int(b[11 + n / 6]) >> (4 * (n % 6))) & 15) / 4.0
+	_hole_id += 1
+	holes.append({"id": _hole_id, "lo": lo, "hi": hi, "want": {}, "deep": {}, "rect": Rect2i(),
+			"at": Time.get_ticks_msec(), "waiting": true, "slot": slot, "sky": top_sky})
+	hidden_total += 1
+	far_hidden += 1
+	_push_holes()
+	return _hole_id
 
 
 ## The shot's edit landed: the hole shows till these tiles (Vector2i ->
