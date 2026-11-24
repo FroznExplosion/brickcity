@@ -2988,6 +2988,24 @@ func _gpu_chamfered() -> Array:
 	return _streamer.find_children("SurfaceChamfered", "MeshInstance3D", true, false)
 
 
+var _gpu_far_mats := {}
+
+func _gpu_far_plain(on: bool) -> void:
+	if on:
+		var plain := StandardMaterial3D.new()
+		plain.vertex_color_use_as_albedo = true
+		plain.shading_mode = BaseMaterial3D.SHADING_MODE_PER_VERTEX
+		plain.roughness = 1.0
+		for mi: MeshInstance3D in _far.find_children("*", "MeshInstance3D", true, false):
+			_gpu_far_mats[mi] = mi.material_override
+			mi.material_override = plain
+	else:
+		for mi in _gpu_far_mats:
+			if is_instance_valid(mi):
+				(mi as MeshInstance3D).material_override = _gpu_far_mats[mi]
+		_gpu_far_mats.clear()
+
+
 ## The faces behind the overlay's bricks (Docs/BrickOverlay.md 6b), tiles'
 ## and sections'.
 func _gpu_behind() -> Array:
@@ -3026,6 +3044,9 @@ func _gpu_toggles() -> Array:
 		t.append(["brick overlay off", func(): bricks.set_enabled(false), func(): bricks.set_enabled(true)])
 		t.append(["behind faces hidden", func(): _gpu_hide(_gpu_behind()), _gpu_back])
 	t.append(["far tier hidden", func(): _gpu_hide([_far]), _gpu_back])
+	# The far tier's shading against its draws (MineWorld.md 21, item 6): the
+	# same blocks with a plain vertex-lit material.
+	t.append(["far tier plain material", func(): _gpu_far_plain(true), func(): _gpu_far_plain(false)])
 	t.append(["deep tier hidden", func(): _gpu_hide([_deep]), _gpu_back])
 	t.append(["water (all) hidden", func(): _gpu_hide([water]), _gpu_back])
 	if water.sea != null:
@@ -3066,6 +3087,21 @@ func _run_gpu_gate() -> void:
 	var vp := get_viewport()
 	var size := vp.get_visible_rect().size
 	print("[gpu] trees: real bricks to %.0f m, cards past it" % _trees.near_m)
+	print("[gpu] far tier: %d meshes (%d hidden), %d blocks, %d rings, %d tris, blocks a node up to %d tiles" % [_far.mesh_count(), _far.hidden_count(), _far.block_count(), _far.ring_count(), _far.triangle_count(), _far._split_to])
+	if "--header-only" in OS.get_cmdline_user_args():
+		var hist := {}
+		var eye_t := _tile_of(_eye())
+		var far_d := {}
+		for i in _far._far_nodes.size():
+			if _far._far_nodes[i] == null:
+				continue
+			var r: Rect2i = _far._far_rects[i]
+			hist[r.size.x] = int(hist.get(r.size.x, 0)) + 1
+			var d := maxi(absi(r.get_center().x - eye_t.x), absi(r.get_center().y - eye_t.y)) / 8 * 8
+			far_d[d] = int(far_d.get(d, 0)) + 1
+		print("[gpu] far node blocks by size (tiles): %s; by distance from the eye (tiles, 8s): %s; anchor %s eye tile %s" % [hist, far_d, _far.anchor, eye_t])
+		get_tree().quit()
+		return
 	print("[gpu] mine world, %dx%d at render scale %.2f, msaa %d, GI %d, sun shadow %.0f m mode %d, radiance %d, glow %s, near %d tiles" % [
 			int(size.x), int(size.y), vp.scaling_3d_scale, vp.msaa_3d, LightRig.gi_level,
 			_rig.sun.directional_shadow_max_distance, _rig.sun.directional_shadow_mode,
