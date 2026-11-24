@@ -125,18 +125,37 @@ func _near(k: Vector3i) -> bool:
 
 
 func _start() -> void:
+	# Edits first, with EDIT_SLOTS more in flight than new sections may take
+	# (TerrainStreamer's rule, Docs/MineWorld.md 21): a hole in a cave wall
+	# does not wait behind the caves loading round it.
+	var edits: Array[Vector3i] = []
 	for k in _want:
-		if _tasks.size() >= max_in_flight:
+		if _dirty.has(k) and _secs.has(k) and not _tasks.has(k):
+			edits.append(k)
+	for k in edits:
+		if _tasks.size() >= max_in_flight + TerrainStreamer.EDIT_SLOTS:
+			return
+		_start_one(k)
+	var fresh := 0
+	for k in _tasks:
+		if not _secs.has(k):
+			fresh += 1
+	for k in _want:
+		if fresh >= max_in_flight:
 			return
 		if _tasks.has(k) or (_secs.has(k) and not _dirty.has(k)):
 			continue
-		var holder := [{}]
-		var key := k
-		var task := WorkerThreadPool.add_task(
-			func() -> void: holder[0] = BrickTerrain.build_section(key.x, key.y, key.z),
-			true, "deep section")
-		_tasks[k] = [task, holder]
-		_dirty.erase(k)
+		_start_one(k)
+		fresh += 1
+
+
+func _start_one(k: Vector3i) -> void:
+	var holder := [{}]
+	var task := WorkerThreadPool.add_task(
+		func() -> void: holder[0] = BrickTerrain.build_section(k.x, k.y, k.z),
+		true, "deep section")
+	_tasks[k] = [task, holder]
+	_dirty.erase(k)
 
 
 func _land(t0: int) -> void:

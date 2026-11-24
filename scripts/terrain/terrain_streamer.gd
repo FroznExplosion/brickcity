@@ -66,6 +66,10 @@ var pinned := Rect2i()
 ## How many tiles may be baking at once. More than the core count only makes
 ## the queue longer.
 @export var max_in_flight := 8
+## Bake slots on top of `max_in_flight` that only an EDIT's rebake may take
+## (Docs/MineWorld.md 21): with every slot streaming new ground in, a broken
+## brick's tile waited for one to free (~9 ms) before it even started.
+const EDIT_SLOTS := 2
 ## Tiles within this many of the camera get a COLLIDER. Collision is the most
 ## expensive phase and the only one nobody can see; you cannot stand on a
 ## tile four away from you.
@@ -195,7 +199,7 @@ var _worst_swap_ms := 0.0
 
 func setup(material: Material) -> void:
 	_material = material
-	for i in max_in_flight:
+	for i in max_in_flight + EDIT_SLOTS:
 		_slots.append({})
 		_slot_task.append(-1)
 		_slot_coord.append(Vector2i.ZERO)
@@ -699,14 +703,28 @@ func _collect(cx: int, cz: int) -> void:
 			want.append(c)
 	if want.is_empty():
 		return
-	# Nearest first: the tile you are about to walk onto matters more than
-	# the corner of the square.
+	# Edits first (a drawn tile rebuilt: the player is looking at the hole),
+	# then nearest first: the tile you are about to walk onto matters more
+	# than the corner of the square.
 	want.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		var ea := _tiles.has(a)
+		if ea != _tiles.has(b):
+			return ea
 		return (a - Vector2i(cx, cz)).length_squared() \
 				< (b - Vector2i(cx, cz)).length_squared())
+	# New ground streaming in takes at most max_in_flight slots; the
+	# EDIT_SLOTS past it are kept for edits.
+	var streaming := 0
+	for t in _tasks:
+		if not _tiles.has(t):
+			streaming += 1
 	for c in want:
 		if _free_slots.is_empty():
 			return
+		if not _tiles.has(c):
+			if streaming >= max_in_flight:
+				continue
+			streaming += 1
 		var slot: int = _free_slots.pop_back()
 		_slot_coord[slot] = c
 		_slots[slot] = {}
@@ -736,7 +754,30 @@ func _collect(cx: int, cz: int) -> void:
 func _assemble() -> void:
 	var t0 := Time.get_ticks_usec()
 	_assemble_ms = 0.0
+	# Edits' bakes land first: the frame's budget goes to the hole the
+	# player made before new ground at the edge of the square.
+	var order: Array[int] = []
+	var later: Array[int] = []
 	for slot in _slot_task.size():
+		if _slot_task[slot] < 0:
+			continue
+		if _tiles.has(_slot_coord[slot]):
+			order.append(slot)
+		else:
+			later.append(slot)
+	# Then their swaps, on a budget of their own: the hole a shot made is not
+	# held back by new ground landing at the edge of the square (it waited up
+	# to 48 ms for it, Docs/MineWorld.md 21). New ground lands after.
+	var in_budget := _land_slots(order, t0)
+	_swap_step(Time.get_ticks_usec())
+	if in_budget and _land_slots(later, t0) and not hold:
+		_finish(t0)
+
+
+## Land the finished bakes of `slots` under the frame's budget (from `t0`);
+## false when it ran out.
+func _land_slots(slots: Array[int], t0: int) -> bool:
+	for slot in slots:
 		if _slot_task[slot] < 0:
 			continue
 		if not WorkerThreadPool.is_task_completed(_slot_task[slot]):
@@ -800,7 +841,7 @@ func _assemble() -> void:
 			_worst_tile_ms = maxf(_worst_tile_ms, sms0)
 			_assemble_ms = float(Time.get_ticks_usec() - t0) / 1000.0
 			if _assemble_ms >= budget_ms:
-				return
+				return false
 			continue
 		tile.set_near(near)
 		if pinned.has_area():
@@ -817,11 +858,9 @@ func _assemble() -> void:
 
 		_assemble_ms = float(Time.get_ticks_usec() - t0) / 1000.0
 		if _assemble_ms >= budget_ms:
-			return   # the rest can wait a frame
+			return false   # the rest can wait a frame
 
-	_swap_step(t0)
-	if not hold:
-		_finish(t0)
+	return true
 
 
 ## Each refresh in waiting one step on, under the frame's budget: its

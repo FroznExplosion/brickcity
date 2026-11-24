@@ -412,12 +412,12 @@ func _pick(material: int) -> bool:
 		var lo: Vector3i = c[0]
 		var hi: Vector3i = c[1]
 		task = WorkerThreadPool.add_task(func() -> void:
-				holder[0] = BrickTerrain.find_bricks(lo, hi), false, "pickaxe area")
+				holder[0] = BrickTerrain.find_bricks(lo, hi), true, "pickaxe area")
 	else:
 		var point: Vector3 = target.position
 		var n := Vector3(target.get("normal", Vector3i.UP))
 		task = WorkerThreadPool.add_task(func() -> void:
-				holder[0] = BrickTerrain.find_brick(point, n), false, "pickaxe")
+				holder[0] = BrickTerrain.find_brick(point, n), true, "pickaxe")
 	_pick_jobs.append([task, holder, material])
 	target = {}
 	return true

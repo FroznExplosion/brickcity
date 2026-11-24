@@ -10,8 +10,12 @@ extends Node3D
 ## `restore` with its edits. Preloaded by path, not named, as the scene's
 ## other parts are (terrain_scene.gd).
 
-## Edits gathered for this long before a survey, as the tiles' refresh is.
-const SURVEY_EVERY := 0.1
+## Edits gathered for this long before a survey. 0: surveyed the frame the
+## edit lands, as the tiles' refresh is (Docs/MineWorld.md 21) -- what an
+## edit cuts loose started falling 0.1 s late. One survey runs at a time and
+## edits that land meanwhile merge into the queued boxes, so rapid fire and
+## an explosion's many cells still make few surveys.
+const SURVEY_EVERY := 0.0
 ## What a stud of ground holds: the buildings' (BrickStrength.tension(),
 ## the Options menu's Stud Strength) times this. Four: ground is rock and
 ## earth, not bricks on studs -- a cave roof stands by arching, which a stud
@@ -294,7 +298,7 @@ func _start_survey() -> void:
 			var t0 := Time.get_ticks_usec()
 			var r: Dictionary = TerrainCollapse.survey(lo, hi, t, m)
 			r["ms"] = (Time.get_ticks_usec() - t0) / 1000.0
-			holder[0] = r, false, "ground survey")
+			holder[0] = r, true, "ground survey")
 
 
 ## A finished survey: never waits for one.
@@ -663,7 +667,7 @@ func _mesh_ready(w: Dictionary) -> bool:
 		var task := WorkerThreadPool.add_task(func() -> void:
 				var m := ArrayMesh.new()
 				m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {}, IslandManager.UPLOAD_COMPRESS)
-				holder[0] = m, false, "ground piece")
+				holder[0] = m, true, "ground piece")
 		w["job"] = [task, holder]
 		return false
 	if not WorkerThreadPool.is_task_completed(int(job[0])):
