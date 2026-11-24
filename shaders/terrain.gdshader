@@ -88,6 +88,12 @@ group_uniforms overlay;
 // they still win the depth test against the face they lie on.
 uniform float overlay_reach = 0.0;
 uniform float overlay_fade = 1.5;
+// BROKEN BRICKS, AT ONCE (stage 6): a shot hides its brick's box the same
+// frame (TerrainBricks.hide_at); the flat faces of that brick fold to a point
+// here till the rebuilt tile is drawn. World space; `overlay_holes` of them.
+uniform int overlay_holes = 0;
+uniform vec3 overlay_hole_lo[8];
+uniform vec3 overlay_hole_hi[8];
 const float OVERLAY_RECESS = 0.013;
 const float OVERLAY_PULL = 0.002;
 
@@ -322,6 +328,12 @@ void vertex() {
     COLOR = vec4(float(box_rgb & 255), float((box_rgb >> 8) & 255), float((box_rgb >> 16) & 255),
             255.0 * float(box_code & 1)) / 255.0;
     v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+#ifdef TERRAIN_CAVITY
+    // A broken brick's hole, seen from inside (TerrainBricks: the stand-in
+    // walls till its tile is rebuilt): its faces turned in.
+    NORMAL = -NORMAL;
+    v_flat_normal = -v_flat_normal;
+#endif
     vec4 box_view = MODELVIEW_MATRIX * vec4(VERTEX, 1.0);
     box_view.xyz -= normalize(box_view.xyz) * OVERLAY_PULL;
     POSITION = PROJECTION_MATRIX * box_view;
@@ -342,6 +354,31 @@ void vertex() {
         float od = distance(v_world, INV_VIEW_MATRIX[3].xyz);
         float ok = 1.0 - smoothstep(overlay_reach - overlay_fade, overlay_reach, od);
         VERTEX -= normalize(NORMAL) * (OVERLAY_RECESS * ok);
+        if (overlay_holes > 0 && UV2.x > 0.0 && UV2.y > 0.0) {
+            // The middle of this face's BRICK face (UV is the place in it,
+            // UV2 its size; the mesher's axes: x faces u along z (+ on +x),
+            // z faces u along x (+ on -z), tops and bottoms u x and v z, a
+            // side's v up), a centimetre into the brick.
+            vec3 n = normalize(NORMAL);
+            vec2 d = 0.5 * UV2 - UV;
+            vec3 off;
+            if (abs(n.x) > 0.5) {
+                off = vec3(0.0, d.y, d.x * sign(n.x));
+            } else if (abs(n.z) > 0.5) {
+                off = vec3(-d.x * sign(n.z), d.y, 0.0);
+            } else {
+                off = vec3(d.x, 0.0, d.y);
+            }
+            vec3 mid = (MODEL_MATRIX * vec4(VERTEX + off - n * 0.01, 1.0)).xyz;
+            for (int i = 0; i < 8; i++) {
+                if (i >= overlay_holes) {
+                    break;
+                }
+                if (all(greaterThan(mid, overlay_hole_lo[i])) && all(lessThan(mid, overlay_hole_hi[i]))) {
+                    VERTEX = vec3(0.0);
+                }
+            }
+        }
     }
 #endif
 }

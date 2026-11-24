@@ -103,7 +103,25 @@ sunken face is hard to see for that time.
   past INSIDE corners (closed the wall-foot slit). Gates: `--gate=bricks`
   PASS, `--gate=seams` 0/0 px, `--gate=seams --deep --at-top` 0 px (old
   chamfer 88). Overlay is ON with Chamfered brick edges; `--old-chamfer` = A/B.
-- **Before merging**: run terrain_probe, terrain_audit_probe, mine_world_probe,
-  bevel_gap_probe (the 13 mm inside-corner growth is in every flat mesh), and
-  look at a walk in the real game. Then stages 4-7 (packer sides boxed, GPU
-  cost with editor closed, breaking, retire the old chamfer).
+- Stages 2-3 merged (main d65c41a5) after terrain_audit_probe, mine_world_probe
+  (the inside-corner reach now stops at the sample's own plates),
+  bevel_gap_probe all passed; terrain_probe fails the same 2 checks as main
+  (+ its timing, with other runs going).
+- **Stage 6 (breaking, first half) built**: a shot brick of the overlay goes
+  the frame it is hit (`TerrainBricks.hide_at`): its slot -- and the plate or
+  tile on it -- moved away (the pool is never deleted from, only moved), the
+  flat ground's faces of that brick folded in the vertex shader
+  (`overlay_holes`, up to 8, found from UV/UV2: terrain_bricks_probe checks
+  every covered vertex finds its brick; the overlay lips' v now runs up), its
+  studs too (printed_core INSTANCE_SKY), an inside-out box in the ground's
+  look (`TERRAIN_CAVITY`) for the hole's walls, till the tiles and sections
+  the edit rebuilt are drawn at the generations it set (`hole_wait`). A shot
+  that finds nothing gives the brick back (`drop_hole`).
+  `--gate=breaklag --burst`: 30 of 30 hidden the frame they were shot every 6
+  frames, 26 of 30 every frame (the rest hit a brick already hidden); the
+  tile's own hole still 49-50 ms (the audit chat's items 1, 3, 4).
+- Open: packer SIDES are not sunk (their side bevels read square); the
+  overlay's fill worst 5.3 ms in a 1-shot-a-frame burst (a pick every frame);
+  GPU cost (`--gate=gpu`, editor closed) not taken; stage 7 (retire
+  build_tile_chamfered / add_bevel) not done; find the hit brick from the
+  overlay's own data (skip find_brick's worker frame) not done.
