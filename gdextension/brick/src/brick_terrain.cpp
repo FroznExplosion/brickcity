@@ -1,3 +1,5 @@
+#include <array>
+#include <map>
 #include "brick_terrain.h"
 #include "brick_fluid.h"
 #include "terrain_biomes.h"
@@ -3970,6 +3972,55 @@ Color piece_colour(const TileSample &s, int ox, int oz, int mat, bool studded) {
     return Color(c.r * t, c.g * t, c.b * t, studded ? 1.0f : 0.0f);
 }
 
+/// THE BRICK OVERLAY (Docs/BrickOverlay.md): every brick a bake draws a face
+/// of, for real bevelled instances laid over the flat ground near the camera.
+/// Keyed by the brick's corner and course; its plates the union of what the
+/// faces found solid. Set by build_tile / build_section for their own call
+/// (thread-local: bakes run on workers side by side).
+struct OutBrick {
+    int x0, z0, x1, z1;   ///< studs, absolute, [x0, x1)
+    int p0, p1;           ///< plates, [p0, p1)
+    uint8_t mat;
+    Color col;
+};
+static thread_local std::map<std::array<int, 3>, OutBrick> *t_bricks = nullptr;
+
+static void note_brick(int x0, int z0, int sx, int sz, int p0, int p1, int mat, const Color &col) {
+    if (t_bricks == nullptr || sx <= 0 || sz <= 0 || p1 <= p0) {
+        return;
+    }
+    const std::array<int, 3> k{ x0, z0, floor_div(p0, PLATES_PER_CELL) };
+    auto it = t_bricks->find(k);
+    if (it == t_bricks->end()) {
+        (*t_bricks)[k] = OutBrick{ x0, z0, x0 + sx, z0 + sz, p0, p1, (uint8_t)mat, col };
+    } else {
+        it->second.p0 = std::min(it->second.p0, p0);
+        it->second.p1 = std::max(it->second.p1, p1);
+    }
+}
+
+/// The noted bricks as floats, 10 a brick: min corner, max corner (metres,
+/// absolute), material, colour r g b (the alpha's "takes studs" dropped).
+static PackedFloat32Array bricks_floats(const std::map<std::array<int, 3>, OutBrick> &m) {
+    PackedFloat32Array out;
+    out.resize((int64_t)m.size() * 10);
+    float *w = out.ptrw();
+    for (const auto &kv : m) {
+        const OutBrick &b = kv.second;
+        *w++ = (float)b.x0 * STUD_M;
+        *w++ = (float)b.p0 * PLATE_M;
+        *w++ = (float)b.z0 * STUD_M;
+        *w++ = (float)b.x1 * STUD_M;
+        *w++ = (float)b.p1 * PLATE_M;
+        *w++ = (float)b.z1 * STUD_M;
+        *w++ = (float)b.mat;
+        *w++ = b.col.r;
+        *w++ = b.col.g;
+        *w++ = b.col.b;
+    }
+    return out;
+}
+
 /// Every exposed face of the volumetric mask, greedy-merged, EXCEPT the top
 /// faces the surface packer has already drawn.
 ///
@@ -4302,6 +4353,27 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                     // the bond's.
                     const bool of_piece = key < 0;
                     const BondRect br = of_piece ? piece_rect(key) : brick_rect(lx, yp, lz);
+                    if (t_bricks != nullptr) {
+                        // The brick's plates: a piece's course under its top,
+                        // or the solid plates of this cell's course.
+                        int bp0 = 0, bp1 = 0;
+                        if (of_piece) {
+                            const Piece &pp = pieces[(size_t)(key & 0x7FFFFFFF)];
+                            bp0 = pp.top - (PLATES_PER_CELL - 1);
+                            bp1 = pp.top + 1;
+                        } else {
+                            const int cb = floor_div(yp, PLATES_PER_CELL) * PLATES_PER_CELL;
+                            bp0 = INT_MAX;
+                            bp1 = INT_MIN;
+                            for (int q = cb; q < cb + PLATES_PER_CELL; ++q) {
+                                if (s.solid(lx, q, lz)) {
+                                    bp0 = std::min(bp0, q);
+                                    bp1 = std::max(bp1, q + 1);
+                                }
+                            }
+                        }
+                        note_brick(br.x, br.z, br.sx, br.sz, bp0, bp1, mat, col);
+                    }
                     // STUDS ON THE TOPMOST BRICKS OF A CAVE (Docs/MineWorld.md
                     // 19), in the mine world's look (the bond's top course):
                     // a cave floor or ledge is a brick's top as much as the
@@ -6215,6 +6287,9 @@ double BrickTerrain::block_light_at(Vector3 point) {
 }
 
 Dictionary BrickTerrain::build_section(int tx, int sy, int tz) {
+    std::map<std::array<int, 3>, OutBrick> overlay;
+    t_bricks = &overlay;
+    struct OverlayReset { ~OverlayReset() { t_bricks = nullptr; } } overlay_reset;
     const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
     g_face_bevel = t_bevel_override >= 0.0f ? t_bevel_override : g_face_bevel_set;
     Dictionary out;
@@ -6246,6 +6321,9 @@ Dictionary BrickTerrain::build_section(int tx, int sy, int tz) {
     }
     // The keys TerrainTile reads, so a section is drawn by the same node.
     out["mesh"] = mesh;
+    // The bricks it drew a face of (Docs/BrickOverlay.md).
+    out["overlay_bricks"] = bricks_floats(overlay);
+    t_bricks = nullptr;
     // Studs on the cave floors (Docs/MineWorld.md 20), drawn by the section's
     // TerrainTile like a surface tile's.
     out["studs"] = studs;
@@ -6266,6 +6344,9 @@ Dictionary BrickTerrain::build_section(int tx, int sy, int tz) {
 }
 
 Dictionary BrickTerrain::build_tile(int tx, int tz) {
+    std::map<std::array<int, 3>, OutBrick> overlay;
+    t_bricks = &overlay;
+    struct OverlayReset { ~OverlayReset() { t_bricks = nullptr; } } overlay_reset;
     g_face_bevel = t_bevel_override >= 0.0f ? t_bevel_override : g_face_bevel_set;
     const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
 
@@ -6771,6 +6852,15 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
         // see, and per tile would put a hard line down the middle of a hill.
         if (!sun_reaches(gx0 + p.brick_x() + p.brick_sx() / 2, gz0 + p.brick_z() + p.brick_sz() / 2)) {
             col = Color(col.r * SUN_SHADE, col.g * SUN_SHADE, col.b * SUN_SHADE, col.a);
+        }
+        if (p.kind == PIECE_BRICK || p.kind == PIECE_TILE) {
+            note_brick(gx0 + p.brick_x(), gz0 + p.brick_z(), p.brick_sx(), p.brick_sz(),
+                    p.top - (PLATES_PER_CELL - 1), p.top + 1, p.mat, col);
+            if (p.overlay != 0) {
+                // The tile or plate laid on it: its own one-plate brick.
+                note_brick(gx0 + p.brick_x(), gz0 + p.brick_z(), p.brick_sx(), p.brick_sz(),
+                        p.top + 1, p.top + 2, p.mat, col);
+            }
         }
         const float top = (float)(p.top + 1) * PLATE_M;
         const float x0 = (float)p.ox * STUD_M, x1 = (float)(p.ox + p.sx) * STUD_M;
@@ -7461,6 +7551,9 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
 
     Dictionary out = sky;
     out["mesh"] = mesh;
+    // The bricks it drew a face of (Docs/BrickOverlay.md).
+    out["overlay_bricks"] = bricks_floats(overlay);
+    t_bricks = nullptr;
     out["studs"] = studs;
     out["stud_stride"] = stud_stride();
     out["tufts"] = tufts;
