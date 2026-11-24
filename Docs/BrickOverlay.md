@@ -184,3 +184,20 @@ sunken face is hard to see for that time.
     (`--gate=gpu` needs the editor closed).
   - Not done: a second shot into the brick behind before the rebuild lands
     (~35 ms) has no layer behind it (seen through till then).
+
+  - **Behind faces only round the eye (2026-11-24).** Baked for every tile
+    and section they were ~200 MB more and the machine paged
+    (`--gate=deep`'s worst frame 82 ms without them, 907-1538 ms with,
+    free RAM 1-2 MB). Now only tiles within 2 of the eye's tile and sections
+    within 128 plates of it (BrickTerrain.set_behind_centre / behind_wanted);
+    the mine world (`_behind_follow`) bakes a tile or section again as it
+    comes into that ring and drops them 2 tiles (64 plates) past it; the
+    tile keeps no CPU copy. `--gate=deep`: worst 3.5 ms, 304 MB free at
+    the least.
+  - **Item 4 done another way (MineWorld.md 21).** mask_faces scanned all
+    ~140 plates of a sample in six directions (3.7 ms of a 7 ms bake): it
+    now scans only from under the lowest open cell to over the highest
+    solid one (face_band; the sample's own plates kept for its edge tests),
+    and the exposed-brick search the same. Output byte for byte the same
+    (30 tiles and their sections, after shots, behind faces on and off); a
+    rebuild with behind faces 7.2 -> 3.5 ms (sky light 1.4 of it now).
