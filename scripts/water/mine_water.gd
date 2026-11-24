@@ -70,6 +70,9 @@ var _tiles := {}                       ## Vector2i -> MeshInstance3D
 ## shows its FAR mesh (a quad per 4 x 4 studs, no sides); inside, the full one.
 var _tile_far := {}                    ## Vector2i -> bool, what it shows
 var _lod_pending := {}                 ## Vector2i -> true, asked, not back yet
+## Tiles with water whose ground is not drawn (the terrain let the tile go):
+## their water is not drawn either, and is asked for again when it is.
+var _parked := {}                      ## Vector2i -> true
 var _lod_in := 0.0
 const LOD_EVERY := 0.5
 var far_tiles := 0
@@ -158,6 +161,7 @@ func reset_world(sea_m: float, near_tiles: int, p_sea_on: bool, p_wave_scale := 
 	field_moves = 0
 	_primed.clear()
 	_queued_meshes.clear()
+	_parked.clear()
 	_wave_copy_in = 0.0
 	BrickFluid.set_real_sea(p_sea_on)
 	if fires != null:
@@ -477,9 +481,11 @@ func _swap_some() -> void:
 	for i in mini(MESH_SWAPS_PER_FRAME, keys.size()):
 		var m: Dictionary = _queued_meshes[keys[i]]
 		_queued_meshes.erase(keys[i])
+		_lod_pending.erase(m.tile)
+		if _parked.has(m.tile):
+			continue
 		_show(m.tile, m.water, m.lava, float(m.get("built_s", -1.0)))
 		_tile_far[m.tile] = bool(m.get("far", false))
-		_lod_pending.erase(m.tile)
 
 
 func _show(tile: Vector2i, water: Array, lava: Array, built_s := -1.0) -> void:
@@ -536,9 +542,29 @@ func _prime_near(eye: Vector3) -> void:
 
 ## Past the sim ring a tile's water is frozen: show its far mesh; back in
 ## reach, the full one. Each asked for once, built with the next tick.
+##
+## Where the terrain has let its tile go (its detail unloaded, the coarse
+## tier drawn instead) the water goes too, and comes back with the tile:
+## frozen water was drawn at any distance, over coarse ground or none (the
+## user, 2026-11-23: "flowing water never seems to unload").
 func _check_lod(eye: Vector3) -> void:
 	var tile_m := TILE_STUDS * BrickWorld.get_stud_metres()
 	var n := 0
+	var st: Object = host.get("_streamer") if host != null else null
+	if st != null and st.has_method("has_tile"):
+		for t in _tiles.keys():
+			if not bool(st.call("has_tile", t)):
+				_release(t)
+				_parked[t] = true
+		for t in _parked.keys():
+			if bool(st.call("has_tile", t)):
+				_parked.erase(t)
+				var c := Vector2((t.x + 0.5) * tile_m, (t.y + 0.5) * tile_m)
+				_lod_pending[t] = true
+				if c.distance_to(Vector2(eye.x, eye.z)) > sim_radius_m + tile_m * 0.5:
+					BrickFluid.request_far_mesh(t.x, t.y)
+				else:
+					BrickFluid.request_mesh(t.x, t.y)
 	for t in _tiles.keys():
 		var centre := Vector2((t.x + 0.5) * tile_m, (t.y + 0.5) * tile_m)
 		var want_far := centre.distance_to(Vector2(eye.x, eye.z)) > sim_radius_m + tile_m * 0.5
@@ -603,6 +629,26 @@ func _new_light() -> OmniLight3D:
 	l.light_cull_mask = 0xFFFFF & ~RenderLayers.BLOCK_LIT
 	add_child(l)
 	return l
+
+
+## Water tiles drawn where the terrain draws no detail tile (want 0), and
+## tiles parked for it (the water gate).
+func drawn_on_bare() -> int:
+	var st: Object = host.get("_streamer") if host != null else null
+	var n := 0
+	if st != null:
+		for t in _tiles.keys():
+			if not bool(st.call("has_tile", t)):
+				n += 1
+	return n
+
+
+func parked_count() -> int:
+	return _parked.size()
+
+
+func has_tile_drawn(t: Vector2i) -> bool:
+	return _tiles.has(t)
 
 
 func lava_lights() -> int:
