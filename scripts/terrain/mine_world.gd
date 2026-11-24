@@ -344,6 +344,7 @@ func _exit_tree() -> void:
 	BrickTerrain.set_coarse_smooth_step(8)
 	BrickTerrain.set_bond_top(false)
 	BrickTerrain.set_sky_light(false)
+	BrickTerrain.set_behind_faces(false)
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +412,10 @@ func generate(s: Dictionary) -> void:
 	# near tiles are drawn flat, as the deep sections are.
 	TerrainTile.bevel_enabled = bool(settings.get("chamfer", true))
 	_overlay_on = TerrainTile.bevel_enabled and not ("--old-chamfer" in OS.get_cmdline_user_args())
+	# The solid behind the overlay's bricks, baked inside the ground, so a
+	# shot brick's hole shows real bricks the frame it is hit
+	# (Docs/BrickOverlay.md 6b); `-- --no-behind` = the stand-in box instead.
+	BrickTerrain.set_behind_faces(_overlay_on and not ("--no-behind" in OS.get_cmdline_user_args()))
 	if _overlay_on:
 		TerrainTile.bevel_enabled = false
 	if bricks == null:

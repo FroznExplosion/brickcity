@@ -40,6 +40,9 @@ const BEVEL := 0.013
 ## with it than without. Past the near ring the shader's shaded bevel is the
 ## chamfer, as it always was.
 static var bevel_enabled := true
+## How far from the eye a tile's behind faces are drawn at all: the overlay's
+## reach (12 m) plus a tile's diagonal (16 m), from the tile's corner.
+const BEHIND_RANGE := 30.0
 
 const STUD_RANGE := 18.0      ## §7.2 tier 0 — geometry studs inside this.
 
@@ -163,6 +166,16 @@ func build(tile_x: int, tile_z: int, material: Material,
 
 	_material = material
 	_far_surface = _add_surface(data["mesh"], material, 0.0, 0.0)
+	# The solid behind the overlay's bricks (BrickTerrain.set_behind_faces,
+	# Docs/BrickOverlay.md 6b): its own node, drawn only near the eye (the
+	# shader keeps it within the overlay's 12 m reach; past BEHIND_RANGE from
+	# the tile the engine skips it whole), no shadow (it is inside the ground).
+	var behind: Array = data.get("behind_mesh", [])
+	if not behind.is_empty():
+		var bs := _add_surface(behind, material, 0.0, BEHIND_RANGE)
+		if bs != null:
+			bs.name = "SurfaceBehind"
+			bs.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	overlay = data.get("overlay_bricks", PackedFloat32Array())
 	overlay_version += 1
 	if not near.is_empty():
