@@ -1,5 +1,16 @@
 shader_type spatial;
+#ifdef SEE_THROUGH
+// See-through (WaterShaders): drawn over its own depth pass (SEE_DEPTH), so
+// only the nearest water surface shows, not every face behind it.
 render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
+#include "res://shaders/see_through.gdshaderinc"
+#else
+#ifdef SEE_DEPTH
+render_mode cull_disabled, unshaded, depth_draw_always;
+#else
+render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
+#endif
+#endif
 #include "res://shaders/hull_mask.gdshaderinc"
 //
 // CULL_DISABLED because the piece mesh has no bottom face: it is a top and
@@ -641,4 +652,13 @@ void fragment() {
     ROUGHNESS = water_roughness;
     METALLIC = 0.0;
     SPECULAR = 0.7;
+#ifdef SEE_THROUGH
+    ALPHA = see_alpha(SCREEN_UV, VERTEX, INV_PROJECTION_MATRIX);
+#endif
+#ifdef SEE_DEPTH
+    // Depth only, a hair behind the surface: the colour pass at the surface
+    // passes, any water face behind it does not.
+    ALPHA = 0.0;
+    DEPTH = FRAGCOORD.z * 0.9995;
+#endif
 }

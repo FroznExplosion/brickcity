@@ -84,6 +84,8 @@ var _fmask_wait := 0.0
 var field_centre := Vector2i.ZERO
 var use_pools := true
 var use_fluid_mask := false
+## Water you see the ground through (WaterShaders, Docs/MineWater.md 7.4).
+var see_through := false
 ## The near tier's collision patch (water_collider.gd: boxes for barrels and
 ## boats to rest on). A swimming pawn meets it from below as a ceiling, so a
 ## world with swimmers and nothing afloat turns it off.
@@ -124,6 +126,7 @@ func build(half_studs: int, outer_metres: float, step := 8) -> void:
 	near.radius = fine_radius if split else near_radius
 	near.wave_gain = wave_gain
 	near.collide = surface_collide
+	near.see_through = see_through
 	add_child(near)
 	near.set_seabed(seabed, origin, extent)
 	if split:
@@ -135,6 +138,7 @@ func build(half_studs: int, outer_metres: float, step := 8) -> void:
 		mid.wave_gain = wave_gain
 		# The swimmer's collider is the 1x1 tier's, round the camera.
 		mid.collide = false
+		mid.see_through = see_through
 		add_child(mid)
 		mid.set_seabed(seabed, origin, extent)
 		mid._mat.set_shader_parameter("piece_lod", 7.0)
@@ -142,6 +146,7 @@ func build(half_studs: int, outer_metres: float, step := 8) -> void:
 	sheet = WaterSheetFx.new()
 	sheet.name = "WaterSheet"
 	sheet.outer_radius = outer_metres
+	sheet.see_through = see_through
 	add_child(sheet)
 	sheet.build(seabed, origin, extent)
 

@@ -16,7 +16,18 @@ shader_type spatial;
 //
 // Vertex colour, from the mesher (brick_fluid.cpp mesh_tile):
 //   g  kind: 0 still or source, 0.5 flowing, 1 falling
+#ifdef SEE_THROUGH
+// See-through (WaterShaders): drawn over its own depth pass (SEE_DEPTH), so
+// only the nearest water surface shows, not every face behind it.
 render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
+#include "res://shaders/see_through.gdshaderinc"
+#else
+#ifdef SEE_DEPTH
+render_mode cull_disabled, unshaded, depth_draw_always;
+#else
+render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
+#endif
+#endif
 
 // SKY LIGHT (Docs/MineWorld.md 19): the mesher writes each water vertex's
 // sky level into COLOR.b (brick::sky_levels_into); with `sky_light` on (the
@@ -247,4 +258,14 @@ void fragment() {
 			NORMAL = normalize(NORMAL + (VIEW_MATRIX * vec4(rx * 0.25, 0.0, rz * 0.25, 0.0)).xyz);
 		}
 	}
+#ifdef SEE_THROUGH
+	// The water material only (the lava's is the plain shader).
+	ALPHA = see_alpha(SCREEN_UV, VERTEX, INV_PROJECTION_MATRIX);
+#endif
+#ifdef SEE_DEPTH
+	// Depth only, a hair behind the surface: the colour pass at the surface
+	// passes, any water face behind it does not.
+	ALPHA = 0.0;
+	DEPTH = FRAGCOORD.z * 0.9995;
+#endif
 }
