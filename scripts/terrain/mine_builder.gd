@@ -342,7 +342,7 @@ func _break_cells() -> Array[Vector3i]:
 	if area <= 1:
 		return c
 	var n: Vector3i = target.get("normal", Vector3i.UP)
-	var half := area / 2
+	var half := area >> 1   # area is a positive brush size
 	var lo := b
 	var hi := b
 	for axis in 3:

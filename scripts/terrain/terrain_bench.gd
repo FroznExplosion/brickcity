@@ -457,7 +457,7 @@ func _shot_water() -> void:
 	var stud := BrickWorld.get_stud_metres()
 	var plate := BrickWorld.get_plate_metres()
 	var sea: float = BrickWave.get_sea_level()
-	var half := TILES * BrickTerrain.get_tile_studs() / 2
+	var half := (TILES * BrickTerrain.get_tile_studs()) >> 1
 	var best := Vector2i(0, 0)
 	var deepest := 1 << 30
 	# Inside the field by a margin: the deepest cell is usually ON the

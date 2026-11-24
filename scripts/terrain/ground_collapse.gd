@@ -476,7 +476,7 @@ func _land_on_piece(c: Dictionary, top_y: float) -> void:
 		cols.append(BrickTerrain.material_filament_index(mats[j]))
 		var mi := MeshInstance3D.new()
 		mi.mesh = _sand_mm.multimesh.mesh
-		mi.material_override = _box_material(mats[j]) if sky == null \
+		mi.material_override = (_box_material(mats[j]) as Material) if sky == null \
 				else sky.item_material(_box_material(mats[j]))
 		mi.position = Vector3(stud * 0.5, (j + 0.5) * brick, stud * 0.5)
 		holder.add_child(mi)
@@ -626,8 +626,8 @@ func _release() -> void:
 		if w.kind == "piece" and not _mesh_ready(w):
 			i += 1
 			continue
-		var ready: bool = world.ground_ready(w.rect, w.lo, w.hi, w.owner)
-		if not ready and now - int(w.born) < WAIT_MAX_MS:
+		var done: bool = world.ground_ready(w.rect, w.lo, w.hi, w.owner)
+		if not done and now - int(w.born) < WAIT_MAX_MS:
 			i += 1
 			continue
 		world.unhold_ground(w.rect, w.owner)

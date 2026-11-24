@@ -839,30 +839,30 @@ func tiles_fresh(rect: Rect2i) -> bool:
 ## can be drawn too (ground_ready, then swap_ground and its release, in one
 ## call). Released the moment the tiles stopped drawing it, it showed a frame
 ## or more of nothing while its mesh was made, or drew twice.
-func hold_ground(rect: Rect2i, lo, hi, owner) -> void:
+func hold_ground(rect: Rect2i, lo, hi, who) -> void:
 	if _streamer != null:
-		_streamer.hold_tiles(rect, owner)
+		_streamer.hold_tiles(rect, who)
 	if _deep != null and lo != null:
-		_deep.hold_box(lo, hi, owner)
+		_deep.hold_box(lo, hi, who)
 
 
-func unhold_ground(rect: Rect2i, owner) -> void:
+func unhold_ground(rect: Rect2i, who) -> void:
 	if _streamer != null:
-		_streamer.unhold(rect, owner)
+		_streamer.unhold(rect, who)
 	if _deep != null:
-		_deep.unhold(owner)
+		_deep.unhold(who)
 
 
 ## Could the ground over it swap now, holds by others aside: every tile and
 ## section rebuilt without it, the edits all flushed.
-func ground_ready(rect: Rect2i, lo, hi, owner) -> bool:
+func ground_ready(rect: Rect2i, lo, hi, who) -> bool:
 	if _streamer == null:
 		return true
 	if _pending_tiles.has_area() and rect.has_area() and _pending_tiles.intersects(rect):
 		return false
-	if not _streamer.tiles_ready(rect, owner):
+	if not _streamer.tiles_ready(rect, who):
 		return false
-	return _deep == null or lo == null or _deep.ready_box(lo, hi, owner)
+	return _deep == null or lo == null or _deep.ready_box(lo, hi, who)
 
 
 ## Swap the ground over it now (after ground_ready and unhold_ground).
@@ -1589,14 +1589,14 @@ func _load_edits() -> int:
 	var rdir := _regions_dir(path)
 	var d := DirAccess.open(rdir)
 	if d != null:
-		for name in d.get_files():
-			if not name.ends_with(".edits"):
+		for file in d.get_files():
+			if not file.ends_with(".edits"):
 				continue
-			var rf := FileAccess.open_compressed(rdir.path_join(name), FileAccess.READ, FileAccess.COMPRESSION_ZSTD)
+			var rf := FileAccess.open_compressed(rdir.path_join(file), FileAccess.READ, FileAccess.COMPRESSION_ZSTD)
 			if rf == null or rf.get_buffer(4).get_string_from_ascii() != REGION_MAGIC:
 				continue
 			if rf.get_32() != REGION_FORMAT or rf.get_32() != BrickTerrain.get_field_version():
-				push_warning("[mine] %s is from another format or field; not loaded" % name)
+				push_warning("[mine] %s is from another format or field; not loaded" % file)
 				continue
 			rf.get_32()   # rx
 			rf.get_32()   # rz
@@ -2004,14 +2004,14 @@ func _run_menu_gate() -> void:
 	await _click(at)
 	var hovered := get_viewport().gui_get_hovered_control()
 	print("[mine-menu] click on 'Zoom in' at %s: map step %d -> %d, hovered %s" % [at, before,
-			_menu.get("_map_step"), hovered.get_path() if hovered != null else "nothing"])
+			_menu.get("_map_step"), str(hovered.get_path()) if hovered != null else "nothing"])
 	var look := cam.global_transform.basis
 	var empty := (_menu as Control).get_global_rect().position + Vector2(20, 300)
 	await _click(empty)
 	hovered = get_viewport().gui_get_hovered_control()
 	print("[mine-menu] click on the panel's empty part at %s: camera turned %s, hovered %s, menu open %s"
 			% [empty, not look.is_equal_approx(cam.global_transform.basis),
-			hovered.get_path() if hovered != null else "nothing", _menu != null])
+			str(hovered.get_path()) if hovered != null else "nothing", _menu != null])
 	var key := InputEventKey.new()
 	key.keycode = KEY_M
 	key.physical_keycode = KEY_M
@@ -2412,10 +2412,10 @@ func _run_inventory_gate() -> void:
 	# Stage 7: the world menu's Survival box, clicked.
 	toggle_menu()
 	await _frames(10)
-	var box: CheckBox = _menu.find_child("Survival", true, false) if _menu != null else null
-	if box != null:
-		await _click(box.get_global_rect().get_center())
-	check.call("the world menu's Survival box: survival on", box != null and survival and not inv.creative)
+	var survival_box: CheckBox = _menu.find_child("Survival", true, false) if _menu != null else null
+	if survival_box != null:
+		await _click(survival_box.get_global_rect().get_center())
+	check.call("the world menu's Survival box: survival on", survival_box != null and survival and not inv.creative)
 	if _menu != null:
 		toggle_menu()
 		await _frames(5)
@@ -2989,10 +2989,10 @@ func _gpu_view(view_name: String) -> void:
 func _run_gpu_gate() -> void:
 	await _frames(60)
 	_time = 0.42
-	var settings := get_node_or_null(^"/root/MenuSettings")
-	if settings != null:
-		settings.set_value(&"vsync", 0, false)      # in memory: never saved
-		settings.set_value(&"max_fps", 0, false)
+	var menu_settings := get_node_or_null(^"/root/MenuSettings")
+	if menu_settings != null:
+		menu_settings.set_value(&"vsync", 0, false)      # in memory: never saved
+		menu_settings.set_value(&"max_fps", 0, false)
 	var vp := get_viewport()
 	var size := vp.get_visible_rect().size
 	print("[gpu] trees: real bricks to %.0f m, cards past it" % _trees.near_m)
@@ -3016,9 +3016,9 @@ func _run_gpu_gate() -> void:
 	await _shot(UserPaths.DEV + "mine_gpu_up_%s.png" % tag)
 	await _gpu_view("25 m up, to the horizon")
 	print("[gpu] sky writes %d over the pass (LightRig.sky_writes)" % _rig.sky_writes)
-	if settings != null:
-		settings.set_value(&"vsync", settings.default_of(&"vsync"), false)
-		settings.set_value(&"max_fps", settings.default_of(&"max_fps"), false)
+	if menu_settings != null:
+		menu_settings.set_value(&"vsync", menu_settings.default_of(&"vsync"), false)
+		menu_settings.set_value(&"max_fps", menu_settings.default_of(&"max_fps"), false)
 	print("[gpu] done")
 	get_tree().quit()
 
@@ -3076,10 +3076,10 @@ func _run_breakwater_gate() -> void:
 		w.water_tick = maxf(w.water_tick, float(st.get("tick_ms", 0.0)))
 		var wf: Array = w.worst_frames
 		wf.append([ms, clock.last.duplicate(), world, debris.bodies.size()])
-		wf.sort_custom(func(a: Array, b: Array) -> bool: return a[0] > b[0])
+		wf.sort_custom(func(x: Array, y: Array) -> bool: return x[0] > y[0])
 		if wf.size() > 5:
 			wf.resize(5)
-	var report := func(name: String, w: Dictionary) -> void:
+	var report := func(label: String, w: Dictionary) -> void:
 		var n := maxf(float(w.n), 1.0)
 		var parts := ""
 		for k in ["scripts", "step", "process", "draw", "sync", "gpu", "draws_k", "tris_M"]:
@@ -3088,7 +3088,7 @@ func _run_breakwater_gate() -> void:
 		for k in ["near", "far", "deep", "trees", "water", "ground"]:
 			world += " %s %.2f" % [k, float(w.world.get(k, 0.0)) / n]
 		print("[breakwater] %s: %d frames, mean %.1f ms, worst %.1f ms, %d over 25 ms | clock mean:%s | world mean (ms):%s | water worker tick worst %.1f ms" % [
-				name, w.n, float(w.sum) / n, w.worst, w.slow, parts, world, w.water_tick])
+				label, w.n, float(w.sum) / n, w.worst, w.slow, parts, world, w.water_tick])
 		for f in w.worst_frames:
 			var cp: Dictionary = f[1]
 			var wp: Dictionary = f[2]
@@ -3241,8 +3241,8 @@ func _run_stop_gate() -> void:
 	print("[mine-stop] moving: instance steps %s" % [inst_keys.slice(0, 10).map(func(k) -> String: return "%s %.1f" % [k, float(TerrainTile.instance_ms[k])])])
 	mv_gpu.sort()
 	print("[mine-stop] %s %d s at %.0f m/s (held %s), stopping; the last 4 s moving: gpu median %.1f, 90th %.1f ms, tris up to %.2fM"
-			% ["walked" if walk else "flew", secs / 1000, speed, fast_hold,
-			mv_gpu[mv_gpu.size() / 2] if not mv_gpu.is_empty() else 0.0,
+			% ["walked" if walk else "flew", secs / 1000.0, speed, fast_hold,
+			mv_gpu[mv_gpu.size() >> 1] if not mv_gpu.is_empty() else 0.0,
 			mv_gpu[int(mv_gpu.size() * 0.9)] if not mv_gpu.is_empty() else 0.0, mv_tris])
 	var windows := []
 	var w := {}
@@ -3517,7 +3517,6 @@ func _run_shift_gate() -> void:
 	var e0 := _eye()
 	_fly_to(e0 + Vector3(0, 30, 0), Vector3(1, -0.3, 0.2).normalized())
 	await _frames(60)
-	var from := walker.global_position
 	var step := Vector3(1.0, 0.0, 0.25).normalized() * 0.8
 	for i in 1500:
 		walker.global_position += step
@@ -3630,9 +3629,9 @@ func _run_deep_gate() -> void:
 				continue
 			var s: Dictionary = BrickTerrain.build_section(t.x, floori(float(yp) / sec), t.y)
 			var boxes: PackedFloat32Array = s.get("boxes", PackedFloat32Array())
-			var q := Vector3((x - t.x * 32 + 0.5) * stud, (yp + 1) * plate - 0.03, (z - t.y * 32 + 0.5) * stud)
+			var pt := Vector3((x - t.x * 32 + 0.5) * stud, (yp + 1) * plate - 0.03, (z - t.y * 32 + 0.5) * stud)
 			for o in range(0, boxes.size(), 6):
-				if absf(q.x - boxes[o]) <= boxes[o + 3] * 0.5 and absf(q.y - boxes[o + 1]) <= boxes[o + 4] * 0.5 						and absf(q.z - boxes[o + 2]) <= boxes[o + 5] * 0.5:
+				if absf(pt.x - boxes[o]) <= boxes[o + 3] * 0.5 and absf(pt.y - boxes[o + 1]) <= boxes[o + 4] * 0.5 						and absf(pt.z - boxes[o + 2]) <= boxes[o + 5] * 0.5:
 					found = Vector3((x + 0.5) * stud, (yp + 1) * plate, (z + 0.5) * stud)
 					break
 		if found != Vector3.INF and cross != Vector3.INF:
@@ -3699,7 +3698,8 @@ func _run_deep_gate() -> void:
 		env.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED
 		await _frames(10)
 		res.append("+ no reflections %.3f" % await _mean_luma())
-		var amb := env.ambient_light_energy
+		var amb := env.ambient_light_source
+		var sun_was := _rig.sun.visible
 		env.ambient_light_source = Environment.AMBIENT_SOURCE_DISABLED
 		await _frames(10)
 		res.append("+ no ambient %.3f" % await _mean_luma())
@@ -3714,6 +3714,8 @@ func _run_deep_gate() -> void:
 		await _frames(10)
 		res.append("+ no other lights %.3f [%s]" % [await _mean_luma(), ", ".join(lights.slice(0, 6))])
 		_rig.hold_exposure = hold
+		env.ambient_light_source = amb
+		_rig.sun.visible = sun_was
 		print("[mine-deep] light sweep (gi level %s): %s" % [LightRig.gi_level, ", ".join(res)])
 		_hud_layer.visible = true
 	# What is under the landing spot, in the physics space.
@@ -3724,7 +3726,7 @@ func _run_deep_gate() -> void:
 	var st = _deep._secs.get(key)
 	print("[mine-deep] under the landing spot: hit %s; its section %s drawn %s, collision done %s, %d boxes"
 			% [hit.get("position", "nothing"), key, st != null,
-			st != null and bool(st._collision_done), (st._data.boxes as PackedFloat32Array).size() / 6 if st != null else 0])
+			st != null and bool(st._collision_done), int((st._data.boxes as PackedFloat32Array).size() / 6.0) if st != null else 0])
 	var wat := to_local(walker.global_position)
 	set_on_foot(true)
 	var t_land := to_local(pawn.feet())
@@ -3839,14 +3841,14 @@ func _run_handover_gate() -> void:
 			var top := BrickTerrain.surface_plate(x0, z)
 			var p := Vector3((x0 + 0.5) * stud, (top + 1) * plate - 0.03, (z + 0.5) * stud)
 			var found: Dictionary = BrickTerrain.find_brick(p, Vector3.UP)
-			var runs: PackedInt32Array = found.get("runs", PackedInt32Array())
+			var found_runs: PackedInt32Array = found.get("runs", PackedInt32Array())
 			var lo_x := 1 << 30
 			var hi_x := -(1 << 30)
-			for i in range(0, runs.size(), 4):
-				lo_x = mini(lo_x, runs[i])
-				hi_x = maxi(hi_x, runs[i])
-			if not runs.is_empty() and lo_x < edge_x and hi_x >= edge_x:
-				target = {"p": p, "z": z, "top": top, "runs": runs}
+			for i in range(0, found_runs.size(), 4):
+				lo_x = mini(lo_x, found_runs[i])
+				hi_x = maxi(hi_x, found_runs[i])
+			if not found_runs.is_empty() and lo_x < edge_x and hi_x >= edge_x:
+				target = {"p": p, "z": z, "top": top, "runs": found_runs}
 				break
 		if not target.is_empty():
 			break
@@ -3913,7 +3915,6 @@ func _run_handover_gate() -> void:
 	await _frames(60)
 	for kind in ["piece", "sand"]:
 		var p0: int = collapse.pieces.pieces.size()
-		var w0: int = collapse._waiting.size()
 		var mat := 2 if kind == "piece" else 3
 		var lo := Vector3i(edge_x - 1, b, tz + 8)
 		var hi := lo + (Vector3i(1, 2, 1) if kind == "piece" else Vector3i(1, 8, 0))
@@ -5906,19 +5907,19 @@ func _run_seams_gate() -> void:
 			views.append(Transform3D(Basis(), mid).looking_at(mid + dir * 4.0 + Vector3(0, tilt * 4.0, 0)))
 	# Its own camera: the walker's is posed from the walker every frame.
 	var cam0 := get_viewport().get_camera_3d()
-	var cam := Camera3D.new()
-	add_child(cam)
-	cam.attributes = cam0.attributes
-	cam.near = 0.02
-	cam.current = true
-	var fov0 := cam.fov
+	var shot_cam := Camera3D.new()
+	add_child(shot_cam)
+	shot_cam.attributes = cam0.attributes
+	shot_cam.near = 0.02
+	shot_cam.current = true
+	var fov0 := shot_cam.fov
 	var count := func(tag: String) -> Array:
-		cam.fov = 14.0
+		shot_cam.fov = 14.0
 		var total := 0
 		var worst := 0
 		var lines := 0
 		for i in views.size():
-			cam.global_transform = views[i]
+			shot_cam.global_transform = views[i]
 			await _frames(4)
 			await RenderingServer.frame_post_draw
 			var img := get_viewport().get_texture().get_image()
@@ -5936,7 +5937,7 @@ func _run_seams_gate() -> void:
 				worst = n
 				img.save_png(dev + "mine_seams_%s.png" % tag)
 		print("[mine-seams] %-3s magenta %d px over %d views (%d views with any, worst %d)" % [tag, total, views.size(), lines, worst])
-		cam.fov = fov0
+		shot_cam.fov = fov0
 		return [total, lines]
 	var settle := func() -> void:
 		_streamer.invalidate(Rect2i(-(1 << 20), -(1 << 20), 1 << 21, 1 << 21))
@@ -6059,17 +6060,17 @@ func _run_seams_deep() -> void:
 		views.append(Transform3D(Basis(), from).looking_at(Vector3((o.x + 7) * stud, b * plate, fz * stud)))
 		views.append(Transform3D(Basis(), from).looking_at(Vector3((o.x + 7) * stud, (b + 18) * plate, fz * stud)))
 	var cam0 := get_viewport().get_camera_3d()
-	var cam := Camera3D.new()
-	add_child(cam)
-	cam.attributes = cam0.attributes
-	cam.near = 0.02
-	cam.fov = 10.0
-	cam.current = true
+	var shot_cam := Camera3D.new()
+	add_child(shot_cam)
+	shot_cam.attributes = cam0.attributes
+	shot_cam.near = 0.02
+	shot_cam.fov = 10.0
+	shot_cam.current = true
 	var total := 0
 	var hit := 0
 	var worst := 0
 	for i in views.size():
-		cam.global_transform = views[i]
+		shot_cam.global_transform = views[i]
 		await _frames(4)
 		await RenderingServer.frame_post_draw
 		var img := get_viewport().get_texture().get_image()

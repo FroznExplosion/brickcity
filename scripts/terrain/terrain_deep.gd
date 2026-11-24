@@ -309,28 +309,28 @@ func _box_keys(lo: Vector3i, hi: Vector3i) -> Array[Vector3i]:
 
 
 ## Hold the sections over an edit's box for `owner` (TerrainStreamer.hold_tiles).
-func hold_box(lo: Vector3i, hi: Vector3i, owner) -> void:
+func hold_box(lo: Vector3i, hi: Vector3i, who) -> void:
 	for k in _box_keys(lo, hi):
 		if _secs.has(k):
 			if not _holds.has(k):
 				_holds[k] = {}
 			# The generation its own clear is drawn at.
-			_holds[k][owner] = int(_gen.get(k, 0))
+			_holds[k][who] = int(_gen.get(k, 0))
 
 
-func unhold(owner) -> void:
+func unhold(who) -> void:
 	for k in _holds.keys():
-		(_holds[k] as Dictionary).erase(owner)
+		(_holds[k] as Dictionary).erase(who)
 		if (_holds[k] as Dictionary).is_empty():
 			_holds.erase(k)
 
 
 ## Could every refresh over the box, and the rest of each one's batch, swap
-## now (holds by anyone but `owner` aside)? Nothing waiting: true. An
+## now (holds by anyone but `who` aside)? Nothing waiting: true. An
 ## inactive tier still rebuilds its edits (follow).
-func ready_box(lo: Vector3i, hi: Vector3i, owner = null) -> bool:
+func ready_box(lo: Vector3i, hi: Vector3i, who = null) -> bool:
 	for k in _batch_keys(lo, hi):
-		if not _sec_ready(k, owner):
+		if not _sec_ready(k, who):
 			return false
 	return true
 
@@ -355,26 +355,26 @@ func _batch_keys(lo: Vector3i, hi: Vector3i) -> Array:
 	return out.keys()
 
 
-func _held(k: Vector3i, owner = null) -> bool:
+func _held(k: Vector3i, who = null) -> bool:
 	var h = _holds.get(k)
 	if h == null:
 		return false
 	for o in h:
-		if o != owner:
+		if o != who:
 			return true
 	return false
 
 
 ## Ready to swap: not held by others, and its waiting swap built (a newer
-## edit's bake still coming does not stop it: it swaps after). For `owner`'s
+## edit's bake still coming does not stop it: it swaps after). For `who`'s
 ## own hold: its clear's generation drawn, or in the waiting swap.
-func _sec_ready(k: Vector3i, owner = null) -> bool:
+func _sec_ready(k: Vector3i, who = null) -> bool:
 	if not _secs.has(k):
 		return true
-	if _held(k, owner):
+	if _held(k, who):
 		return false
-	if owner != null and _holds.has(k) and (_holds[k] as Dictionary).has(owner):
-		var need := int(_holds[k][owner])
+	if who != null and _holds.has(k) and (_holds[k] as Dictionary).has(who):
+		var need := int(_holds[k][who])
 		if int(drawn_gen.get(k, -1)) >= need:
 			return true
 		return _swaps.has(k) and int(_swap_gen.get(k, -1)) >= need

@@ -571,9 +571,9 @@ func _light(tile: Vector2i, lava: Array) -> void:
 	var sum := Vector3.ZERO
 	var top := -INF
 	@warning_ignore("integer_division")
-	var step := maxi(1, v.size() / 64)
+	var every := maxi(1, v.size() / 64)
 	var seen := 0
-	for i in range(0, v.size(), step):
+	for i in range(0, v.size(), every):
 		var p := v[i]
 		sum += p
 		top = maxf(top, p.y)
