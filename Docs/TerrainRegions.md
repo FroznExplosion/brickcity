@@ -480,3 +480,44 @@ Docs/WhereWorkRuns.md 2 and EngineChoice.md):
 **Order**: 3 goes with stage D (the survey's output); 1 and 2 after stage A
 (they read the store); 4 and 5 only if a profile asks. The coarse tier's
 blocking edit is the terrain area's, small, and can go any time.
+
+## 11. Decisions (the user, 2026-11-24, after A0)
+
+- **Bricks stay whole in cells.** No brick sits a plate off the course grid
+  in generated ground (a brick on a tile would rest, not connect, and an
+  off-course brick could be in 8 chunks). The surface and cave surfaces get
+  tiles and plates, smooth and studded.
+- **Taller bricks for the caves' look.** All-horizontal courses look uniform
+  in caves; bricks 2 and 3 courses tall break the lines. Fitted in LAYERS of
+  3 courses: a tall brick stays inside its layer, layers fitted bottom-up,
+  each staggered against the layer below only (deterministic, no long
+  dependency chains). A tall brick never crosses a deep-section boundary
+  (keeps the 4-chunk limit).
+- **Sizes wanted** (not built yet): footprints 1x1-1x6, 2x2-2x6, 3x3-3x6;
+  1, 2 and 3 bricks tall; plates (studded) and tiles (smooth) in the same
+  footprints. Drawing costs nothing per size (the overlay is one scaled box
+  a brick); the fit has more candidates to try (measure in
+  region_fit_probe).
+- **Connections cost by joint, not by cell.** A brick is one body: its cells
+  are never checked against each other. A face with nothing to connect
+  (sides, a smooth face) is no joint at all. So bigger and taller bricks make
+  the survey and the solve CHEAPER (fewer bodies, fewer joints).
+- **Faces say what they connect** (the stud model, below): studs on top
+  (joins what is above), sockets underneath (joins studs below), smooth
+  (joins nothing). A joint exists only where a studded face meets a socket
+  face; its strength is the studs that overlap. Kinds this allows:
+  - brick / plate: studs on top, sockets under (today's);
+  - tile: smooth top, sockets under;
+  - **smooth-top brick**: a brick with a tile's top, so areas can be smooth
+    without ever laying tiles;
+  - **smooth-bottom, studded-top** tile or brick: cave decoration that sits
+    on the ground and connects nothing below (like the city's light pieces),
+    something to build on.
+- **Studs as data, not part of a brick's shape (later; the design leaves
+  room).** Each brick face has a stud mask; the generated ground's masks
+  come from the brick's kind (nothing stored); only a changed brick stores
+  its masks, in an exception table saved like the edits. That allows a
+  future stud tool (add or take studs on tops, bottoms and sides; side studs
+  on the side-stud grid only, gated), and custom bricks such as a 2x4 with
+  7 studs. Studs are already drawn one instance a stud, so drawing from a
+  mask is natural; joints read the mask's overlap.
