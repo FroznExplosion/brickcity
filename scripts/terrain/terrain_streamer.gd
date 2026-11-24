@@ -70,6 +70,8 @@ var pinned := Rect2i()
 ## (Docs/MineWorld.md 21): with every slot streaming new ground in, a broken
 ## brick's tile waited for one to free (~9 ms) before it even started.
 const EDIT_SLOTS := 2
+## Bakes of one tile in flight at once at most (_wants_newer).
+const BAKES_PER_TILE := 2
 ## Tiles within this many of the camera get a COLLIDER. Collision is the most
 ## expensive phase and the only one nobody can see; you cannot stand on a
 ## tile four away from you.
@@ -174,6 +176,9 @@ var _holds := {}
 ## finished record goes to `latency_log` ({c, dirty, bake, land, swap}).
 var log_latency := false
 var latency_log: Array = []
+## The generation (`_gen`) each drawn tile was baked at: an edit counted up
+## to `g` is on screen once drawn_gen[c] >= g (the breaklag gate's --burst).
+var drawn_gen := {}
 var _stamps := {}
 const BEVEL_IN_FLIGHT := 2
 ## Worst single phase seen, split three ways — which one hurts is the whole
@@ -358,6 +363,10 @@ func refresh(rect: Rect2i) -> void:
 			if old != null and old != batch:
 				for t in old.tiles:
 					batch.tiles[t] = true
+				# Its wait goes on from when it began: a new edit merged in every
+				# few frames restarted it, so under fire a batch never stopped waiting.
+				if int(old.since) > 0 and (int(batch.since) == 0 or int(old.since) < int(batch.since)):
+					batch.since = old.since
 	for t in batch.tiles:
 		_batch_of[t] = batch
 	for c in _tasks:
@@ -390,7 +399,8 @@ func hold_tiles(rect: Rect2i, owner) -> void:
 		if rect.has_point(c):
 			if not _holds.has(c):
 				_holds[c] = {}
-			_holds[c][owner] = true
+			# The generation its own clear is drawn at (_tile_ready).
+			_holds[c][owner] = int(_gen.get(c, 0))
 
 
 func unhold(rect: Rect2i, owner) -> void:
@@ -433,13 +443,26 @@ func _held(c: Vector2i, owner = null) -> bool:
 	return false
 
 
-## Built and collided, nothing newer coming, not held by others.
+## Ready to swap: not held by others, and its waiting refresh built and
+## collided -- a newer edit's bake still coming does NOT stop it (it swaps
+## after): under sustained fire a tile was never "ready" and the first
+## shot's hole waited till the shooting stopped (--gate=breaklag --burst
+## --burst-every=1: 534 ms, Docs/MineWorld.md 21). Nothing waiting: ready
+## unless its bake is still coming. For `owner`'s own hold: its clear's
+## generation drawn, or in the waiting swap.
 func _tile_ready(c: Vector2i, owner = null) -> bool:
 	if not _tiles.has(c):
 		return true
-	if _dirty.has(c) or _stale.has(c) or _held(c, owner):
+	if _held(c, owner):
 		return false
-	return not _swaps.has(c) or int(_swaps[c].step) == SWAP_READY
+	if owner != null and _holds.has(c) and (_holds[c] as Dictionary).has(owner):
+		var need := int(_holds[c][owner])
+		if int(drawn_gen.get(c, -1)) >= need:
+			return true
+		return _swaps.has(c) and int(_swaps[c].step) == SWAP_READY and int(_swaps[c].get("gen", -1)) >= need
+	if _swaps.has(c):
+		return int(_swaps[c].step) == SWAP_READY
+	return not _dirty.has(c) and not _stale.has(c)
 
 
 ## The resident tiles over `rect`, with every tile of their batches.
@@ -467,8 +490,10 @@ func _swap_batch(c: Vector2i, force := false) -> void:
 			return
 		if not _tile_ready(t):
 			all = false
-	if not all:
-		if b == null or force:
+	# `force` (a falling piece let go, its own ground ready): what is ready
+	# swaps now, the rest when it is.
+	if not all and not force:
+		if b == null:
 			return
 		var now := Time.get_ticks_msec()
 		if int(b.since) == 0:
@@ -504,6 +529,7 @@ func _swap_now(c: Vector2i) -> void:
 	tile.visible = old.visible
 	old.queue_free()
 	_tiles[c] = tile
+	drawn_gen[c] = int(job.get("gen", 0))
 	_built += 1
 	if log_latency and _stamps.has(c):
 		var st: Dictionary = _stamps[c]
@@ -829,7 +855,7 @@ func _land_slots(slots: Array[int], t0: int) -> bool:
 				var stale: TerrainTile = _swaps[c].tile
 				stale.recycle()
 				stale.queue_free()
-			_swaps[c] = {"tile": tile, "near": {}, "step": 1}
+			_swaps[c] = {"tile": tile, "near": {}, "step": 1, "gen": gen}
 			# The chamfered mesh goes on now, in the landing frame; the next
 			# frame takes the collider and swaps (one frame, it was two).
 			if not (data.get("near", {}) as Dictionary).is_empty():
@@ -847,6 +873,7 @@ func _land_slots(slots: Array[int], t0: int) -> bool:
 		if pinned.has_area():
 			tile.visible = _shown(c, _keep_rect(_centre.x, _centre.y))
 		_tiles[c] = tile
+		drawn_gen[c] = gen
 		_built += 1
 		_finish_pending = true
 		# The budget can only stop the NEXT piece of work, so ONE piece is
@@ -904,8 +931,20 @@ func _swap_step(t0: int) -> void:
 
 
 ## A built tile edited since its newest running bake started.
+## ...and may start another bake beside the ones running: at most
+## BAKES_PER_TILE at once. One more bake an edit was a whole-tile bake a
+## frame under fire, every older one wasted, and the backlog grew: at a shot a
+## frame the 30th brick showed 540 ms late (--gate=breaklag --burst
+## --burst-every=1, Docs/MineWorld.md 21). An older bake still lands and is
+## swapped in (it has the earlier shots' holes); the newest starts as one ends.
 func _wants_newer(c: Vector2i) -> bool:
-	return _tiles.has(c) and _tasks.has(c) and _slot_gen[_tasks[c]] < int(_gen.get(c, 0))
+	if not (_tiles.has(c) and _tasks.has(c) and _slot_gen[_tasks[c]] < int(_gen.get(c, 0))):
+		return false
+	var n := 0
+	for slot in _slot_task.size():
+		if _slot_task[slot] >= 0 and _slot_coord[slot] == c:
+			n += 1
+	return n < BAKES_PER_TILE
 
 
 func _drop_swap(c: Vector2i) -> void:

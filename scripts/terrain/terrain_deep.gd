@@ -43,6 +43,13 @@ var _tasks := {}
 var _dirty := {}
 ## In flight when an edit landed: baked again when it lands.
 var _stale := {}
+## Each section's edit generation (refresh_box counts it up), the generation
+## each running bake and waiting swap was started at, and the one drawn: a
+## falling piece's hold waits for its own clear to be drawn, not for every
+## later edit to be (Docs/MineWorld.md 21).
+var _gen := {}
+var _swap_gen := {}
+var drawn_gen := {}
 var _centre := Vector3i(1 << 30, 0, 0)
 var _want: Array[Vector3i] = []
 var _collide_pending := {}
@@ -98,7 +105,10 @@ func follow(eye: Vector3) -> void:
 	for k in _swaps.keys():
 		if _swaps.has(k):
 			_swap_batch(k)
-	if active and not hold:
+	# Edits are rebuilt on the surface too: a section stays drawn after the
+	# player climbs out, and a shot into it showed nothing till they went back
+	# down. New sections load only underground.
+	if not hold:
 		_start()
 	_drop()
 	_collide(t0)
@@ -129,13 +139,15 @@ func _start() -> void:
 	# (TerrainStreamer's rule, Docs/MineWorld.md 21): a hole in a cave wall
 	# does not wait behind the caves loading round it.
 	var edits: Array[Vector3i] = []
-	for k in _want:
-		if _dirty.has(k) and _secs.has(k) and not _tasks.has(k):
+	for k in _dirty:
+		if _secs.has(k) and not _tasks.has(k):
 			edits.append(k)
 	for k in edits:
 		if _tasks.size() >= max_in_flight + TerrainStreamer.EDIT_SLOTS:
 			return
 		_start_one(k)
+	if not active:
+		return
 	var fresh := 0
 	for k in _tasks:
 		if not _secs.has(k):
@@ -154,7 +166,7 @@ func _start_one(k: Vector3i) -> void:
 	var task := WorkerThreadPool.add_task(
 		func() -> void: holder[0] = BrickTerrain.build_section(k.x, k.y, k.z),
 		true, "deep section")
-	_tasks[k] = [task, holder]
+	_tasks[k] = [task, holder, int(_gen.get(k, 0))]
 	_dirty.erase(k)
 
 
@@ -167,12 +179,17 @@ func _land(t0: int) -> void:
 			continue
 		WorkerThreadPool.wait_for_task_completion(job[0])
 		_tasks.erase(k)
+		var refresh := _secs.has(k)
 		if _stale.has(k):
+			# Edited while it baked: baked again. A refresh's older bake is
+			# still swapped in (it has the edits before it started): thrown
+			# away, sustained fire never let a cave wall's hole show.
 			_stale.erase(k)
 			_dirty[k] = true
-			continue
+			if not refresh:
+				continue
 		var data: Dictionary = job[1][0]
-		var refresh := _secs.has(k)
+		var gen := int(job[2]) if job.size() > 2 else 0
 		var tile: TerrainTile = null
 		if data.has("own_lo") and not ((data.mesh as Array).is_empty() and (data.boxes as PackedFloat32Array).is_empty()):
 			tile = TerrainTile.new()
@@ -196,9 +213,11 @@ func _land(t0: int) -> void:
 				if _near(k):
 					tile.add_collision()
 			_swaps[k] = tile
+			_swap_gen[k] = gen
 			_swap_batch(k)
 			continue
 		_secs[k] = tile
+		drawn_gen[k] = gen
 		if tile != null:
 			tile.add_instances()
 			if _near(k):
@@ -236,6 +255,7 @@ func _drop() -> void:
 		_drop_swap(k)
 		_batch_of.erase(k)
 		_holds.erase(k)
+		drawn_gen.erase(k)
 		if tile != null:
 			(tile as TerrainTile).recycle()
 			(tile as TerrainTile).queue_free()
@@ -256,6 +276,8 @@ func refresh_box(lo: Vector3i, hi: Vector3i) -> void:
 			_dirty[k] = true
 		else:
 			continue
+		if _secs.has(k):
+			_gen[k] = int(_gen.get(k, 0)) + 1
 		if not _secs.has(k):
 			continue   # a first bake: nothing to swap
 		batch.keys[k] = true
@@ -263,6 +285,10 @@ func refresh_box(lo: Vector3i, hi: Vector3i) -> void:
 		if old != null and old != batch:
 			for t in old.keys:
 				batch.keys[t] = true
+			# Its wait goes on from when it began: a new edit merged in every
+			# few frames restarted it, so under fire a batch never stopped waiting.
+			if int(old.since) > 0 and (int(batch.since) == 0 or int(old.since) < int(batch.since)):
+				batch.since = old.since
 	for t in batch.keys:
 		_batch_of[t] = batch
 
@@ -288,7 +314,8 @@ func hold_box(lo: Vector3i, hi: Vector3i, owner) -> void:
 		if _secs.has(k):
 			if not _holds.has(k):
 				_holds[k] = {}
-			_holds[k][owner] = true
+			# The generation its own clear is drawn at.
+			_holds[k][owner] = int(_gen.get(k, 0))
 
 
 func unhold(owner) -> void:
@@ -300,10 +327,8 @@ func unhold(owner) -> void:
 
 ## Could every refresh over the box, and the rest of each one's batch, swap
 ## now (holds by anyone but `owner` aside)? Nothing waiting: true. An
-## inactive tier bakes nothing: what it holds stays as drawn (true).
+## inactive tier still rebuilds its edits (follow).
 func ready_box(lo: Vector3i, hi: Vector3i, owner = null) -> bool:
-	if not active:
-		return true
 	for k in _batch_keys(lo, hi):
 		if not _sec_ready(k, owner):
 			return false
@@ -340,10 +365,22 @@ func _held(k: Vector3i, owner = null) -> bool:
 	return false
 
 
+## Ready to swap: not held by others, and its waiting swap built (a newer
+## edit's bake still coming does not stop it: it swaps after). For `owner`'s
+## own hold: its clear's generation drawn, or in the waiting swap.
 func _sec_ready(k: Vector3i, owner = null) -> bool:
 	if not _secs.has(k):
 		return true
-	return not _tasks.has(k) and not _dirty.has(k) and not _stale.has(k) and not _held(k, owner)
+	if _held(k, owner):
+		return false
+	if owner != null and _holds.has(k) and (_holds[k] as Dictionary).has(owner):
+		var need := int(_holds[k][owner])
+		if int(drawn_gen.get(k, -1)) >= need:
+			return true
+		return _swaps.has(k) and int(_swap_gen.get(k, -1)) >= need
+	if _swaps.has(k):
+		return true
+	return not _tasks.has(k) and not _dirty.has(k) and not _stale.has(k)
 
 
 func _swap_batch(k: Vector3i, force := false) -> void:
@@ -355,8 +392,10 @@ func _swap_batch(k: Vector3i, force := false) -> void:
 			return
 		if not _sec_ready(t):
 			all = false
-	if not all:
-		if b == null or force:
+	# `force` (a falling piece let go, its own ground ready): what is ready
+	# swaps now, the rest when it is.
+	if not all and not force:
+		if b == null:
 			return
 		var now := Time.get_ticks_msec()
 		if int(b.since) == 0:
@@ -377,6 +416,8 @@ func _swap_batch(k: Vector3i, force := false) -> void:
 func _swap_now(k: Vector3i) -> void:
 	var tile = _swaps[k]
 	_swaps.erase(k)
+	drawn_gen[k] = int(_swap_gen.get(k, 0))
+	_swap_gen.erase(k)
 	var old = _secs.get(k)
 	if old != null:
 		(old as TerrainTile).recycle()
@@ -394,6 +435,7 @@ func _drop_swap(k: Vector3i) -> void:
 			(t as TerrainTile).recycle()
 			(t as TerrainTile).queue_free()
 		_swaps.erase(k)
+	_swap_gen.erase(k)
 
 
 func clear() -> void:
@@ -410,6 +452,9 @@ func clear() -> void:
 	_holds.clear()
 	_dirty.clear()
 	_stale.clear()
+	_gen.clear()
+	_swap_gen.clear()
+	drawn_gen.clear()
 	_collide_pending.clear()
 	_centre = Vector3i(1 << 30, 0, 0)
 
