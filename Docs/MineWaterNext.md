@@ -188,7 +188,15 @@ have needed work before.
    Was: **S3** R1/R2: waves on lakes and rivers; `surface_at`, floaters and
    swimming on every body; the bucket on a crest or trough. Gate pictures of
    a lake; a probe for the bucket's aim at a crest.
-6. **S4** R3/R4: no placing on water (decision A); the beach on lakes and
+6. **S4 -- done 2026-11-24.** R3: a block put where water or lava is must stand on ground
+   under it or hang under ground over it (`MineBuilder.floats_on_water`; decision A: up or
+   down only) -- laid sideways off a shore over water it is refused (it held nothing and
+   fell). R4: where a brick goes it takes the water's place; a lake's waves calm beside it
+   (the wave's ramp counts any brick as rim), so it reads as shore; broken, the body heals
+   (two sources beside it and ground or source under it: the middle and the shore both,
+   `fluid_probe` 14). The sea's own lapping band (11.9) stays the sea's. Sea gate: the
+   `no bricks on water` line.
+   Was: **S4** R3/R4: no placing on water (decision A); the beach on lakes and
    rivers; a removed brick heals. Probe: place on water refused; a 1x1 hole
    and a shore hole refill.
 7. **W2** the tick measured, then **P** levelling by bodies (section 4).

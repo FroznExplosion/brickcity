@@ -43,7 +43,8 @@ extends SceneTree
 ## - W3: a written section far away is parked (its changed cells only),
 ##   reads and saves the same, and is whole again when the player is back;
 ## - S3: a lake's open top rides a wave (rim flat, a lone source flat), the
-##   surface asked for is that wave, a ray through a crest hits the lake.
+##   surface asked for is that wave, a ray through a crest hits the lake; a
+##   brick laid in it and broken heals, in the middle and at its shore (R4).
 
 const FLOOR := 1000          ## floor course: plates 3000-3002
 const W := FLOOR + 1         ## the course water stands in
@@ -914,6 +915,20 @@ func _run() -> void:
 		if lc2[i + 1] > 1.5 and floori(lv2[i / 4].z / 0.35) >= 10:
 			lone_pieces += 1
 	_ok("a lone source stays flat", lone_pieces == 0, "%d piece faces" % lone_pieces)
+	# A brick laid in the lake and broken again: the body heals (R4), in the
+	# middle and against its shore.
+	for hx in [lx0 + 7, lx0]:
+		var hlo := Vector3i(hx, W * 3, 0)
+		var hhi := Vector3i(hx, W * 3 + 2, 0)
+		BrickTerrain.fill_box(hlo, hhi, 4, false)
+		BrickFluid.terrain_changed(hlo, hhi)
+		_settle(20)
+		BrickTerrain.fill_box(hlo, hhi, 0, false)
+		BrickFluid.terrain_changed(hlo, hhi)
+		_settle(20)
+	_ok("a brick taken out of the lake heals, middle and shore", int(_info(lx0 + 7, W, 0).kind) == BrickFluid.SOURCE
+			and int(_info(lx0, W, 0).kind) == BrickFluid.SOURCE and _amt(lx0, W, 0) == 6,
+			"%s %s" % [_info(lx0 + 7, W, 0), _info(lx0, W, 0)])
 	BrickFluid.set_wave_clock(0.0)
 	BrickFluid.reset(20.0, false)
 	BrickTerrain.clear_terrain_edits()
