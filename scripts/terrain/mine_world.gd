@@ -99,9 +99,8 @@ var drops: DroppedItems = null
 ## null with --no-sky-light.
 var sky_lit: MineSkyLit = null
 ## THE BRICK OVERLAY (Docs/BrickOverlay.md): real bevelled bricks over the
-## flat ground near the eye, in place of the old chamfered near tiles. On
-## with the world setting Chamfered brick edges; `-- --old-chamfer` draws the
-## old near tier instead (the A/B).
+## flat ground near the eye. On with the world setting Chamfered brick edges
+## (off: the flat ground alone).
 var bricks: TerrainBricks = null
 var _overlay_on := false
 
@@ -326,6 +325,8 @@ func _ready() -> void:
 			_run_slits_gate()
 		elif "--gate=bricks" in OS.get_cmdline_user_args():
 			_run_bricks_gate()
+		elif "--gate=buildings" in OS.get_cmdline_user_args():
+			_run_buildings_gate()
 		elif "--gate=mem" in OS.get_cmdline_user_args():
 			# Where the memory goes (Docs/TerrainRegions.md 2, A0).
 			set_meta(&"mem_probe", load("res://tools/probes/terrain_mem_probe.gd").new())
@@ -408,16 +409,12 @@ func generate(s: Dictionary) -> void:
 	var feet := Vector3(spawn_xz.x, _ground_m(cell.x, cell.y) + 0.05, spawn_xz.y)
 
 	var near := clampi(int(settings.get("detail_tiles", 4)), 2, 8)
-	# The geometry chamfer near the camera (Chamfered brick edges): off, the
-	# near tiles are drawn flat, as the deep sections are.
-	TerrainTile.bevel_enabled = bool(settings.get("chamfer", true))
-	_overlay_on = TerrainTile.bevel_enabled and not ("--old-chamfer" in OS.get_cmdline_user_args())
+	# Real bevels near the camera (Chamfered brick edges): the brick overlay.
+	_overlay_on = bool(settings.get("chamfer", true))
 	# The solid behind the overlay's bricks, baked inside the ground, so a
 	# shot brick's hole shows real bricks the frame it is hit
 	# (Docs/BrickOverlay.md 6b); `-- --no-behind` = the stand-in box instead.
 	BrickTerrain.set_behind_faces(_overlay_on and not ("--no-behind" in OS.get_cmdline_user_args()))
-	if _overlay_on:
-		TerrainTile.bevel_enabled = false
 	if bricks == null:
 		bricks = TerrainBricks.new()
 		bricks.name = "Bricks"
@@ -3000,11 +2997,6 @@ func _gpu_tree_tier(tier: String) -> Array:
 	return out
 
 
-## The near tiles' chamfered surfaces (shown up close instead of the flat ones).
-func _gpu_chamfered() -> Array:
-	return _streamer.find_children("SurfaceChamfered", "MeshInstance3D", true, false)
-
-
 func _gpu_toggles() -> Array:
 	var vp := get_viewport()
 	var sun := _rig.sun
@@ -3030,7 +3022,6 @@ func _gpu_toggles() -> Array:
 	t.append(["near trees hidden", func(): _gpu_hide(_gpu_tree_tier("near")), _gpu_back])
 	t.append(["near tiles hidden", func(): _gpu_hide([_streamer]), _gpu_back])
 	t.append(["studs/tufts/pebbles hidden", func(): _gpu_hide(_gpu_instances()), _gpu_back])
-	t.append(["chamfered near mesh hidden", func(): _gpu_hide(_gpu_chamfered()), _gpu_back])
 	if bricks != null and _overlay_on:
 		# The brick overlay (Docs/BrickOverlay.md 5): its boxes and the sunken
 		# flat ground, against the flat ground alone.
@@ -3328,7 +3319,6 @@ func _run_stop_gate() -> void:
 	var w := {}
 	var tw := Time.get_ticks_msec()
 	var built0 := _streamer.built_count()
-	var bev0 := _streamer.bevels_added
 	var far0 := _far.applies
 	var deep0 := _deep.built
 	while Time.get_ticks_msec() - tw < 8000:
@@ -3359,13 +3349,11 @@ func _run_stop_gate() -> void:
 		var el := Time.get_ticks_msec() - tw
 		if el >= (windows.size() + 1) * 250:
 			w["built"] = _streamer.built_count() - built0
-			w["bev"] = _streamer.bevels_added - bev0
 			w["far_n"] = _far.applies - far0
 			w["deep_n"] = _deep.built - deep0
 			w["lava"] = water.lava_lights()
 			w["wtiles"] = water.drawn
 			built0 = _streamer.built_count()
-			bev0 = _streamer.bevels_added
 			far0 = _far.applies
 			deep0 = _deep.built
 			windows.append(w)
@@ -3374,10 +3362,10 @@ func _run_stop_gate() -> void:
 		var x: Dictionary = windows[i]
 		print("[mine-stop] %4.2f s  tris %.2fM sh %.2fM draws %.1fk lava %d wtiles %d" % [(i + 1) * 0.25,
 				x.tris, x.get("sh", 0.0), x.get("draws", 0.0), x.lava, x.wtiles])
-		print("[mine-stop] %4.2f s  worst %5.1f mean %4.1f gpu %4.1f | worst frame: process %4.1f scripts %4.1f step %4.1f draw %4.1f; near %4.1f deep %4.1f far %4.1f trees %4.1f water %4.1f collapse %4.1f | water max %4.1f | built %d bevel %d far %d deep %d"
+		print("[mine-stop] %4.2f s  worst %5.1f mean %4.1f gpu %4.1f | worst frame: process %4.1f scripts %4.1f step %4.1f draw %4.1f; near %4.1f deep %4.1f far %4.1f trees %4.1f water %4.1f collapse %4.1f | water max %4.1f | built %d far %d deep %d"
 				% [(i + 1) * 0.25, x.worst, x.sum / maxf(x.n, 1), x.gpu, x.process, x.scripts, x.step,
-				x.draw, x.near, x.deep, x.far, x.trees, x.water, x.coll, x.water_max, x.built, x.bev, x.far_n, x.deep_n])
-	print("[mine-stop] %s | bevel hand-over worst %.1f ms | water %s" % [_streamer.report(), _streamer.bevel_ms, water.report()])
+				x.draw, x.near, x.deep, x.far, x.trees, x.water, x.coll, x.water_max, x.built, x.far_n, x.deep_n])
+	print("[mine-stop] %s | water %s" % [_streamer.report(), water.report()])
 	get_tree().quit()
 
 
@@ -5768,6 +5756,123 @@ func _build_gate_room() -> Array:
 	return [o, b, t_min]
 
 
+## -- --gate=buildings (Docs/TerrainBuildings.md, stage 1): a city tower
+## written INTO the ground (MineBuildings.stamp), then looked at near, from
+## 40 m and from 120 m (pictures mine_building_near/mid/far.png), shot (its
+## wall brick hidden the frame it is hit, as the ground's are), and dug out
+## from under half its footprint: what is cut loose falls (ground_collapse),
+## pictures mine_building_dug.png / _fallen.png. `--floors=N` (1-10, 6).
+func _run_buildings_gate() -> void:
+	await _frames(10)
+	var dev := UserPaths.DEV
+	DirAccess.make_dir_recursive_absolute(dev)
+	_time = 0.42
+	set_on_foot(false)
+	view.process_mode = Node.PROCESS_MODE_DISABLED
+	view.rig.visible = false
+	if view.arms != null:
+		view.arms.visible = false
+	_hud_layer.visible = false
+	if kit != null:
+		for layer: CanvasLayer in [kit.hud, kit._aggro_layer]:
+			if layer != null:
+				layer.visible = false
+	var fails := 0
+	var check := func(ok: bool, what: String) -> void:
+		print("[mine-buildings] %s  %s" % ["ok  " if ok else "FAIL", what])
+	var floors := 6
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--floors="):
+			floors = clampi(int(a.get_slice("=", 1)), 1, 10)
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var e := _eye()
+	var p := {"x": 20, "z": 20, "courses": floors * TowerRecipe.COURSES_PER_FLOOR, "rooms": true,
+			"windows": true, "stairs": true}
+	var corner := Vector2i(floori(e.x / stud) + 14, floori(e.z / stud) - 10)
+	var t0 := Time.get_ticks_usec()
+	var info: Dictionary = MineBuildings.stamp(self, corner, p)
+	var stamp_ms := (Time.get_ticks_usec() - t0) / 1000.0
+	_flush_edits()
+	var base: int = info.base
+	var lo: Vector3i = info.lo
+	var hi: Vector3i = info.hi
+	print("[mine-buildings] %d floors, 20 x 20 studs: %d bricks, %d cells, base plate %d (ground %d..), %.1f m tall; stamped in %.0f ms"
+			% [floors, info.bricks, info.cells, base, info.ground, (hi.y - base + 1) * plate, stamp_ms])
+	var ok: bool = int(info.cells) > 1000
+	check.call(ok, "the tower is in the ground (%d cells)" % int(info.cells))
+	fails += 0 if ok else 1
+	# It is ground now: the field says so.
+	var mid_cell := Vector3i(lo.x, base + 6, lo.z + 10)
+	ok = BrickTerrain.solid_at(mid_cell.x, mid_cell.y, mid_cell.z) != 0
+	check.call(ok, "its wall is solid ground (BrickTerrain.solid_at)")
+	fails += 0 if ok else 1
+	var centre := Vector3((lo.x + 10) * stud, base * plate, (lo.z + 10) * stud)
+	var height := (hi.y - base + 1) * plate
+	var cam0 := get_viewport().get_camera_3d()
+	var cam := Camera3D.new()
+	add_child(cam)
+	cam.attributes = cam0.attributes
+	cam.near = 0.05
+	cam.fov = cam0.fov
+	cam.current = true
+	var shoot_pic := func(tag: String, from: Vector3, at: Vector3) -> void:
+		cam.global_transform = Transform3D(Basis(), to_global(from)).looking_at(to_global(at))
+		_streamer.settle(Vector2(from.x, from.z))
+		await _frames(30)
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png(dev + "mine_building_%s.png" % tag)
+	var look := centre + Vector3(0, height * 0.45, 0)
+	await shoot_pic.call("near", centre + Vector3(-12.0, 1.8, -9.0), centre + Vector3(0, 3.0, 0))
+	await shoot_pic.call("mid", centre + Vector3(-40.0, 6.0, -22.0), look)
+	await shoot_pic.call("far", centre + Vector3(-110.0, 25.0, -60.0), look)
+	# A shot at its west wall, 3 m up, from outside.
+	cam.global_transform = Transform3D(Basis(), to_global(centre + Vector3(-12.0, 3.0, 0))).looking_at(
+			to_global(Vector3(lo.x * stud, base * plate + 3.0, centre.z)))
+	_streamer.settle(Vector2(centre.x - 12.0, centre.z))
+	await _frames(20)
+	var hid0: int = bricks.hidden_total if bricks != null else 0
+	var wall_at := Vector3(lo.x * stud - 0.01, base * plate + 3.0, centre.z)
+	_mine(to_global(wall_at), Vector3(1, 0, 0), null)
+	ok = bricks != null and bricks.hidden_total == hid0 + 1
+	check.call(ok, "a shot at its wall hides the brick the frame it is hit")
+	fails += 0 if ok else 1
+	await _frames(20)
+	ok = BrickTerrain.solid_at(lo.x, roundi(3.0 / plate) + base, roundi(centre.z / stud)) == 0
+	check.call(ok, "and the field has the hole")
+	fails += 0 if ok else 1
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png(dev + "mine_building_shot.png")
+	# DIG out the ground under its west half: the foundation and the ground
+	# under it, down past the lowest ground, so the west half hangs.
+	var let0: int = collapse.groups_let_go
+	var bricks0: int = collapse.bricks_let_go
+	var g_lo := Vector3i(lo.x - 2, int(info.ground) - 12, lo.z - 2)
+	# `--dig-all`: the whole footprint, so nothing but its own bricks hold it.
+	var g_hi := Vector3i((hi.x + 2) if "--dig-all" in OS.get_cmdline_user_args() else (lo.x + 9), base - 1, hi.z + 2)
+	terrain_edited(BrickTerrain.fill_box(g_lo, g_hi, 0, false))
+	_flush_edits()
+	cam.global_transform = Transform3D(Basis(), to_global(centre + Vector3(-34.0, 8.0, -26.0))).looking_at(
+			to_global(centre + Vector3(0, height * 0.3, 0)))
+	_streamer.settle(Vector2(centre.x - 34.0, centre.z - 26.0))
+	await _frames(10)
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png(dev + "mine_building_dug.png")
+	for f in 360:
+		await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png(dev + "mine_building_fallen.png")
+	var let := collapse.groups_let_go - let0
+	var fell := collapse.bricks_let_go - bricks0
+	print("[mine-buildings] dug under %s: %d piece(s), %d brick(s) let go; %s" % ["all of it" if "--dig-all" in OS.get_cmdline_user_args()
+			else "its west half", let, fell, collapse.readout()])
+	ok = let > 0 and fell > 0
+	check.call(ok, "cut loose, it falls (%d pieces, %d bricks)" % [let, fell])
+	fails += 0 if ok else 1
+	print("[mine-buildings] %s" % ["PASS" if fails == 0 else "%d FAILED" % fails])
+	get_tree().quit()
+
+
 ## -- --gate=bricks: THE BRICK OVERLAY (Docs/BrickOverlay.md 4, stage 2). The
 ## stone room (_build_gate_room) roofed over, seen from inside (its corners,
 ## walls, floor and roof edges at the normal lens) and the open ground
@@ -5795,7 +5900,7 @@ func _run_bricks_gate() -> void:
 	var check := func(passed: bool, what: String) -> void:
 		print("[mine-bricks] %s  %s" % ["ok  " if passed else "FAIL", what])
 	if bricks == null or not _overlay_on:
-		print("[mine-bricks] FAIL  the overlay is off (Chamfered brick edges off, or --old-chamfer)")
+		print("[mine-bricks] FAIL  the overlay is off (Chamfered brick edges off)")
 		get_tree().quit()
 		return
 	var stud := BrickWorld.get_stud_metres()
@@ -6109,18 +6214,14 @@ func _run_seams_gate() -> void:
 		_streamer.invalidate(Rect2i(-(1 << 20), -(1 << 20), 1 << 21, 1 << 21))
 		_streamer.settle(Vector2(mid.x, mid.z))
 		await _frames(90)
-	# With the brick overlay (Docs/BrickOverlay.md) the chamfer is its real
-	# bricks over the sunken flat ground, and the old near tier stays off;
-	# without it (-- --old-chamfer), the old near tier.
-	TerrainTile.bevel_enabled = false
+	# The chamfer is the brick overlay's real bricks over the sunken flat
+	# ground (Docs/BrickOverlay.md): off, then on.
 	if _overlay_on:
 		bricks.set_enabled(false)
 	await settle.call()
 	var off: Array = await count.call("off")
 	if _overlay_on:
 		bricks.set_enabled(true)
-	else:
-		TerrainTile.bevel_enabled = true
 	await settle.call()
 	var on: Array = await count.call("on")
 	# Both tiers whole: the chamfer's slits and the flat tier's T-junction
@@ -6282,9 +6383,8 @@ func _run_seams_deep() -> void:
 	if "--at-top" in OS.get_cmdline_user_args():
 		b = floori(float(dtop - 9) / 3.0) * 3
 	print("[mine-seams] deep_top %d, ground %d..%d, hall floor %d" % [dtop, t_min, t_max, b])
-	if "--flat" in OS.get_cmdline_user_args():
-		TerrainTile.bevel_enabled = false
-		_streamer.invalidate(Rect2i(-(1 << 20), -(1 << 20), 1 << 21, 1 << 21))
+	if "--flat" in OS.get_cmdline_user_args() and bricks != null:
+		bricks.set_enabled(false)
 	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x - 1, b - 3, o.y - 1), Vector3i(o.x + 14, b + 20, o.y + 42), 4, true))
 	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x, b, o.y), Vector3i(o.x + 13, b + 17, o.y + 41), 0, false))
 	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x + 6, b + 18, o.y + 20), Vector3i(o.x + 6, t_max + 6, o.y + 20), 0, false))
@@ -6363,7 +6463,7 @@ func _run_seams_deep() -> void:
 		if n > worst:
 			worst = n
 			img.save_png(dev + "mine_seams_deep.png")
-	print("[mine-seams] deep hall: %d sections drawn, floor plate %d (%d under the ground), chamfer %s, overlay %s" % [_deep._secs.size(), b, t_min - b, TerrainTile.bevel_enabled,
+	print("[mine-seams] deep hall: %d sections drawn, floor plate %d (%d under the ground), overlay %s" % [_deep._secs.size(), b, t_min - b,
 			bricks.readout() if _overlay_on else "off"])
 	print("[mine-seams] %s  deep: magenta %d px over %d views (%d views with any, worst %d)"
 			% ["PASS" if total == 0 else "FAIL", total, views.size(), hit, worst])
