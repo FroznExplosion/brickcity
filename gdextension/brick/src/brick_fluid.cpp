@@ -1363,6 +1363,23 @@ struct MeshBuf {
         idx.push_back(base); idx.push_back(base + 1); idx.push_back(base + 2);
         idx.push_back(base); idx.push_back(base + 2); idx.push_back(base + 3);
     }
+    /// A lake piece's face (S3): CUSTOM0 y = 2, z its wave amplitude, x, w
+    /// the way to its stud's middle as sea_quad's.
+    void lake_quad(const Vector3 &a, const Vector3 &b, const Vector3 &c, const Vector3 &d,
+            const Vector3 &nrm, const Color &cc, const Vector2 &mid, float amp) {
+        const int base = (int)v.size();
+        for (const Vector3 &p : { a, b, c, d }) {
+            v.push_back(p);
+            n.push_back(nrm);
+            col.push_back(cc);
+            cus.push_back(mid.x > p.x ? 1.0f : -1.0f);
+            cus.push_back(2.0f);
+            cus.push_back(amp);
+            cus.push_back(mid.y > p.z ? 1.0f : -1.0f);
+        }
+        idx.push_back(base); idx.push_back(base + 1); idx.push_back(base + 2);
+        idx.push_back(base); idx.push_back(base + 2); idx.push_back(base + 3);
+    }
     Array arrays() const {
         Array a;
         if (v.is_empty()) return a;
@@ -1411,6 +1428,48 @@ float corner_h(int x, int b, int z, int cx, int cz, int fluid, int own) {
         }
     }
     return n > 0 ? sum / (float)n : (float)own;
+}
+
+/// WAVES ON LAKES AND RIVERS (S3, the user's R1, Docs/MineWaterNext.md): an
+/// infinite body's open top -- a source not of the open sea, open to the sky,
+/// a full course -- rides a small wave, piece by piece as the sea's do. Its
+/// height at a stud's middle, metres: LAKE_AMP times how open the stud is
+/// (its distance to the body's edge, ramped over LAKE_RAMP studs: a lone
+/// source, a channel or a pond's rim stays flat) times two crossing sines.
+/// water_fluid.gdshader `lake_wave` is the same expression on `now_s`, the
+/// clock MineWater hands both (set_wave_clock).
+constexpr float LAKE_AMP = 0.09f;
+constexpr int LAKE_R = 6;            ///< studs looked out to for the edge
+constexpr float LAKE_RAMP = 5.0f;
+double g_wave_t = 0.0;
+inline double lake_wave(double x, double z, double t) {
+    const double a = (0.8 * x + 0.6 * z) * (Math_TAU / 5.0) - t * 1.6;
+    const double b = (-0.5 * x + 0.866 * z) * (Math_TAU / 3.2) - t * 2.1 + 1.7;
+    return 0.55 * std::sin(a) + 0.45 * std::sin(b);
+}
+/// Is (x, b, z) an infinite body's open top (a lake or river piece)?
+template <class Get>
+inline bool lake_top(Get get, int x, int b, int z) {
+    const Cell c = get(x, b, z);
+    if (!(c_wet(c) && c_fluid(c) == F_WATER && c_kind(c) == K_SOURCE && !c_ocean(c))) return false;
+    if (floor_u(c.solid) + c.amt < CU) return false;
+    const Cell a = get(x, b + 1, z);
+    return !(c_wet(a) && c_fluid(a) == F_WATER);
+}
+/// A lake top's wave amplitude, metres (0: flat, or not a lake top).
+template <class Get>
+inline float lake_amp(Get get, int x, int b, int z) {
+    if (!lake_top(get, x, b, z)) return 0.0f;
+    int d = LAKE_R + 1;
+    for (int r = 1; r <= LAKE_R && d > LAKE_R; ++r) {
+        for (int i = -r; i <= r && d > LAKE_R; ++i) {
+            if (!lake_top(get, x + i, b, z - r) || !lake_top(get, x + i, b, z + r)
+                    || !lake_top(get, x - r, b, z + i) || !lake_top(get, x + r, b, z + i)) {
+                d = r;
+            }
+        }
+    }
+    return LAKE_AMP * std::min(1.0f, (float)(d - 1) / LAKE_RAMP);
 }
 
 /// Each tile's top corners as last meshed, keyed by corner, course and
@@ -1627,11 +1686,26 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
                         // Only an open top sinks under the course; a side under
                         // more water meets the course above (no seam in a fall).
                         const float sink = top_open ? TOP_SINK : 0.0f;
+                        float lake_a = 0.0f;
                         if (real && top_open && f == F_WATER && b == g_sea_b - 1 && own == g_sea_b * CU) {
                             // At the sea's level: the band's (waves with the sea).
                             sea_top[lx + SX * lz] = true;
                             sea_ocean[lx + SX * lz] = c_ocean(c);
                             any_sea = true;
+                        } else if (top_open && f == F_WATER && c_kind(c) == K_SOURCE && !c_ocean(c)
+                                && (lake_a = lake_amp(wcell, x, b, z)) > 0.0f) {
+                            // A lake or river piece (S3): a flat top riding the
+                            // wave at its middle (the shader), sides deep enough
+                            // for the piece beside it at the other end of it.
+                            const float y = (float)own * P - TOP_SINK;
+                            const Vector2 mid(((float)x + 0.5f) * STUD_M, ((float)z + 0.5f) * STUD_M);
+                            const Vector3 a(x0, y, z0), bq(x0, y, z1), cq(x1, y, z1), dq(x1, y, z0);
+                            const Vector3 dn(0.0f, 2.5f * LAKE_AMP, 0.0f);
+                            m.lake_quad(a, bq, cq, dq, Vector3(0, 1, 0), cc, mid, lake_a);
+                            m.lake_quad(dq, cq, cq - dn, dq - dn, Vector3(1, 0, 0), cc, mid, lake_a);
+                            m.lake_quad(bq, a, a - dn, bq - dn, Vector3(-1, 0, 0), cc, mid, lake_a);
+                            m.lake_quad(cq, bq, bq - dn, cq - dn, Vector3(0, 0, 1), cc, mid, lake_a);
+                            m.lake_quad(a, dq, dq - dn, a - dn, Vector3(0, 0, -1), cc, mid, lake_a);
                         } else if (top_open && !(c_ocean(c) && own == g_sea_b * CU)
                                 && h00 == h10 && h10 == h11 && h11 == h01) {
                             // One easing for the whole top (a rect merges only
@@ -2284,6 +2358,8 @@ void BrickFluid::set_centre(Vector3 at, double sim_radius_m) {
     g_sim_r = std::max(8.0, sim_radius_m);
 }
 
+void BrickFluid::set_wave_clock(double t) { g_wave_t = t; }
+
 void BrickFluid::set_keep_inland(double metres) {
     g_keep_inland_m = std::max(0.0, metres);
 }
@@ -2607,6 +2683,15 @@ double BrickFluid::surface_at(Vector3 p) {
     const Vector3i k = cell_of(p);
     MainLock lk;
     Cell c = rcell(k.x, k.y, k.z);
+    // A lake's wave (S3): its top plus the wave at the stud's middle, from
+    // the top's own cell or the air over it (a crest).
+    for (int bb = k.y; bb >= k.y - 1; --bb) {
+        const float amp = lake_amp(rcell, k.x, bb, k.z);
+        if (amp <= 0.0f) continue;
+        const Cell t = rcell(k.x, bb, k.z);
+        const double top = (double)(bb * CU + floor_u(t.solid) + t.amt) * UNIT_M;
+        return top + amp * lake_wave((k.x + 0.5) * STUD_M, (k.z + 0.5) * STUD_M, g_wave_t);
+    }
     if (!c_wet(c)) {
         // Just above a shallow cell: its top is still the surface here.
         return -INFINITY;
@@ -2668,8 +2753,26 @@ Dictionary BrickFluid::ray_cell(Vector3 from, Vector3 dir, double max_metres) {
     double t = 0.0;
     Vector3i nrm;
     for (int it = 0; it < 400 && t <= max_metres; ++it) {
-        const Cell cl = rcell(c[0], c[1], c[2]);
-        const bool hit_fluid = c_wet(cl);
+        Cell cl = rcell(c[0], c[1], c[2]);
+        bool hit_fluid = c_wet(cl);
+        // A lake's crest drawn up into this air cell (S3, R2): the source
+        // under it is what the bucket takes.
+        if (!hit_fluid && cl.solid == 0) {
+            const float amp = lake_amp(rcell, c[0], c[1] - 1, c[2]);
+            if (amp > 0.0f) {
+                const Cell lc = rcell(c[0], c[1] - 1, c[2]);
+                const double crest = (double)((c[1] - 1) * CU + floor_u(lc.solid) + lc.amt) * UNIT_M
+                        + amp * lake_wave((c[0] + 0.5) * STUD_M, (c[2] + 0.5) * STUD_M, g_wave_t);
+                const double y_in = from.y + d.y * t;
+                const double y_out = from.y + d.y * std::min(std::min(tmax[0], tmax[1]), tmax[2]);
+                if (std::min(y_in, y_out) <= crest) {
+                    c[1] -= 1;
+                    cl = lc;
+                    hit_fluid = true;
+                    nrm = Vector3i(0, 1, 0);
+                }
+            }
+        }
         const bool hit_ground = cl.solid != 0 && !hit_fluid;
         if (hit_fluid || hit_ground) {
             out["cell"] = Vector3i(c[0], c[1], c[2]);
@@ -2973,6 +3076,7 @@ void BrickFluid::_bind_methods() {
     ClassDB::bind_static_method("BrickFluid", D_METHOD("build_tile_mesh", "tx", "tz"), &BrickFluid::build_tile_mesh);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("ease_seconds"), &BrickFluid::ease_seconds);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("set_keep_inland", "metres"), &BrickFluid::set_keep_inland);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("set_wave_clock", "t"), &BrickFluid::set_wave_clock);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("request_mesh", "tx", "tz"), &BrickFluid::request_mesh);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("drawn_tiles"), &BrickFluid::drawn_tiles);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("cell_info", "cell"), &BrickFluid::cell_info);

@@ -50,6 +50,9 @@ public:
     /// Inland water (not open sea) keeps its sections out to this many
     /// metres, to be drawn out to the chosen terrain LOD; 0: as the rest.
     static void set_keep_inland(double metres);
+    /// The lakes' wave clock (seconds, the shader's now_s): surface_at and
+    /// ray_cell ride the same wave the mesh is drawn with (S3).
+    static void set_wave_clock(double t);
     /// Minecraft's sloped tops (corners averaged) or flat plate steps.
     static void set_sloped(bool on);
     static bool get_sloped();
