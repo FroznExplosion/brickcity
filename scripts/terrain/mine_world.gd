@@ -702,6 +702,11 @@ func _mine(point: Vector3, dir: Vector3, _info) -> void:
 	var holder := [{}]
 	var n := -dir
 	var at := to_local(point)
+	# A brick of the overlay goes NOW, before the worker finds it and the
+	# tile is rebuilt (TerrainBricks.hide_at, Docs/BrickOverlay.md stage 6).
+	var hole := -1
+	if bricks != null and _overlay_on:
+		hole = bricks.hide_at(at, global_transform.basis.inverse() * dir)
 	# High priority: at low, the shot waited behind every streaming bake
 	# (all high) before it knew what it hit (Docs/MineWorld.md 21).
 	var task := WorkerThreadPool.add_task(
@@ -710,7 +715,7 @@ func _mine(point: Vector3, dir: Vector3, _info) -> void:
 			holder[0] = BrickTerrain.find_brick(at, n)
 			holder.append(s0)
 			holder.append(Time.get_ticks_usec()), true, "break brick")
-	_break_jobs.append([task, holder, at - dir * 0.6, Time.get_ticks_usec()])
+	_break_jobs.append([task, holder, at - dir * 0.6, Time.get_ticks_usec(), hole])
 
 
 ## Finished shots: clear the cells each found, throw its brick. Never waits.
@@ -724,11 +729,16 @@ func _land_breaks() -> void:
 		WorkerThreadPool.wait_for_task_completion(job[0])
 		_break_jobs.remove_at(i)
 		var found: Dictionary = job[1][0]
+		var hole: int = job[4]
 		var runs: PackedInt32Array = found.get("runs", PackedInt32Array())
 		if runs.is_empty():
+			if hole >= 0:
+				bricks.drop_hole(hole)
 			continue
 		var res: Dictionary = BrickTerrain.clear_runs(runs)
 		if int(res.get("removed", 0)) == 0:
+			if hole >= 0:
+				bricks.drop_hole(hole)
 			continue
 		var logged := {}
 		if _streamer != null and _streamer.log_latency:
@@ -741,6 +751,10 @@ func _land_breaks() -> void:
 		# What a shot destroys is gone (the user, 2026-11-20): no brick thrown.
 		# What it leaves hanging falls -- the collapse, from terrain_edited.
 		terrain_edited(res)
+		if hole >= 0:
+			_hole_wait(hole, res)
+			if not logged.is_empty():
+				logged["hidden"] = int(job[3])
 		if not logged.is_empty():
 			# The generation each tile must be drawn at for the hole to show.
 			var want := {}
@@ -750,6 +764,27 @@ func _land_breaks() -> void:
 				if _streamer.has_tile(c):
 					want[c] = int(_streamer._gen.get(c, 0))
 			logged["want"] = want
+
+
+## A hidden brick's hole stays till the tiles and sections the edit rebuilt
+## are drawn at the generations it set (TerrainBricks.hole_wait).
+func _hole_wait(hole: int, res: Dictionary) -> void:
+	var want := {}
+	var tl: PackedInt32Array = res["tiles"]
+	var lo := Vector2i(1 << 30, 1 << 30)
+	var hi := -lo
+	for k in range(0, tl.size(), 2):
+		var c := Vector2i(tl[k], tl[k + 1])
+		lo = Vector2i(mini(lo.x, c.x), mini(lo.y, c.y))
+		hi = Vector2i(maxi(hi.x, c.x), maxi(hi.y, c.y))
+		if _streamer != null and _streamer.has_tile(c):
+			want[c] = int(_streamer._gen.get(c, 0))
+	var deep := {}
+	if _deep != null and res.has("box_lo"):
+		for k in _deep._box_keys(res.box_lo, res.box_hi):
+			if _deep._secs.has(k) and _deep._secs[k] != null:
+				deep[k] = int(_deep._gen.get(k, 0))
+	bricks.hole_wait(hole, want, deep, Rect2i(lo, hi - lo + Vector2i.ONE) if not want.is_empty() else Rect2i())
 
 
 func _wait_breaks() -> void:
@@ -2787,6 +2822,14 @@ func _breaklag_burst(e: Vector3, stud: float) -> void:
 			fired, break_log.size(), waiting, mean, gone[floori(gone.size() * 0.5)] if not gone.is_empty() else 0.0,
 			gone[-1] if not gone.is_empty() else 0.0, over.call(100.0), over.call(250.0), over.call(1000.0)])
 	print("[breaklag] burst, each: %s" % ", ".join(gone.map(func(g: float) -> String: return "%.0f" % g)))
+	# The brick overlay hides a near brick the frame it is shot (its hole is
+	# drawn the next frame), whatever the tile takes (Docs/BrickOverlay.md 6).
+	var hidden := 0
+	for b in break_log:
+		if b.has("hidden"):
+			hidden += 1
+	print("[breaklag] burst: %d of %d hidden by the brick overlay the frame they were shot (%s)" % [hidden,
+			break_log.size(), bricks.readout() if bricks != null and _overlay_on else "overlay off"])
 	# Where each shot's time went: queued for a worker, finding, waiting to
 	# be landed, then the tile.
 	var parts: Array[String] = []
@@ -5730,6 +5773,35 @@ func _run_bricks_gate() -> void:
 	ok = worst_d <= bricks.range_m + 0.01
 	check.call(ok, "every brick within range (farthest %.2f m of %.1f)" % [worst_d, bricks.range_m])
 	fails += 0 if ok else 1
+	# A shot (stage 6): the brick goes the frame it is hit, its hole drawn by
+	# the overlay till the rebuilt tile is; pictures the next frame and once
+	# the hole is the ground's own (mine_bricks_shot_now / _later).
+	cam.global_transform = views[4][1]
+	_streamer.settle(Vector2(cam.global_position.x, cam.global_position.z))
+	await _frames(20)
+	var aim := to_local(cam.global_position) + (-cam.global_transform.basis.z) * 2.5
+	var sc := Vector2i(floori(aim.x / stud), floori(aim.z / stud))
+	var shot_at := Vector3((sc.x + 0.5) * stud, _ground_m(sc.x, sc.y) - 0.02, (sc.y + 0.5) * stud)
+	var hid0 := bricks.hidden_total
+	_mine(to_global(shot_at), Vector3.DOWN, null)
+	ok = bricks.hidden_total == hid0 + 1
+	check.call(ok, "a shot brick is hidden the frame it is hit (%d)" % (bricks.hidden_total - hid0))
+	fails += 0 if ok else 1
+	# The next frame drawn (the picture of this one is not yet the change's).
+	await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png(dev + "mine_bricks_shot_now.png")
+	print("[mine-bricks] shot: %d hole(s) still the overlay's in that frame" % bricks.holes.size())
+	var waited := 0
+	while not bricks.holes.is_empty() and waited < 300:
+		await get_tree().process_frame
+		waited += 1
+	ok = bricks.holes.is_empty()
+	check.call(ok, "its hole handed to the rebuilt tile (%d frames)" % waited)
+	fails += 0 if ok else 1
+	await _frames(4)
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png(dev + "mine_bricks_shot_later.png")
 	print("[mine-bricks] %s; %s" % ["PASS" if fails == 0 else "%d FAILED" % fails, bricks.readout()])
 	get_tree().quit()
 

@@ -78,6 +78,11 @@ global uniform float near_stud_radius;
 // dark as the floor it stands on (TerrainTile.sky_stud_material).
 uniform float sky_light_floor : hint_range(0.0, 0.2) = 0.015;
 uniform float sky_light_curve : hint_range(0.5, 0.95) = 0.8;
+// A brick the overlay hid the frame it was shot (TerrainBricks.hide_at,
+// Docs/BrickOverlay.md stage 6): its studs go with it till its tile is rebuilt.
+uniform int overlay_holes = 0;
+uniform vec3 overlay_hole_lo[8];
+uniform vec3 overlay_hole_hi[8];
 uniform float sky_sun_power : hint_range(1.0, 4.0) = 2.0;
 uniform vec3 block_light_colour : source_color = vec3(1.0, 0.52, 0.22);
 uniform float block_light_energy : hint_range(0.0, 4.0) = 1.0;
@@ -123,6 +128,18 @@ void vertex() {
 #ifdef INSTANCE_SKY
     v_sky = INSTANCE_CUSTOM.r;
     v_block = INSTANCE_CUSTOM.g;
+    if (overlay_holes > 0) {
+        // The stud's foot, a centimetre down into the brick it stands on.
+        vec3 foot = MODEL_MATRIX[3].xyz - vec3(0.0, 0.01, 0.0);
+        for (int i = 0; i < 8; i++) {
+            if (i >= overlay_holes) {
+                break;
+            }
+            if (all(greaterThan(foot, overlay_hole_lo[i])) && all(lessThan(foot, overlay_hole_hi[i]))) {
+                VERTEX = vec3(0.0);
+            }
+        }
+    }
 #endif
     // A stud's corners are softened in the shading (stud_round): each
     // vertex's normal leans out from the axis, so across a flat face the

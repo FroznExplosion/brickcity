@@ -18,6 +18,15 @@ extends Node3D
 ##
 ## A child of the mine world, at its origin: the lists are in its terrain
 ## frame, so the origin shift moves this with everything else.
+##
+## A BROKEN BRICK GOES AT ONCE (Docs/BrickOverlay.md stage 6, MineWorld.md
+## 21): a shot that hits a brick of the overlay hides it the same frame --
+## `hide_at` moves its slot away (nothing is deleted: the pool's slots are
+## only ever moved), the flat ground's faces of that brick fold to nothing in
+## the shader (`overlay_holes`), and an inside-out box stands in for the
+## hole's walls -- until the rebuilt tile that has the hole is drawn
+## (`hole_wait`: the tiles' and sections' generations), then the hole is the
+## ground's own.
 
 ## How far round the eye bricks are laid (metres, to the brick's box).
 @export var range_m := 12.0
@@ -61,7 +70,31 @@ var _params: Array[StringName] = []
 const STRIDE := 20
 const CAP_STEP := 512
 
+## Holes shown at once, each {id, lo, hi, want (tile -> gen), deep (key ->
+## gen), rect, at (msec), waiting (no field edit yet)}. The shader takes
+## MAX_HOLES; past it the oldest still waits for its tile.
+const MAX_HOLES := 8
+## A hole whose shot found nothing (no edit) goes after this; any after this.
+const HOLE_NO_EDIT_MS := 600
+const HOLE_MAX_MS := 3000
+var holes: Array = []
+var hidden_total := 0
+var _hole_id := 0
+## The holes' stand-in walls: bevelled boxes seen from inside (TERRAIN_CAVITY).
+var _cav_mm: MultiMesh = null
+
 static var _box_shaders := {}
+static var _cavity_shaders := {}
+
+
+## The box shader seen from inside: front faces culled, normals turned in.
+static func cavity_shader(sky_light: bool) -> Shader:
+	if not _cavity_shaders.has(sky_light):
+		var code: String = box_shader(sky_light).code
+		var s := Shader.new()
+		s.code = code.replace("cull_back", "cull_front").insert(code.find("\n") + 1, "#define TERRAIN_CAVITY\n")
+		_cavity_shaders[sky_light] = s
+	return _cavity_shaders[sky_light]
 
 
 ## terrain.gdshader with `#define TERRAIN_BOX` (and SKY_LIGHT when the
@@ -99,6 +132,24 @@ func setup(w: Node3D, ground: ShaderMaterial, sky_light: bool) -> void:
 	_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_mmi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(_mmi)
+	# The holes' stand-in walls: the hidden brick's box seen from inside, in
+	# the ground's own look (terrain.gdshader TERRAIN_CAVITY), lit as its top.
+	_cav_mm = MultiMesh.new()
+	_cav_mm.transform_format = MultiMesh.TRANSFORM_3D
+	_cav_mm.use_colors = true
+	_cav_mm.use_custom_data = true
+	_cav_mm.mesh = BrickNear.bevel_box_mesh()
+	_cav_mm.instance_count = MAX_HOLES
+	_cav_mm.visible_instance_count = 0
+	var cav := MultiMeshInstance3D.new()
+	cav.name = "Cavities"
+	cav.multimesh = _cav_mm
+	var cm := _mat.duplicate() as ShaderMaterial
+	cm.shader = cavity_shader(sky_light)
+	cav.material_override = cm
+	cav.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	cav.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+	add_child(cav)
 
 
 func set_enabled(on: bool) -> void:
@@ -123,6 +174,8 @@ func _process(delta: float) -> void:
 	if cam == null:
 		return
 	_sync(delta)
+	if not holes.is_empty():
+		_release_holes()
 	var eye: Vector3 = world.to_local(cam.global_position)
 	var fwd: Vector3 = world.global_transform.basis.inverse() * -cam.global_transform.basis.z
 	if _version == TerrainTile.overlay_version and eye.distance_to(_eye_at) < move_m \
@@ -166,6 +219,11 @@ func fill(eye: Vector3, fwd: Vector3, cam: Camera3D) -> void:
 		_mm.instance_count = _cap
 	if buf.size() < _cap * STRIDE:
 		buf.resize(_cap * STRIDE)
+	# Bricks of open holes stay hidden till their tile is rebuilt.
+	for h: Dictionary in holes:
+		for i in count:
+			if _slot_in(buf, i, h.lo, h.hi):
+				_zero_slot(buf, i)
 	_mm.buffer = buf
 	buffer = buf
 	_mm.visible_instance_count = count
@@ -200,7 +258,8 @@ func _sync(delta: float) -> void:
 		return
 	_sync_in = 1.0
 	for p in _params:
-		if p == &"overlay_reach":
+		if p == &"overlay_reach" or p == &"overlay_holes" or p == &"overlay_hole_lo" \
+				or p == &"overlay_hole_hi":
 			continue
 		var v = _ground.get_shader_parameter(p)
 		if v != null:
@@ -210,3 +269,168 @@ func _sync(delta: float) -> void:
 func readout() -> String:
 	return "overlay bricks %d of %d in reach (%d read, %d lists), to %.1f m, fill %.2f ms (worst %.2f)" \
 			% [count, inside, seen, lists, far_m, fill_ms, worst_fill_ms]
+
+
+# ---------------------------------------------------------------------------
+# Broken bricks, hidden at once.
+
+## The shot at `point` (terrain frame) going `dir`: the overlay brick it hit,
+## hidden now. Returns the hole's id, or -1 (no brick of the overlay there).
+func hide_at(point: Vector3, dir: Vector3) -> int:
+	if not enabled or count == 0:
+		return -1
+	var q := point + dir.normalized() * 0.01
+	for i in count:
+		var k := i * STRIDE
+		var size := Vector3(buffer[k], buffer[k + 5], buffer[k + 10])
+		if size.x <= 0.0:
+			continue
+		var c := Vector3(buffer[k + 3], buffer[k + 7], buffer[k + 11])
+		var lo := c - size * 0.5
+		var hi := c + size * 0.5
+		if q.x < lo.x or q.y < lo.y or q.z < lo.z or q.x > hi.x or q.y > hi.y or q.z > hi.z:
+			continue
+		# Its top's sky light, for the stand-in walls' shade.
+		var top_sky := 0.0
+		for corner in 4:
+			var n := 8 + corner
+			top_sky += float((int(buffer[k + 16 + n / 6]) >> (4 * (n % 6))) & 15) / 4.0
+		var slot := buffer.slice(k, k + STRIDE)
+		_zero_slot(buffer, i)
+		_mm.set_instance_transform(i, Transform3D(Basis().scaled(Vector3.ZERO), c))
+		# A piece is a brick and the plate or tile laid on it (two boxes, one
+		# footprint): a shot takes both.
+		for j in count:
+			var kj := j * STRIDE
+			var sj := Vector3(buffer[kj], buffer[kj + 5], buffer[kj + 10])
+			if sj.x <= 0.0:
+				continue
+			var cj := Vector3(buffer[kj + 3], buffer[kj + 7], buffer[kj + 11])
+			var loj := cj - sj * 0.5
+			var hij := cj + sj * 0.5
+			if absf(loj.x - lo.x) > 1e-3 or absf(hij.x - hi.x) > 1e-3 or absf(loj.z - lo.z) > 1e-3 \
+					or absf(hij.z - hi.z) > 1e-3:
+				continue
+			if absf(loj.y - hi.y) < 1e-3 or absf(hij.y - lo.y) < 1e-3:
+				lo.y = minf(lo.y, loj.y)
+				hi.y = maxf(hi.y, hij.y)
+				_zero_slot(buffer, j)
+				_mm.set_instance_transform(j, Transform3D(Basis().scaled(Vector3.ZERO), cj))
+		_hole_id += 1
+		holes.append({"id": _hole_id, "lo": lo, "hi": hi, "want": {}, "deep": {}, "rect": Rect2i(),
+				"at": Time.get_ticks_msec(), "waiting": true, "slot": slot, "sky": top_sky})
+		hidden_total += 1
+		_push_holes()
+		return _hole_id
+	return -1
+
+
+## The shot's edit landed: the hole shows till these tiles (Vector2i ->
+## generation) and deep sections (Vector3i -> generation) are drawn at
+## least at those generations, and `rect` (tiles) is no longer pending.
+func hole_wait(id: int, want: Dictionary, deep: Dictionary, rect: Rect2i) -> void:
+	for h: Dictionary in holes:
+		if int(h.id) == id:
+			h.want = want
+			h.deep = deep
+			h.rect = rect
+			h.waiting = false
+
+
+## The shot found nothing to clear: its brick comes back.
+func drop_hole(id: int) -> void:
+	for i in holes.size():
+		if int(holes[i].id) == id:
+			holes.remove_at(i)
+			_push_holes()
+			refresh()
+			return
+
+
+func _release_holes() -> void:
+	var now := Time.get_ticks_msec()
+	var streamer = world.get("_streamer")
+	var deep = world.get("_deep")
+	var gone := false
+	var i := 0
+	while i < holes.size():
+		var h: Dictionary = holes[i]
+		var age := now - int(h.at)
+		var done := age > HOLE_MAX_MS or (bool(h.waiting) and age > HOLE_NO_EDIT_MS)
+		if not done and not bool(h.waiting):
+			done = true
+			for c in h.want:
+				if streamer == null or int(streamer.drawn_gen.get(c, -1)) < int(h.want[c]):
+					done = false
+			for k in h.deep:
+				if deep == null or int(deep.drawn_gen.get(k, -1)) < int(h.deep[k]):
+					done = false
+			if done and h.rect.has_area() and not bool(world.call("tiles_fresh", h.rect)):
+				done = false
+		if done:
+			holes.remove_at(i)
+			gone = true
+		else:
+			i += 1
+	if gone:
+		_push_holes()
+		refresh()
+
+
+## The holes to the ground's shader (world space: the tiles' MODEL_MATRIX)
+## and to the stand-in walls.
+func _push_holes() -> void:
+	var los := PackedVector3Array()
+	var his := PackedVector3Array()
+	var n := mini(holes.size(), MAX_HOLES)
+	var cb := PackedFloat32Array()
+	cb.resize(MAX_HOLES * STRIDE)
+	for j in MAX_HOLES:
+		if j < n:
+			var h: Dictionary = holes[holes.size() - n + j]
+			los.append(to_global(h.lo))
+			his.append(to_global(h.hi))
+			# The stand-in: the hole's box a millimetre in, its colour and
+			# material, every face lit as the top (whole numbers, as packed).
+			var sl: PackedFloat32Array = h.slot
+			var size: Vector3 = (h.hi - h.lo) - Vector3(0.002, 0.002, 0.002)
+			var mid: Vector3 = (h.lo + h.hi) * 0.5
+			var lv := clampi(roundi(float(h.sky)), 0, 15)
+			var blk := (int(sl[13]) >> 8) & 15
+			var o := j * STRIDE
+			var vals := [size.x, 0.0, 0.0, mid.x, 0.0, size.y, 0.0, mid.y, 0.0, 0.0, size.z, mid.z,
+					sl[12], float(blk * 0x111111), 0.0, sl[15],
+					float(lv * 0x111111), float(lv * 0x111111), float(lv * 0x111111), float(lv * 0x111111)]
+			for q in STRIDE:
+				cb[o + q] = vals[q]
+		else:
+			los.append(Vector3.ZERO)
+			his.append(Vector3.ZERO)
+	_cav_mm.buffer = cb
+	_cav_mm.visible_instance_count = n
+	# The ground, and its studs (a hidden brick's studs go with it).
+	for m: ShaderMaterial in [_ground, TerrainTile.sky_stud_material()]:
+		if m == null:
+			continue
+		m.set_shader_parameter(&"overlay_holes", n)
+		m.set_shader_parameter(&"overlay_hole_lo", los)
+		m.set_shader_parameter(&"overlay_hole_hi", his)
+
+
+## Its box inside the hole's (a millimetre's give).
+static func _slot_in(buf: PackedFloat32Array, i: int, lo: Vector3, hi: Vector3) -> bool:
+	var k := i * STRIDE
+	var h := Vector3(buf[k], buf[k + 5], buf[k + 10]) * 0.5
+	var c := Vector3(buf[k + 3], buf[k + 7], buf[k + 11])
+	var e := Vector3(0.001, 0.001, 0.001)
+	var a := c - h
+	var b := c + h
+	return a.x >= lo.x - e.x and a.y >= lo.y - e.y and a.z >= lo.z - e.z \
+			and b.x <= hi.x + e.x and b.y <= hi.y + e.y and b.z <= hi.z + e.z
+
+
+static func _zero_slot(buf: PackedFloat32Array, i: int) -> void:
+	var k := i * STRIDE
+	buf[k] = 0.0
+	buf[k + 5] = 0.0
+	buf[k + 10] = 0.0

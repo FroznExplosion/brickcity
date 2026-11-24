@@ -20,6 +20,8 @@ const STRIDE := 17
 var _studded := 0
 var _dark_corners := 0
 var _lit_corners := 0
+var _lost := 0
+var _covered := 0
 
 var failures := 0
 
@@ -58,6 +60,9 @@ func _initialize() -> void:
 	_expect(_studded > 0, "some bricks' tops have studs (%d)" % _studded)
 	_expect(_dark_corners > 0 and _lit_corners > 0,
 			"bricks' corners carry the sky light (%d dark, %d open air)" % [_dark_corners, _lit_corners])
+	# A few tile-edge strips aside (filler, no brick's), all of them.
+	_expect(_covered > 0 and _lost <= _covered / 100,
+			"covered faces find their brick's middle (%d of %d vertices lost)" % [_lost, _covered])
 	BrickTerrain.set_sky_light(false)
 	BrickTerrain.set_deep_tier(false)
 	BrickTerrain.set_generator(0)
@@ -146,6 +151,43 @@ func _check(tag: String, d: Dictionary, origin: Vector3) -> void:
 					first_off += " %s n%s mat%d facet%d;" % [c, nn, cu[idx[t] * 4], cu[idx[t] * 4 + 2]]
 			else:
 				used[found] = 1
+	# The shader's brick-face middle (terrain.gdshader overlay_holes): every
+	# vertex of a covered face (CUSTOM0.b 64) finds, from its UV and UV2, a
+	# point a centimetre inside one listed brick.
+	var lost := 0
+	var covered := 0
+	if not m.is_empty():
+		var vs2: PackedVector3Array = m[Mesh.ARRAY_VERTEX]
+		var ns: PackedVector3Array = m[Mesh.ARRAY_NORMAL]
+		var uv: PackedVector2Array = m[Mesh.ARRAY_TEX_UV]
+		var uv2: PackedVector2Array = m[Mesh.ARRAY_TEX_UV2]
+		var cu2: PackedByteArray = m[Mesh.ARRAY_CUSTOM0]
+		for v in vs2.size():
+			if cu2[v * 4 + 2] != 64 or uv2[v].x <= 0.0 or uv2[v].y <= 0.0:
+				continue
+			covered += 1
+			var nn := ns[v]
+			var dd := 0.5 * uv2[v] - uv[v]
+			var to_mid: Vector3
+			if absf(nn.x) > 0.5:
+				to_mid = Vector3(0.0, dd.y, dd.x * signf(nn.x))
+			elif absf(nn.z) > 0.5:
+				to_mid = Vector3(-dd.x * signf(nn.z), dd.y, 0.0)
+			else:
+				to_mid = Vector3(dd.x, 0.0, dd.y)
+			var mid := vs2[v] + to_mid - nn * 0.01 + origin
+			var k := Vector2i(floori(mid.x / stud), floori(mid.z / stud))
+			var inside := false
+			for i in cols.get(k, []):
+				var a: Vector3 = lo[i]
+				var e: Vector3 = hi[i]
+				if mid.x > a.x and mid.x < e.x and mid.y > a.y and mid.y < e.y and mid.z > a.z and mid.z < e.z:
+					inside = true
+					break
+			if not inside:
+				lost += 1
+	_lost += lost
+	_covered += covered
 	var unused := 0
 	for i in n:
 		if used[i] == 0:

@@ -7265,6 +7265,8 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                 Vector3(x1, oy, z1), Vector3(x0, oy, z1),
                 uv0, uv0 + Vector2(face.x, 0), uv0 + face, uv0 + Vector2(0, face.y));
             const uint8_t LIP_SQ = 0xF;
+            // V runs UP the lip, as up every other side: the shader finds a
+            // face's brick from UV (terrain.gdshader overlay_holes).
             // The lip: four one-plate walls round the overlay, always drawn,
             // because a neighbour at the same brick height still sits a plate
             // lower unless it carries an overlay too.
@@ -7276,19 +7278,19 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
             m.quad(Vector3(0, 0, -1), col, lip,
                 Vector3(x0, lb, z0), Vector3(x1, lb, z0),
                 Vector3(x1, oy, z0), Vector3(x0, oy, z0),
-                Vector2(0, lip.y), Vector2(lip.x, lip.y), Vector2(lip.x, 0), Vector2(0, 0), 0, LIP_SQ);
+                Vector2(0, 0), Vector2(lip.x, 0), Vector2(lip.x, lip.y), Vector2(0, lip.y), 0, LIP_SQ);
             m.quad(Vector3(0, 0, 1), col, lip,
                 Vector3(x1, lb, z1), Vector3(x0, lb, z1),
                 Vector3(x0, oy, z1), Vector3(x1, oy, z1),
-                Vector2(0, lip.y), Vector2(lip.x, lip.y), Vector2(lip.x, 0), Vector2(0, 0), 0, LIP_SQ);
+                Vector2(0, 0), Vector2(lip.x, 0), Vector2(lip.x, lip.y), Vector2(0, lip.y), 0, LIP_SQ);
             m.quad(Vector3(-1, 0, 0), col, lip_z,
                 Vector3(x0, lb, z1), Vector3(x0, lb, z0),
                 Vector3(x0, oy, z0), Vector3(x0, oy, z1),
-                Vector2(0, lip_z.y), Vector2(lip_z.x, lip_z.y), Vector2(lip_z.x, 0), Vector2(0, 0), 0, LIP_SQ);
+                Vector2(0, 0), Vector2(lip_z.x, 0), Vector2(lip_z.x, lip_z.y), Vector2(0, lip_z.y), 0, LIP_SQ);
             m.quad(Vector3(1, 0, 0), col, lip_z,
                 Vector3(x1, lb, z0), Vector3(x1, lb, z1),
                 Vector3(x1, oy, z1), Vector3(x1, oy, z0),
-                Vector2(0, lip_z.y), Vector2(lip_z.x, lip_z.y), Vector2(lip_z.x, 0), Vector2(0, 0), 0, LIP_SQ);
+                Vector2(0, 0), Vector2(lip_z.x, 0), Vector2(lip_z.x, lip_z.y), Vector2(0, lip_z.y), 0, LIP_SQ);
             if (boxed) {
                 m.facet = 0;
             }
