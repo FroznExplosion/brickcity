@@ -97,11 +97,26 @@ struct Shape {
     double share = 0.0;
 };
 
+/// The mix at one depth: shares a shape (by FitParams::shapes' index) and
+/// heights. Band 0 is the surface's; a band applies from `below_m` metres
+/// under the column's surface down (Docs/TerrainRegions.md 11: caves use
+/// other bricks the deeper they are).
+struct Band {
+    double below_m = 0.0;
+    std::vector<double> share;
+    double heights[3] = { 1.0, 0.0, 0.0 };
+};
+
 struct FitParams {
     std::string name;
+    std::vector<Band> bands;    ///< by depth; [0] the surface's
+    /// Bricks may span materials (stone with coal in it); a brick takes the
+    /// material of most of its cells, each cell keeps its own for drawing.
+    bool mixed = true;
+    double cave_stagger = -2.0; ///< the stagger near cave air (-2: as `stagger`)
+    int cave_reach = 2;         ///< cells from cave air that count as near it
     bool bond = false;          ///< the old pattern (brick::bond_rect), the reference
     std::vector<Shape> shapes;  ///< 1x1 always among them
-    double heights[3] = { 1.0, 0.0, 0.0 };
     /// The stagger as a filter: among the shapes that fit at a cell, only
     /// those whose outline lies on seams of the course below / above no more
     /// than the best one's share + this are drawn from (0: always the best
@@ -149,6 +164,9 @@ public:
 
     void run() {
         f_.id.assign(a_.kind.size(), -1);
+        prepare();
+        share_ = p_.bands[0].share.data();
+        heights_ = p_.bands[0].heights;
         const uint64_t t0 = godot::Time::get_singleton()->get_ticks_usec();
         if (p_.bond) {
             bond_all();
@@ -183,6 +201,53 @@ private:
     int n_ = 0;
     int seed_ = 1;
     int64_t st_seams_ = 0, st_units_ = 0;
+    const double *share_ = nullptr;   ///< the current band's shares
+    const double *heights_ = nullptr;
+    std::vector<int16_t> top_;        ///< a column's highest solid local course, -1 none
+    std::vector<uint8_t> near_cave_;  ///< per cell: within cave_reach of cave air
+
+    /// Columns' tops, and cave air (air under its column's top) grown by
+    /// cave_reach: where the stagger is the caves' (weaker).
+    void prepare() {
+        top_.assign((size_t)AREA * AREA, -1);
+        for (int lz = 0; lz < AREA; ++lz)
+            for (int lx = 0; lx < AREA; ++lx)
+                for (int lc = a_.nc - 1; lc >= 0; --lc)
+                    if (a_.kind[(size_t)a_.idx(lx, lz, lc)] != K_AIR) { top_[(size_t)(lx + AREA * lz)] = (int16_t)lc; break; }
+        near_cave_.assign(a_.kind.size(), 0);
+        if (p_.cave_stagger < -1.5) return;
+        const int R = p_.cave_reach;
+        for (int lc = 0; lc < a_.nc; ++lc)
+            for (int lz = 0; lz < AREA; ++lz)
+                for (int lx = 0; lx < AREA; ++lx) {
+                    if (a_.kind[(size_t)a_.idx(lx, lz, lc)] != K_AIR || lc >= top_[(size_t)(lx + AREA * lz)]) continue;
+                    for (int dc = -R; dc <= R; ++dc)
+                        for (int dz = -R; dz <= R; ++dz)
+                            for (int dx = -R; dx <= R; ++dx)
+                                if (a_.in(lx + dx, lz + dz, lc + dc)) near_cave_[(size_t)a_.idx(lx + dx, lz + dz, lc + dc)] = 1;
+                }
+    }
+
+    /// The band of a square's course: its bond cells' mean depth under
+    /// their columns' tops.
+    void pick_band(int c, int bx, int bz) {
+        double depth = 0.0;
+        int n = 0;
+        const int lc = c - a_.c0;
+        for (int dz = 0; dz < SQ; ++dz)
+            for (int dx = 0; dx < SQ; ++dx) {
+                const int lx = bx + dx - a_.ox, lz = bz + dz - a_.oz;
+                if (!a_.in(lx, lz, lc) || a_.kind[(size_t)a_.idx(lx, lz, lc)] < K_MEDIUM) continue;
+                depth += (double)(top_[(size_t)(lx + AREA * lz)] - lc);
+                ++n;
+            }
+        const double m = n > 0 ? depth / n * (double)BrickTerrain::get_brick_metres() : 0.0;
+        size_t b = 0;
+        for (size_t k = 0; k < p_.bands.size(); ++k)
+            if (p_.bands[k].below_m <= m) b = k;
+        share_ = p_.bands[b].share.data();
+        heights_ = p_.bands[b].heights;
+    }
 
     int at(int x, int z, int c) const {
         const int lx = x - a_.ox, lz = z - a_.oz, lc = c - a_.c0;
@@ -190,6 +255,17 @@ private:
     }
 
     int place(int x, int z, int c, int sx, int sz, int h, int mat, int layer, int64_t reg, bool loose) {
+        if (!loose && (sx * sz * h) > 1) {
+            // The material of most of its cells (its strength, its item).
+            int count[64] = { 0 };
+            for (int cc = c; cc < c + h; ++cc)
+                for (int zz = z; zz < z + sz; ++zz)
+                    for (int xx = x; xx < x + sx; ++xx) ++count[a_.mat[(size_t)at(xx, zz, cc)] & 63];
+            int best = mat & 63;
+            for (int m = 0; m < 64; ++m)
+                if (count[m] > count[best]) best = m;
+            mat = best;
+        }
         const int id = (int)f_.bricks.size();
         f_.bricks.push_back(Brick{ x, z, c, sx, sz, h, mat, layer, reg, loose });
         for (int cc = c; cc < c + h; ++cc) {
@@ -305,7 +381,7 @@ private:
                 region_once(rx, rz, L);
                 double dev = 0.0;
                 for (size_t si = 0; si < p_.shapes.size(); ++si) {
-                    dev += std::fabs((n_ > 0 ? (double)cnt_[si] / n_ : 0.0) - p_.shapes[si].share);
+                    dev += std::fabs((n_ > 0 ? (double)cnt_[si] / n_ : 0.0) - p_.bands[0].share[si]);
                 }
                 const double sc = dev + p_.try_seams * (st_units_ > 0 ? (double)st_seams_ / st_units_ : 0.0);
                 if (sc < best) { best = sc; best_t = t; }
@@ -342,6 +418,7 @@ private:
             if (c < a_.c0 || c >= a_.c0 + a_.nc) continue;
             const int o = course_off(c);
             const int bx = rx * SQ + o, bz = rz * SQ + o;
+            pick_band(c, bx, bz);
             if (p_.wide_first) wide_pass(c, k, rx, rz, L, reg, bx, bz);
             for (int u = 0; u < SQ; ++u) {
                 for (int v = 0; v < SQ; ++v) {
@@ -362,16 +439,16 @@ private:
                     for (size_t si = 0; si < p_.shapes.size(); ++si) {
                         const Shape &sh = p_.shapes[si];
                         if (kind == K_MEDIUM && sh.a * sh.b > p_.medium_max) continue;
-                        const double qw = std::max(0.02, sh.share * (n_ + 1) - cnt_[si]);
+                        const double qw = std::max(0.02, share_[si] * (n_ + 1) - cnt_[si]);
                         for (int orient = 0; orient < (sh.a == sh.b ? 1 : 2); ++orient) {
                             const int sx = orient ? sh.b : sh.a, sz = orient ? sh.a : sh.b;
                             const int x0 = flip_x ? x - sx + 1 : x, z0 = flip_z ? z - sz + 1 : z;
                             const int x1 = x0 + sx - 1, z1 = z0 + sz - 1;
                             for (int h = 1; h <= 3 - k; ++h) {
                                 // fits() checks only the new course: a height left out ends the taller ones.
-                                if (h > 1 && p_.heights[h - 1] <= 0.0) break;
+                                if (h > 1 && heights_[h - 1] <= 0.0) break;
                                 if (!fits(x0, x1, z0, z1, c, h, rx, rz, kind, mat, reg)) break;
-                                const double hw = std::max(0.02, p_.heights[h - 1] * (n_ + 1) - hcnt_[h - 1]);
+                                const double hw = std::max(0.02, heights_[h - 1] * (n_ + 1) - hcnt_[h - 1]);
                                 const double w = qw * hw;
                                 double frac = 0.0;
                                 if (p_.stagger >= 0.0) {
@@ -394,8 +471,9 @@ private:
                     if (p_.stagger >= 0.0) {
                         double best = 1e9;
                         for (const Cand &cd : cand) best = std::min(best, cd.frac);
+                        const double tol = (near_cave_[(size_t)i] && p_.cave_stagger > -1.5) ? p_.cave_stagger : p_.stagger;
                         for (Cand &cd : cand) {
-                            if (cd.frac > best + p_.stagger + 1e-9) cd.w = 0.0;
+                            if (tol >= 0.0 && cd.frac > best + tol + 1e-9) cd.w = 0.0;
                         }
                     }
                     for (const Cand &cd : cand) total += cd.w;
@@ -438,20 +516,35 @@ private:
         }
         if (cells == 0) return;
         double mean = 0.0, tot = 0.0;
-        for (const Shape &sh : p_.shapes) { mean += sh.share * sh.a * sh.b; tot += sh.share; }
+        for (size_t si = 0; si < p_.shapes.size(); ++si) {
+            mean += share_[si] * p_.shapes[si].a * p_.shapes[si].b;
+            tot += share_[si];
+        }
         if (tot <= 0.0) return;
         const double n_est = (double)cells / (mean / tot);
         std::vector<int> want(p_.shapes.size(), 0);
         for (size_t si = 0; si < p_.shapes.size(); ++si) {
-            if (p_.shapes[si].a >= 2) want[si] = (int)std::lround(p_.shapes[si].share / tot * n_est);
+            if (p_.shapes[si].a >= 2) want[si] = (int)std::lround(share_[si] / tot * n_est);
         }
         std::vector<int> order(SQ * SQ);
         for (int q = 0; q < SQ * SQ; ++q) order[(size_t)q] = q;
         std::sort(order.begin(), order.end(), [&](int x, int y) {
             return brick::bond_hash(x, rx * 31 + rz, c ^ seed_) < brick::bond_hash(y, rx * 31 + rz, c ^ seed_);
         });
-        // Biggest shape first (the list is sorted so), each to its share.
-        for (size_t si = 0; si < p_.shapes.size(); ++si) {
+        // The most wanted wide shape first (a rare big one placed first took
+        // the common ones' room), each to its share.
+        std::vector<size_t> by_share;
+        for (size_t si = 0; si < p_.shapes.size(); ++si) by_share.push_back(si);
+        // Shapes of 8 cells and more first, biggest first (each only to its
+        // own small share), then the rest by share.
+        std::stable_sort(by_share.begin(), by_share.end(), [&](size_t x, size_t y) {
+            const int ax = p_.shapes[x].a * p_.shapes[x].b, ay = p_.shapes[y].a * p_.shapes[y].b;
+            const bool bx = ax >= 8, byy = ay >= 8;
+            if (bx != byy) return bx;
+            if (bx) return ax > ay;
+            return share_[x] > share_[y];
+        });
+        for (size_t si : by_share) {
           for (int q : order) {
             if (want[si] <= 0) break;
             const int x = bx + q % SQ, z = bz + q / SQ;
@@ -519,7 +612,7 @@ private:
                 const int nid = f_.id[(size_t)i];
                 if (nid < 0 || nid == (int)bi) continue;
                 Brick &n = f_.bricks[(size_t)nid];
-                if (n.dead || n.loose || n.h != 1 || n.c != b.c || n.mat != b.mat || n.region != reg) continue;
+                if (n.dead || n.loose || n.h != 1 || n.c != b.c || (!p_.mixed && n.mat != b.mat) || n.region != reg) continue;
                 // Round 0 pairs 1x1s; round 1 grows longer bricks, but only a shape under its share.
                 if (round == 0 && (n.sx != 1 || n.sz != 1)) continue;
                 int nx = n.x, nz = n.z, nsx = n.sx, nsz = n.sz;
@@ -534,7 +627,7 @@ private:
                 }
                 const int to = shape_index(nsx, nsz);
                 if (to < 0) continue;
-                if (round == 1 && cnt_[(size_t)to] + 1 > p_.shapes[(size_t)to].share * (n_ + 1) + 1) continue;
+                if (round == 1 && cnt_[(size_t)to] + 1 > share_[(size_t)to] * (n_ + 1) + 1) continue;
                 const int from = shape_index(n.sx, n.sz);
                 if (from >= 0) --cnt_[(size_t)from];
                 ++cnt_[(size_t)to];
@@ -555,7 +648,8 @@ private:
         for (int zz = z0; zz <= z1; ++zz) {
             for (int xx = x0; xx <= x1; ++xx) {
                 const int i = at(xx, zz, cc);
-                if (i < 0 || f_.id[(size_t)i] >= 0 || a_.kind[(size_t)i] != kind || a_.mat[(size_t)i] != mat) return false;
+                if (i < 0 || f_.id[(size_t)i] >= 0) return false;
+                if (p_.mixed ? a_.kind[(size_t)i] < K_MEDIUM : (a_.kind[(size_t)i] != kind || a_.mat[(size_t)i] != mat)) return false;
             }
         }
         return true;
@@ -729,11 +823,25 @@ int best_slice(const Area &a) {
     return best;
 }
 
+void parse_mix(const Dictionary &shapes, std::vector<std::pair<std::pair<int, int>, double>> &out) {
+    const Array keys = shapes.keys();
+    for (int i = 0; i < keys.size(); ++i) {
+        const String k = keys[i];
+        const PackedStringArray ab = k.split("x");
+        if (ab.size() != 2) continue;
+        const int a = std::min(ab[0].to_int(), ab[1].to_int()), b = std::max(ab[0].to_int(), ab[1].to_int());
+        out.push_back({ { a, b }, (double)shapes[k] });
+    }
+}
+
 FitParams parse(const Dictionary &d) {
     FitParams p;
     p.name = String(d.get("name", "")).utf8().get_data();
     p.bond = String(d.get("mode", "quota")) == "bond";
     p.stagger = (double)d.get("stagger", -1.0);
+    p.cave_stagger = (double)d.get("cave_stagger", -2.0);
+    p.cave_reach = (int)d.get("cave_reach", 2);
+    p.mixed = (bool)d.get("mixed", true);
     p.cross = (double)d.get("cross", 1.0);
     p.medium_max = (int)d.get("medium_max", 8);
     p.seed = (int)d.get("seed", 1);
@@ -742,27 +850,57 @@ FitParams parse(const Dictionary &d) {
     p.wide_first = (bool)d.get("wide_first", true);
     p.tries = (int)d.get("tries", 1);
     p.try_seams = (double)d.get("try_seams", 1.0);
-    p.wide_seams = (double)d.get("wide_seams", 0.25);
-    const Array hs = d.get("heights", Array());
-    for (int i = 0; i < 3 && i < hs.size(); ++i) p.heights[i] = (double)hs[i];
-    const Dictionary sh = d.get("shapes", Dictionary());
-    bool one = false;
-    const Array keys = sh.keys();
-    for (int i = 0; i < keys.size(); ++i) {
-        const String k = keys[i];
-        const PackedStringArray ab = k.split("x");
-        if (ab.size() != 2) continue;
-        Shape s;
-        s.a = std::min(ab[0].to_int(), ab[1].to_int());
-        s.b = std::max(ab[0].to_int(), ab[1].to_int());
-        s.share = (double)sh[k];
-        one = one || (s.a == 1 && s.b == 1);
-        p.shapes.push_back(s);
+    const double aim = (double)d.get("aim", 0.0);
+    // Every band's mix; the shapes are the union, 1x1 always among them.
+    struct Raw {
+        double below;
+        std::vector<std::pair<std::pair<int, int>, double>> mix;
+        double h[3];
+    };
+    std::vector<Raw> raw;
+    auto read_heights = [](const Array &hs, double *h) {
+        if (hs.is_empty()) return;
+        for (int i = 0; i < 3; ++i) h[i] = i < hs.size() ? (double)hs[i] : 0.0;
+    };
+    Raw top{ 0.0, {}, { 1.0, 0.0, 0.0 } };
+    parse_mix(d.get("shapes", Dictionary()), top.mix);
+    read_heights(d.get("heights", Array()), top.h);
+    raw.push_back(top);
+    const Array bands = d.get("bands", Array());
+    for (int i = 0; i < bands.size(); ++i) {
+        const Dictionary bd = bands[i];
+        Raw r{ (double)bd.get("below_m", 0.0), {}, { top.h[0], top.h[1], top.h[2] } };
+        parse_mix(bd.get("shapes", Dictionary()), r.mix);
+        if (r.mix.empty()) r.mix = top.mix;
+        read_heights(bd.get("heights", Array()), r.h);
+        raw.push_back(r);
     }
+    std::sort(raw.begin() + 1, raw.end(), [](const Raw &x, const Raw &y) { return x.below < y.below; });
+    for (const Raw &r : raw)
+        for (const auto &e : r.mix) {
+            bool have = false;
+            for (const Shape &sh : p.shapes) have = have || (sh.a == e.first.first && sh.b == e.first.second);
+            if (!have) p.shapes.push_back(Shape{ e.first.first, e.first.second, 0.0 });
+        }
+    bool one = false;
+    for (const Shape &sh : p.shapes) one = one || (sh.a == 1 && sh.b == 1);
     if (!one) p.shapes.push_back(Shape{ 1, 1, 0.0 });
-    // Biggest first in the list: a candidate that does not fit stops its
-    // heights early, and ties break toward the earlier shape.
+    // Biggest first: the wide pass goes in this order, ties to the earlier.
     std::sort(p.shapes.begin(), p.shapes.end(), [](const Shape &x, const Shape &y) { return x.a * x.b > y.a * y.b; });
+    for (const Raw &r : raw) {
+        Band b;
+        b.below_m = r.below;
+        for (int i = 0; i < 3; ++i) b.heights[i] = r.h[i];
+        b.share.assign(p.shapes.size(), 0.0);
+        for (const auto &e : r.mix)
+            for (size_t si = 0; si < p.shapes.size(); ++si)
+                if (p.shapes[si].a == e.first.first && p.shapes[si].b == e.first.second)
+                    // Aim high on the wide shapes, in proportion: the
+                    // ground's gaps leave them short of what is asked.
+                    b.share[si] = e.second * (p.shapes[si].a >= 2 ? 1.0 + aim : 1.0);
+        p.bands.push_back(b);
+    }
+    for (size_t si = 0; si < p.shapes.size(); ++si) p.shapes[si].share = p.bands[0].share[si];
     return p;
 }
 
