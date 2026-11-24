@@ -145,8 +145,22 @@ have needed work before.
 - **W1** read the ground from the terrain's kept cells (after TerrainRegions
   stage A): `sample_column` stops working out noise per column (a first read
   10-13 us; the real-sea square ~12 ms a tile; springs ~10 ms a tile).
-- **W2** re-measure the tick in a release build, editor closed (2026-11-17:
-  885 ns a flowing cell, 173 ns a still cell) before adding levelling.
+- **W2 -- measured 2026-11-24**, editor closed, nothing else running, started under 75 C
+  (`fluid_bench_probe`). Release library (template_release, the worktree's .gdextension
+  pointed at it for the run) and the usual debug one, which is /O2 too, come out the same
+  within heat noise -- the debug build is the game's real number:
+
+  | | release | debug |
+  |---|---|---|
+  | flood, 64 sources (rules a cell) | 943 ns | 776 ns |
+  | spill, 10k bricks (rules a cell) | 223 ns | 186 ns |
+  | spill: mean / worst busy tick | 32.8 / 105 ms | 27.7 / 89 ms |
+  | spill: meshing share of the tick | 66 % (0.91 ms a tile) | 77 % (0.78 ms a tile) |
+  | calm world, a tick | 0.038 ms | 0.033 ms |
+
+  The same as 2026-11-17 (885 / 173 ns). **The rules are not the cost: meshing is** -- two
+  thirds or more of a busy tick, ~0.8 ms a tile re-meshed. That is where to look before
+  anything else (fewer re-meshes a tick for slow changes, cheaper tops), not the cells.
 - **W3 -- done 2026-11-24.** Past 1.5 x the sim radius plus a tile (~112 m;
   was 2 x), with nothing queued: a section never written -- dry, or only the
   generated sea, lakes, pools -- is let go (sampled afresh if asked); a written
@@ -199,7 +213,15 @@ have needed work before.
    Was: **S4** R3/R4: no placing on water (decision A); the beach on lakes and
    rivers; a removed brick heals. Probe: place on water refused; a 1x1 hole
    and a shore hole refill.
-7. **W2** the tick measured, then **P** levelling by bodies (section 4).
+7. **W2 -- done** (section 6). **P -- done 2026-11-24.** A still cell resting on full still
+   water seeds its body (`g_level_due`); 2 s calm, the body (connected still cells, at most
+   4,096) is levelled: its units laid again from the lowest floor up, a unit layer at a time,
+   through every opening (a priority flood over the cells' floors), only changed cells
+   written. Left alone when open (a cell found lower than the level: the rules run it),
+   joined to running or infinite water, or too big. That tick's earlier sets and moves on
+   levelled cells are dropped (the apply keeps a cell's FIRST set: an edge-distance update
+   had won and two units went). `fluid_probe` 15: a U-bend fills both arms to one level,
+   48 of 48 units.
 8. **W1** after TerrainRegions stage A; **W3**; **R10** rain and **W4** with
    the user.
 

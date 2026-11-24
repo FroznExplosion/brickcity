@@ -44,7 +44,8 @@ extends SceneTree
 ##   reads and saves the same, and is whole again when the player is back;
 ## - S3: a lake's open top rides a wave (rim flat, a lone source flat), the
 ##   surface asked for is that wave, a ray through a crest hits the lake; a
-##   brick laid in it and broken heals, in the middle and at its shore (R4).
+##   brick laid in it and broken heals, in the middle and at its shore (R4);
+## - P: water poured down one arm of a U-bend levels in both, every unit kept.
 
 const FLOOR := 1000          ## floor course: plates 3000-3002
 const W := FLOOR + 1         ## the course water stands in
@@ -930,6 +931,38 @@ func _run() -> void:
 			and int(_info(lx0, W, 0).kind) == BrickFluid.SOURCE and _amt(lx0, W, 0) == 6,
 			"%s %s" % [_info(lx0 + 7, W, 0), _info(lx0, W, 0)])
 	BrickFluid.set_wave_clock(0.0)
+	BrickFluid.reset(20.0, false)
+	BrickTerrain.clear_terrain_edits()
+
+	# 15. Water fills its shape (stage P, Docs/MineWaterNext.md 4): poured
+	# down one arm of a U-bend it used to stand there; once calm, the body is
+	# levelled -- both arms at one level, every unit kept.
+	_sec("15")
+	BrickFluid.set_centre(Vector3(0, 0, 0), 100000.0)
+	_floor(7990, -10, 8020, 10)
+	BrickTerrain.fill_box(Vector3i(8000, W * 3, -1), Vector3i(8006, (W + 4) * 3 + 2, 1), 4, false)
+	BrickTerrain.fill_box(Vector3i(8001, W * 3, 0), Vector3i(8005, W * 3 + 2, 0), 0, false)
+	BrickTerrain.fill_box(Vector3i(8001, W * 3, 0), Vector3i(8001, (W + 4) * 3 + 2, 0), 0, false)
+	BrickTerrain.fill_box(Vector3i(8005, W * 3, 0), Vector3i(8005, (W + 4) * 3 + 2, 0), 0, false)
+	BrickFluid.terrain_changed(Vector3i(8000, W * 3, -1), Vector3i(8006, (W + 4) * 3 + 2, 1))
+	# (Each brick poured once the last has left the top cell: a place sets a
+	# cell, it does not add to it.)
+	for i in 8:
+		BrickFluid.place(Vector3i(8001, W + 4, 0), 1, BrickFluid.STILL, 3)
+		for pt in 60:
+			BrickFluid.tick_now(1)
+			if pt > 2 and _amt(8001, W + 4, 0) == 0:
+				break
+	_settle(400)
+	var u_total := 0
+	for b in range(W, W + 5):
+		for x in range(8001, 8006):
+			u_total += _amt(x, b, 0)
+	_ok("a U-bend fills both arms to one level", _amt(8005, W + 1, 0) == 6 and _amt(8001, W + 1, 0) == 6
+			and _amt(8001, W + 2, 0) + _amt(8005, W + 2, 0) == 6 and absi(_amt(8001, W + 2, 0) - _amt(8005, W + 2, 0)) <= 1
+			and _amt(8001, W + 3, 0) == 0 and u_total == 48,
+			"arm A %d %d %d, arm B %d %d %d, %d units (want 48)" % [_amt(8001, W + 1, 0), _amt(8001, W + 2, 0),
+			_amt(8001, W + 3, 0), _amt(8005, W + 1, 0), _amt(8005, W + 2, 0), _amt(8005, W + 3, 0), u_total])
 	BrickFluid.reset(20.0, false)
 	BrickTerrain.clear_terrain_edits()
 
