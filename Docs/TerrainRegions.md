@@ -569,3 +569,20 @@ blocking edit is the terrain area's, small, and can go any time.
   breaks from one hit, and the survey can stop counting at N (cheaper than
   today's 1.2 M-cell limit). Groups under N hanging by a neck are the
   instability. Stage D, or earlier on its own (it is the survey only).
+- **Shares are loose: target +-5 points** (20 % means 15-25 % by count).
+  The shapes a world may use and their shares are SETTINGS (the worldgen
+  preset and its menu); sand, red sand and gravel are always 1x1 whatever
+  the settings say.
+- **Crossing chunk seams is a knob too**: a chance a brick may cross a tile
+  edge or section boundary (where it fits). Lower = fewer 2-4 chunk
+  rebuilds per break; higher = fewer crack planes on tile edges (crossing
+  cut seams over seams there 40-44 %). region_fit_probe reports both so the
+  default is picked from numbers.
+- **Stage A, done by the terrain-audit chat** (2970aa35, MineWorld.md 21
+  item 1): tiles and deep sections keep their GENERATED cells (`GenStore`,
+  the sample's raw `vox`, ~180 KB a surface tile, 64 kept each, LRU by use),
+  edits laid over on each sample; find_brick 5.1 -> 0.2 ms, a rebuild 10 ->
+  5 ms. Not the run form of section 2 and not every near tile (64, not
+  ~240): enough for breaks; the fit's 8-stud reach and the water (W1) may
+  want more kept, to be measured. W3 (far water let go or parked) merged by
+  the water chat (f546587b).
