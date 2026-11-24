@@ -359,9 +359,13 @@ void vertex() {
     if (behind && (overlay_reach <= 0.0
             || distance(v_world, INV_VIEW_MATRIX[3].xyz) >= overlay_reach)) {
         VERTEX = vec3(0.0);
-    } else if (overlay_reach > 0.0 && (behind || abs(CUSTOM0.b * 255.0 - 64.0) < 0.5)) {
+    } else if ((overlay_reach > 0.0 || (overlay_holes > 0 && !behind))
+            && (behind || abs(CUSTOM0.b * 255.0 - 64.0) < 0.5)) {
+        // Covered faces fold where a hidden brick is at ANY range (a far shot
+        // has no box, TerrainBricks._hide_far); they sink only in the reach.
         float od = distance(v_world, INV_VIEW_MATRIX[3].xyz);
-        float ok = 1.0 - smoothstep(overlay_reach - overlay_fade, overlay_reach, od);
+        float ok = overlay_reach > 0.0
+                ? 1.0 - smoothstep(overlay_reach - overlay_fade, overlay_reach, od) : 0.0;
         // Where the face would lie sunk along its normal: the hole test's
         // place in its brick (below) is measured from there.
         vec3 sunk = VERTEX - normalize(NORMAL) * (OVERLAY_RECESS * ok);

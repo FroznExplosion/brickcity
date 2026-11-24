@@ -861,6 +861,10 @@ public:
     /// Bake the faces behind the overlay's bricks (Docs/BrickOverlay.md 6b).
     static void set_behind_faces(bool on);
     static bool get_behind_faces();
+    /// Behind faces only round the eye: its tile (x, z) and plate (y).
+    static void set_behind_centre(Vector3i tile_plate);
+    /// Would a bake now give this tile (sy = INT_MIN) or section behind faces?
+    static bool behind_wanted(int tx, int sy, int tz);
     static bool get_flat_mode();
     static void set_overlay_chance(double chance);
     static double get_overlay_chance();
@@ -952,6 +956,13 @@ public:
     /// (bricks shot and hidden till their tile is rebuilt, TerrainBricks).
     static Dictionary overlay_pick(const Array &lists, Vector3 eye, Vector3 forward, double range_m,
             double cos_half, int max_bricks, const PackedVector3Array &hidden);
+    /// The listed brick (overlay_bricks' 17 floats) whose box holds `point`,
+    /// from any of `lists` -- at any range, not only what overlay_pick laid
+    /// (a far shot). {brick: its floats, lo, hi: its box with any brick
+    /// stacked on or under it on the same footprint (a piece's plate or
+    /// tile), each face's light from the list that drew more of it}; empty
+    /// when none holds it.
+    static Dictionary overlay_find(const Array &lists, Vector3 point);
     /// FOR PROBES (Docs/MineWorld.md 20): the flat mesh and colliders of a
     /// tile (sy = INT32_MIN) or deep section, checked against the field.
     ///   exposed, undrawn   faces of owned solid cells against OPEN air, and

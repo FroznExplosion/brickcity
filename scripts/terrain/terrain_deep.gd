@@ -268,8 +268,18 @@ func _drop() -> void:
 ## An edit's plate box (fill_box, clear_runs, carve: box_lo / box_hi, cells):
 ## the sections it touches are baked again, behind the drawn ones.
 func refresh_box(lo: Vector3i, hi: Vector3i) -> void:
+	_refresh_keys(_box_keys(lo, hi))
+
+
+## One section baked again as an edit's are (swapped whole when it lands):
+## the mine world's ring of behind faces (Docs/BrickOverlay.md 6b).
+func rebake(k: Vector3i) -> void:
+	_refresh_keys([k])
+
+
+func _refresh_keys(keys: Array) -> void:
 	var batch := {"keys": {}, "since": 0}
-	for k in _box_keys(lo, hi):
+	for k in keys:
 		if _tasks.has(k):
 			_stale[k] = true
 		elif _secs.has(k):
