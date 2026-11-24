@@ -5292,7 +5292,11 @@ func _hop_in() -> void:
 			near.append([d, so])
 	near.sort_custom(func(x: Array, y: Array) -> bool: return x[0] < y[0])
 	if seat >= 0 and not near.is_empty():
-		(near.pop_front()[1] as Soldier).ride_on(v, seat)
+		var gunner := near.pop_front()[1] as Soldier
+		gunner.ride_on(v, seat)
+		# His seat is the player's to give back: he gets out with the player
+		# (CityVehicles.leave_vehicle), as the deck's riders get down.
+		gunner.pawn.set_meta(&"hopped_in", v)
 	for i in mini(room, near.size()):
 		(near[i][1] as Soldier).ride_on(v)
 

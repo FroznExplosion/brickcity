@@ -605,6 +605,20 @@ func _run_vehicles_pass() -> void:
 	await _frames(2)
 	_key(KEY_M, false)
 	await _frames(10)
+	# He rode with the player; out they get together (CityScene._hop_in: "until
+	# the player gets out"). He stayed shut in the parked tank until 2026-11-24.
+	var gunner_at: float = gunner.pawn.feet().distance_to(t.feet())
+	var apart: float = gunner.pawn.feet().distance_to(city._player_pawn.feet())
+	_gate_ok("M gets out, and the friend in the gunner's seat gets out with the player",
+			not city._vehicle_pilot.is_driving() and t.crew_count() == 0
+			and not gunner.pawn.has_meta(&"in_vehicle") and gunner.pawn.body.visible
+			and gunner_at < 6.0 and apart > 0.6,
+			"tank crew %d, in_vehicle %s, %.1f m from the tank, %.1f m from the player" % [
+				t.crew_count(), gunner.pawn.has_meta(&"in_vehicle"), gunner_at, apart])
+	await _frames(60)
+	_gate_ok("  and he is back on his feet, a soldier of the fight again",
+			city.ai_services.pawns.has(gunner.pawn) and gunner.pawn.body.process_mode != Node.PROCESS_MODE_DISABLED
+			and gunner.board_vehicle == null, "state %s" % gunner.state)
 	print("[vehicles] %d ok, %d FAIL" % [city._gate_pass, city._gate_fail])
 	city.get_tree().quit(1 if city._gate_fail > 0 else 0)
 
