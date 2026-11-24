@@ -294,7 +294,7 @@ func hide_at(point: Vector3, dir: Vector3) -> int:
 		var top_sky := 0.0
 		for corner in 4:
 			var n := 8 + corner
-			top_sky += float((int(buffer[k + 16 + n / 6]) >> (4 * (n % 6))) & 15) / 4.0
+			top_sky += float((int(buffer[k + 16 + int(n / 6.0)]) >> (4 * (n % 6))) & 15) / 4.0
 		var slot := buffer.slice(k, k + STRIDE)
 		_zero_slot(buffer, i)
 		_mm.set_instance_transform(i, Transform3D(Basis().scaled(Vector3.ZERO), c))
