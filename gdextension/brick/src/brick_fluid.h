@@ -76,6 +76,9 @@ public:
     static bool busy();
     /// Mesh one tile now (probes, a tile coming into view).
     static Dictionary build_tile_mesh(int tx, int tz);
+    /// Per fluid (none, water, lava): seconds a mesh's corners take to ease
+    /// to their new heights (the shader's ease_s must match).
+    static PackedFloat32Array ease_seconds();
     /// Ask for a tile's mesh with the next tick (it came into view).
     static void request_mesh(int tx, int tz);
     /// Ask for a tile's FAR mesh (one quad per 4 x 4 studs, no sides) with the

@@ -58,6 +58,15 @@ static func sync_all() -> void:
 			d.set_shader_parameter(n, m.get_shader_parameter(n))
 
 
+## Debug: every see-through material draws its alpha (sea tiers orange,
+## fluid water blue; brighter is more opaque).
+static func set_debug(on: bool) -> void:
+	for w in _pairs:
+		var m: ShaderMaterial = (w as WeakRef).get_ref()
+		if m != null:
+			m.set_shader_parameter("see_debug", on)
+
+
 static func _uniforms(s: Shader) -> PackedStringArray:
 	if not _names.has(s):
 		var out := PackedStringArray()

@@ -261,11 +261,16 @@ void fragment() {
 #ifdef SEE_THROUGH
 	// The water material only (the lava's is the plain shader).
 	ALPHA = see_alpha(SCREEN_UV, VERTEX, INV_PROJECTION_MATRIX);
+	if (see_debug) { EMISSION = vec3(0.0, ALPHA * 0.6, ALPHA); ALBEDO = vec3(0.0); ALPHA = 1.0; }
 #endif
 #ifdef SEE_DEPTH
 	// Depth only, a hair behind the surface: the colour pass at the surface
 	// passes, any water face behind it does not.
 	ALPHA = 0.0;
-	DEPTH = FRAGCOORD.z * 0.9995;
+	// Plus its own change across the pixel: with MSAA the colour pass is
+	// tested per sample against this one per-pixel depth, and at a low angle
+	// a sample off the centre fell behind it -- far water vanished past a
+	// line (the user, 2026-11-23, MSAA 2x).
+	DEPTH = max(FRAGCOORD.z * 0.9995 - 1.5 * fwidth(FRAGCOORD.z), 0.0);
 #endif
 }

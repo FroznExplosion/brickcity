@@ -10,6 +10,8 @@ uniform sampler2D see_depth : hint_depth_texture, filter_nearest;
 uniform float see_clear_m = 1.0;
 /// The least opaque water is, a film over its floor.
 uniform float see_min_alpha = 0.45;
+/// Debug: draw the alpha itself, grey (WaterShaders.set_debug).
+uniform bool see_debug = false;
 
 float see_alpha(vec2 suv, vec3 view_pos, mat4 inv_proj) {
 	float d = texture(see_depth, suv).r;

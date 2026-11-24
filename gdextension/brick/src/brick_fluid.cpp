@@ -4,6 +4,7 @@
 #include "terrain_biomes.h"
 
 #include <godot_cpp/classes/mesh.hpp>
+#include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/color.hpp>
 #include <godot_cpp/variant/packed_color_array.hpp>
@@ -276,6 +277,7 @@ struct MeshOut {
     int tx, tz;
     Array water, lava;
     bool is_far = false;   ///< the coarse mesh (MineWater.md 8)
+    double built_s = 0.0;  ///< its easing starts here (mesh_tile)
 };
 std::vector<MeshOut> g_out_meshes;
 /// Blocks lava set alight (stage 9): per cell (x, plate, z) of a burnable
@@ -1342,9 +1344,20 @@ float corner_h(int x, int b, int z, int cx, int cz, int fluid, int own) {
     return n > 0 ? sum / (float)n : (float)own;
 }
 
-/// Each tile's top corners as last meshed (metres), keyed by corner, course
-/// and fluid: the next mesh's vertices carry how far they moved since.
-std::unordered_map<int64_t, std::unordered_map<int64_t, float>> g_prev_tops;
+/// Each tile's top corners as last meshed, keyed by corner, course and
+/// fluid: where it is (y, metres), how far it was eased from (off) and when
+/// that mesh's easing started (t, the shader's clock: Time ticks, seconds).
+/// The next mesh's vertices ease on from where the corner is DRAWN then, not
+/// from where it was going: a tile meshed again mid-ease (water every tick)
+/// snapped every rising cell to its full height -- the "jump" (the user,
+/// 2026-11-23).
+struct Ease { float y; float off; double t; };
+std::unordered_map<int64_t, std::unordered_map<int64_t, Ease>> g_prev_tops;
+/// How long a corner takes to reach a new height (water_fluid.gdshader
+/// `ease_s`, set from ease_seconds()): about a tick of each fluid's, so a
+/// running front creeps on instead of stepping (lava ticks every 5th).
+constexpr float EASE_S[3] = { 0.1f, 0.2f, 0.5f };
+inline double clock_s() { return (double)Time::get_singleton()->get_ticks_usec() / 1.0e6; }
 
 /// The real band's tops of a tile. `top`: the studs whose water is open at
 /// the sea's level (ocean or not); `ocean`: which of them are open sea. Each
@@ -1447,10 +1460,16 @@ bool clear_real_marks(int tx, int tz) {
     return any;
 }
 
-void mesh_tile(int tx, int tz, Array &water, Array &lava) {
+double mesh_tile(int tx, int tz, Array &water, Array &lava) {
     MeshBuf buf[3];
-    std::unordered_map<int64_t, float> &prev = g_prev_tops[tkey(tx, tz)];
-    std::unordered_map<int64_t, float> now;
+    std::unordered_map<int64_t, Ease> &prev = g_prev_tops[tkey(tx, tz)];
+    std::unordered_map<int64_t, Ease> now;
+    const double t_now = clock_s();
+    // Where a corner last meshed is drawn now (the shader's easing).
+    auto shown = [&](const Ease &e, int f) -> float {
+        const double k = std::min(1.0, std::max(0.0, (t_now - e.t) / (double)EASE_S[f]));
+        return e.y + e.off * (float)(1.0 - k);
+    };
     // Corner (ox, oz) (0 or 1) of cell (x, z)'s top, course b, fluid f, is at
     // y now; it was at prev (or, new, at `base`, so a new cell rises from its
     // floor). Keyed by the CELL's corner, not the shared grid corner: two
@@ -1462,15 +1481,16 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
     };
     auto moved = [&](int x, int b, int z, int ox, int oz, int f, float y, float base) -> float {
         const int64_t k = ckey(x, b, z, ox, oz, f);
-        now[k] = y;
         auto it = prev.find(k);
-        return (it != prev.end() ? it->second : base) - y;
+        const float off = (it != prev.end() ? shown(it->second, f) : base) - y;
+        now[k] = Ease{ y, off, t_now };
+        return off;
     };
     // Where a neighbour's corner was last mesh (its side's foot follows it),
     // or `fallback` when it was not drawn in this tile.
     auto was = [&](int x, int b, int z, int ox, int oz, int f, float fallback) -> float {
         auto it = prev.find(ckey(x, b, z, ox, oz, f));
-        return it != prev.end() ? it->second : fallback;
+        return it != prev.end() ? shown(it->second, f) : fallback;
     };
     const bool real = real_tile(tx, tz);
     bool sea_top[SX * SX] = {};
@@ -1656,6 +1676,7 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
     water = buf[F_WATER].arrays();
     lava = buf[F_LAVA].arrays();
     prev.swap(now);
+    return t_now;
 }
 
 /// The far mesh of a tile (MineWater.md 8): one flat quad per 4 x 4 studs at
@@ -2069,7 +2090,7 @@ void do_tick() {
         MeshOut mo;
         mo.tx = tx;
         mo.tz = tz;
-        mesh_tile(tx, tz, mo.water, mo.lava);
+        mo.built_s = mesh_tile(tx, tz, mo.water, mo.lava);
         g_out_meshes.push_back(mo);
         ++meshed;
     }
@@ -2082,6 +2103,7 @@ void do_tick() {
         mo.tx = tile_coord(k, false);
         mo.tz = tile_coord(k, true);
         mo.is_far = true;
+        mo.built_s = clock_s();
         mesh_tile_far(mo.tx, mo.tz, mo.water, mo.lava);
         g_out_meshes.push_back(mo);
         ++meshed;
@@ -2289,6 +2311,7 @@ Dictionary BrickFluid::take() {
             d["water"] = m.water;
             d["lava"] = m.lava;
             d["far"] = m.is_far;
+            d["built_s"] = m.built_s;
             meshes.append(d);
         }
         for (int32_t v : g_out_terrain) terr.push_back(v);
@@ -2374,10 +2397,16 @@ Dictionary BrickFluid::build_tile_mesh(int tx, int tz) {
     join_wait();
     Dictionary d;
     Array w, l;
-    mesh_tile(tx, tz, w, l);
+    d["built_s"] = mesh_tile(tx, tz, w, l);
     d["water"] = w;
     d["lava"] = l;
     return d;
+}
+
+PackedFloat32Array BrickFluid::ease_seconds() {
+    PackedFloat32Array out;
+    for (float v : EASE_S) out.push_back(v);
+    return out;
 }
 
 void BrickFluid::prime_tile(int tx, int tz, int b_lo, int b_hi) {
@@ -2851,6 +2880,7 @@ void BrickFluid::_bind_methods() {
     ClassDB::bind_static_method("BrickFluid", D_METHOD("tick_now", "ticks"), &BrickFluid::tick_now);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("busy"), &BrickFluid::busy);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("build_tile_mesh", "tx", "tz"), &BrickFluid::build_tile_mesh);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("ease_seconds"), &BrickFluid::ease_seconds);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("request_mesh", "tx", "tz"), &BrickFluid::request_mesh);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("drawn_tiles"), &BrickFluid::drawn_tiles);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("cell_info", "cell"), &BrickFluid::cell_info);

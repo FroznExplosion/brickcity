@@ -4727,6 +4727,26 @@ func _run_sea_gate() -> void:
 	walker.pitch = -0.75
 	await _frames(40)
 	await _shot(dev + "sea_look_down.png")
+	# Along the shallows, low: past the real band's square the tiers draw
+	# the sea; both must look alike (the user, 2026-11-23: clear past a line).
+	walker.place(to_global(shore_m + Vector3(dir.x, 0, dir.y) * 2.0 + Vector3(0, 2.4, 0)),
+			(Vector3(dir.x, 0, dir.y) * 0.3 + along).normalized())
+	walker.pitch = -0.3
+	await _frames(40)
+	await _shot(dev + "sea_look_along.png")
+	WaterShaders.set_debug(true)
+	await _frames(2)
+	await _shot(dev + "sea_look_along_alpha.png")
+	WaterShaders.set_debug(false)
+	# The user's video settings: MSAA 2x, FXAA.
+	var vp := get_viewport()
+	var msaa0 := vp.msaa_3d
+	vp.msaa_3d = Viewport.MSAA_2X
+	vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
+	await _frames(10)
+	await _shot(dev + "sea_look_along_msaa.png")
+	vp.msaa_3d = msaa0
+	vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
 	walker.place(to_global(shore_m + Vector3(dir.x, 0, dir.y) * 1.0 + Vector3(0, 1.2, 0)),
 			(Vector3(dir.x, 0, dir.y) + along * 0.4).normalized())
 	walker.pitch = -0.15

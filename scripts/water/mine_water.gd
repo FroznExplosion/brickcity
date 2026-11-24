@@ -119,6 +119,11 @@ func setup(p_host: Node) -> void:
 	_lava_mat = ShaderMaterial.new()
 	_lava_mat.shader = shader
 	_lava_mat.set_shader_parameter("lava", true)
+	# How long a new height takes to ease in: the mesher eases on from where
+	# a corner is drawn, on the same numbers (BrickFluid.ease_seconds).
+	var ease := BrickFluid.ease_seconds()
+	_water_mat.set_shader_parameter("ease_s", ease[1])
+	_lava_mat.set_shader_parameter("ease_s", ease[2])
 	# The pawn asks with global positions; the water is in the mine world's
 	# terrain frame (its origin shift, Docs/MineWorld.md 15).
 	Pawn.water_probe = func(p: Vector3) -> float: return surface_at(host.to_local(p))
@@ -472,12 +477,12 @@ func _swap_some() -> void:
 	for i in mini(MESH_SWAPS_PER_FRAME, keys.size()):
 		var m: Dictionary = _queued_meshes[keys[i]]
 		_queued_meshes.erase(keys[i])
-		_show(m.tile, m.water, m.lava)
+		_show(m.tile, m.water, m.lava, float(m.get("built_s", -1.0)))
 		_tile_far[m.tile] = bool(m.get("far", false))
 		_lod_pending.erase(m.tile)
 
 
-func _show(tile: Vector2i, water: Array, lava: Array) -> void:
+func _show(tile: Vector2i, water: Array, lava: Array, built_s := -1.0) -> void:
 	if water.is_empty() and lava.is_empty():
 		_release(tile)
 		return
@@ -495,8 +500,9 @@ func _show(tile: Vector2i, water: Array, lava: Array) -> void:
 	if not lava.is_empty():
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, lava, [], {}, MESH_FLAGS)
 		mesh.surface_set_material(mesh.get_surface_count() - 1, _lava_mat)
-	# From now it eases from where the last mesh had it (water_fluid.gdshader).
-	mi.set_instance_shader_parameter("swap_s", _clock())
+	# It eases from where the last mesh was drawn when this one was built
+	# (water_fluid.gdshader): from the build's time, the mesher's reckoning.
+	mi.set_instance_shader_parameter("swap_s", built_s if built_s >= 0.0 else _clock())
 	_light(tile, lava)
 
 
