@@ -350,10 +350,14 @@ void vertex() {
     v_sky = CUSTOM0.a;
     v_block = CUSTOM0.g < 0.25 ? CUSTOM0.g * (255.0 / 60.0) : 0.0;
 #endif
+    float push = 0.0;
     if (overlay_reach > 0.0 && abs(CUSTOM0.b * 255.0 - 64.0) < 0.5) {
         float od = distance(v_world, INV_VIEW_MATRIX[3].xyz);
         float ok = 1.0 - smoothstep(overlay_reach - overlay_fade, overlay_reach, od);
-        VERTEX -= normalize(NORMAL) * (OVERLAY_RECESS * ok);
+        // Where the face would lie sunk along its normal: the hole test's
+        // place in its brick (below) is measured from there.
+        vec3 sunk = VERTEX - normalize(NORMAL) * (OVERLAY_RECESS * ok);
+        bool folded = false;
         if (overlay_holes > 0 && UV2.x > 0.0 && UV2.y > 0.0) {
             // The middle of this face's BRICK face (UV is the place in it,
             // UV2 its size; the mesher's axes: x faces u along z (+ on +x),
@@ -369,17 +373,37 @@ void vertex() {
             } else {
                 off = vec3(d.x, 0.0, d.y);
             }
-            vec3 mid = (MODEL_MATRIX * vec4(VERTEX + off - n * 0.01, 1.0)).xyz;
+            vec3 mid = (MODEL_MATRIX * vec4(sunk + off - n * 0.01, 1.0)).xyz;
             for (int i = 0; i < 8; i++) {
                 if (i >= overlay_holes) {
                     break;
                 }
                 if (all(greaterThan(mid, overlay_hole_lo[i])) && all(lessThan(mid, overlay_hole_hi[i]))) {
                     VERTEX = vec3(0.0);
+                    folded = true;
                 }
             }
         }
+        // THE RECESS ALONG THE EYE'S RAY, not the face's normal (the user,
+        // 2026-11-24: see-through slits at the grid; --gate=slits). Sunk
+        // along its own normal each face moved apart from the next: a top
+        // and the side under it, a sunk face and an unsunk filler strip, a
+        // tile's edge. A vertex moved along its own ray from the eye stays
+        // on the same pixel, so the ground covers exactly what it covered
+        // and no slit can open; it goes back far enough to lie 13 mm under
+        // the face along its normal (more at a grazing view), behind the
+        // brick's box and its bevels as before.
+        if (!folded && ok > 0.0) {
+            vec3 ray = normalize((MODELVIEW_MATRIX * vec4(VERTEX, 1.0)).xyz);
+            vec3 nv = normalize(mat3(MODELVIEW_MATRIX) * NORMAL);
+            push = OVERLAY_RECESS * ok / max(abs(dot(nv, ray)), 0.25);
+        }
     }
+    // POSITION on every path: a shader that writes it anywhere uses it for
+    // every vertex.
+    vec4 vv = MODELVIEW_MATRIX * vec4(VERTEX, 1.0);
+    vv.xyz += normalize(vv.xyz) * push;
+    POSITION = PROJECTION_MATRIX * vv;
 #endif
 }
 
