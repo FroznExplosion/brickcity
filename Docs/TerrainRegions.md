@@ -128,6 +128,18 @@ video and ~800 MB of RAM, not terrain: the lighting rig's) and the water's
 wet sections (W3, moved up: unbounded) are bigger than everything the
 terrain keeps put together.
 
+**Done 2026-11-24 (the reflection atlas):** project.godot
+`rendering/reflections/reflection_atlas/reflection_size = 32` (count left at
+64: a box per near bricked building, per near ship/station module, the held
+box -- 4 in --gate=light). `--gate=mem`'s line: one visible probe +16.9 MB
+(was +536). Pictures and numbers the same at 32 as at 256: planet
+--gate=light (room inside 0.550 both, pictures differ only in the HUD's fps),
+--gate=hull (cabin; the still views differ only in HUD text), mine
+--gate=deep (cave with the held gun, picture mean 0.044 / 0.046, the lava's
+flow differing). Next possible saving, not done: the renderer's own ~500 MB
+(shadow atlases at 4096, screen targets, sky) -- a look change, the user's
+call.
+
 ## 3. Stage B -- bricks fitted per region, regions offset every course
 
 ### 3.1 The rule
