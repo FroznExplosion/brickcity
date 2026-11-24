@@ -163,7 +163,56 @@ placed block (`mark_placed`), so the fit is not involved; whether the
 builder allows it, and whether its joints solve right, is checked in B3.
 If not, the builder refuses it.
 
-### 3.6 Stages
+### 3.6 Bricks across chunk edges -- measured (2026-11-24)
+
+The user asked: does it cost performance or generation time if bricks cross
+chunks, a 2x2 in up to 8 chunks? Measured with a standalone C++ bench in a
+Linux container (no Godot there): the REAL generator (`terrain_biomes.cpp`,
+`biome_column` + `biome_cell`, the default preset) linked with a stand-in
+region fit (largest first, 2x4 down to 1x1, hashed skip, the bond's groups;
+no stagger rule). Three areas of 6 x 6 tiles, the surface band (31-36
+courses). One thread, not the Legion Go: read the ratios, not the ms.
+
+- **At most 4 chunks, never 8.** Every vertical boundary is on a course
+  (deep sections are 96 plates = 32 courses; the surface floor and
+  `SECTION_BELOW` are multiples of 3), and a brick is one course tall. A
+  brick shorter than a tile is in 4 only at a tile corner.
+- **How many cross**: regions offset 8 on odd courses -> **3.3-3.5 %** of
+  bricks cross a tile edge, **0.04 %** are in 4 tiles. Each of those makes a
+  break rebuild 2 (or 4) tiles instead of 1: ~3-4 % more tile rebuilds over
+  all breaks. With quarter-tile rebuilds (C3) roughly twice that, still small.
+  The bond already crosses tile edges on odd courses (TerrainBond.md 1).
+- **Fit time**: 8.7-9.6 us a region with crossing, 11-12 us aligned to tiles
+  (the same work; the offset just cuts it differently): **~1.3 ms a tile**
+  for the surface band, once, cached. Not a reason either way.
+- **Generation time**: the bench's own sample, 4.8-5.8 ms a 32 x 32 tile,
+  agrees with `sample_tile`'s ~4.5 ms (MineWorld.md 21), so the generator in
+  the bench is the game's. Fitting a tile's offset regions needs cells 8
+  studs past its edges: from the noise that is a 48 x 48 sample, **10.7-13.1
+  ms** against 6.0-7.3 for today's 2-stud margin. With the store (stage A)
+  the neighbours' cells are already kept (the streamer keeps two tiles past
+  what it draws), so it costs nothing except at the outer edge of the kept
+  ring, which is never drawn.
+- **Stress**: none. The survey's region is a box round the edit, whatever
+  tiles it covers.
+- **And it is needed.** With no brick crossing a tile (regions aligned to
+  tiles), every tile edge is a seam in every course: a crack plane through
+  the whole ground. Allowing the crossing cut the seams over seams ON tile
+  edges by 40-44 % (12,441 -> 7,132; 12,817 -> 7,162; 10,881 -> 6,077).
+
+**The real open problem is the stagger, not the chunks.** The stand-in fit
+has 257-326 seams over seams per 1,000 joints (the bond today: 0). A simple
+rule (refuse a brick with more than a quarter of its edge over seams below)
+cascaded: once a course was mostly 1x1, every brick above it was refused, and
+96 % of bricks were 1x1. B1 must design the stagger (a parity rule like the
+bond's, or a fit that scores against the course below rather than refusing),
+and the probe of 3.3 must show it.
+
+The bench: `bench.cpp`, `noise.cpp` (the noise copied from brick_terrain.cpp),
+`stubs.cpp`, built with godot-cpp's headers only; not in the repo (tools/
+holds Godot scripts). B1's `region_fit_probe` replaces it.
+
+### 3.7 Stages
 
 - **B1** `region_fit` (C++, `terrain_bond.h` beside `bond_rect`) and the
   probe of 3.3; all three candidates; pick one with the user, from the probe's
@@ -299,7 +348,7 @@ with the user, after B.
    and after), `--gate=handover`.
 3. **C1** find from the store; `--gate=breaklag --burst`.
 4. **W1** water from the store; the water gate, `fluid_probe`.
-5. **B1-B3** region fit, chosen with the user; probes of 3.6.
+5. **B1-B3** region fit, chosen with the user; probes of 3.7.
 6. **C2-C3** the hole in the shot's frame; quarter-tile rebakes.
 7. **D** stress on region bricks; `terrain_collapse_probe`, `--gate=collapse`.
 8. **B4**, **W2-W4**.
