@@ -874,6 +874,14 @@ public:
     /// The packed-tile store (brick::packed_tile): hits, packs (misses),
     /// tiles kept. `reset` zeroes the counts.
     static Dictionary get_tile_pack_stats(bool reset = false);
+    /// MEMORY (terrain_mem_probe, Docs/TerrainRegions.md 2): the packed-tile
+    /// store's and the edit table's bytes. Probes only: it locks the store.
+    static Dictionary memory_stats();
+    /// One tile sampled as a bake samples it: ms, the sample's bytes, and the
+    /// material runs up its columns (what a kept run store would hold).
+    static Dictionary sample_stats(int tx, int tz);
+    /// The same for one deep section (empty when it has nothing to sample).
+    static Dictionary section_sample_stats(int tx, int sy, int tz);
     /// The regions (rx, rz pairs) edited since the last call, and forgets
     /// that they were. Call once after loading to start clean.
     static PackedInt32Array take_dirty_regions();
