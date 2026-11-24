@@ -242,6 +242,8 @@ func _process_body(delta: float) -> void:
 	var now := _clock()
 	_water_mat.set_shader_parameter("now_s", now)
 	_lava_mat.set_shader_parameter("now_s", now)
+	# The lakes' waves ride this clock in the shader and in the queries.
+	BrickFluid.set_wave_clock(now)
 	if host == null:
 		return
 	var eye: Vector3 = host._eye()
@@ -408,7 +410,8 @@ func drag_at(p: Vector3) -> float:
 ## 0 none, 1 water, 2 lava at a point (sea waves counted).
 func fluid_at(p: Vector3) -> int:
 	var f := BrickFluid.fluid_at(p)
-	if f == 0 and sea != null and p.y < surface_at(p):
+	# Under a wave's crest (the sea's, or a lake's, S3) is water too.
+	if f == 0 and p.y < surface_at(p):
 		return 1
 	return f
 

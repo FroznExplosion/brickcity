@@ -4555,6 +4555,22 @@ func _run_water_gate() -> void:
 	await _shot(dev + "water_lava.png")
 	print("[water-gate] pond holds %d tiles (128 poured), lava laid %d rock cells" % [
 			_pond_units(o, w), water.rock_laid])
+	# The pond made a lake (S3, Docs/MineWaterNext.md R1): sources in every
+	# cell, its open top rides a small wave, bigger away from its rim.
+	for x in range(5, 13):
+		for z in range(5, 13):
+			BrickFluid.place(Vector3i(o.x + x, w, o.y + z), 1, BrickFluid.SOURCE, 3)
+	water.step(5)
+	look.call(pm.call(16.0, w + 3.0, 16.0), pm.call(9.0, w, 9.0))
+	await _frames(40)
+	await _shot(dev + "water_lake.png")
+	await _frames(30)
+	await _shot(dev + "water_lake_later.png")
+	var lake_at := Vector3((o.x + 9.5) * stud, (w + 1) * course, (o.y + 9.5) * stud)
+	var lw0: float = water.surface_at(lake_at)
+	await _frames(20)
+	print("[water-gate] lake: surface at its middle %.3f then %.3f m (flat top %.3f)" % [
+			lw0, water.surface_at(lake_at), (w + 1) * course])
 
 	# The stream cut off: it drains to its hollows, then dries.
 	BrickFluid.remove(src_a, -1)
