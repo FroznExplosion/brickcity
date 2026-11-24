@@ -96,6 +96,11 @@ Read the ratios, not the ms. Bench not in the repo; the probe replaces it.
 
 ## Water audit (TerrainRegions.md 7)
 
+**The water now has its own plan: Docs/MineWaterNext.md** (finite water
+inland and in caves, the sea infinite; levelling by bodies; the user's visual
+bugs first; research on Flowcraft and other water mods). Three decisions are
+the user's before its stage F (rivers, springs, the source bucket).
+
 Already the right shape (kept sparse sections, active set, own thread and
 mesher, calm costs nothing). Gains: W1 above; **W2** re-measure the tick in a
 release build with the editor closed (the only reading is ~2.3 us a cell,

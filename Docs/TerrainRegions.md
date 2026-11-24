@@ -305,6 +305,10 @@ cave roofs, in place of the 4x4-block lattice that reads as regular.
 
 ## 7. The water (audit, 2026-11-24)
 
+The water's own plan -- finite inland water, levelling by bodies, the visual
+bugs, and research on other water systems -- is Docs/MineWaterNext.md; its
+stage W is this section.
+
 The water already works the way this plan wants the ground to work: its
 cells are kept (`BrickFluid` sections, 32 x 32 x 16 bricks, 48 KB each, only
 where water was changed or moves), only what changed runs (an active set),
