@@ -727,7 +727,7 @@ func terrain_edited(res: Dictionary) -> void:
 		sky_lit.dirty_box(res.box_lo, res.box_hi)
 	if _deep != null and res.has("box_lo"):
 		_deep.refresh_box(res.box_lo, res.box_hi)
-	if collapse != null:
+	if collapse != null and not bool(res.get("anchored", false)):
 		collapse.queue(res)
 	var tiles: PackedInt32Array = res["tiles"]
 	if tiles.is_empty():

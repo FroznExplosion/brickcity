@@ -4,6 +4,8 @@ extends SceneTree
 ##
 ##     godot --headless --path . --script res://tools/probes/fluid_probe.gd
 ##
+## - spreading water's new tops rise from their floor, level (no flash up to a
+##   brick, no tilted corners);
 ## Every test stands on a flat stone floor laid by terrain edits high above
 ## the generated world (course FLOOR), so the ground under it is known
 ## exactly. What each check is for:
@@ -30,7 +32,8 @@ extends SceneTree
 ##   caves under the lava line, drawn once primed and still; springs run; a
 ##   pit under a fall fills to its rim and spills; lakes over the sea; cave
 ##   pools with no water beside cave air; a mirror rebuilds an authority's
-##   water from its change log (multiplayer groundwork).
+##   water from its change log (multiplayer groundwork); a source on the open
+##   sea runs out 2 studs and its water goes back to the sea once it is gone.
 
 const FLOOR := 1000          ## floor course: plates 3000-3002
 const W := FLOOR + 1         ## the course water stands in
@@ -94,6 +97,48 @@ func _run() -> void:
 	BrickTerrain.clear_terrain_edits()
 	BrickFluid.reset(20.0, false)
 	BrickFluid.set_centre(Vector3(0, 0, 0), 100000.0)
+
+	# 0. Spreading water eases each new top up from its floor, level: a top
+	# never starts above its own level, nor tilted (the easing was keyed by
+	# the grid corner two cells share, so a new cell took its neighbour's old
+	# height: it flashed up to a brick and dropped -- the user, 2026-11-23).
+	_sec("0")
+	# (Wide enough that it settles on it: a calm world is checked later.)
+	BrickTerrain.fill_box(Vector3i(-8010, FLOOR * 3, -6), Vector3i(-7960, FLOOR * 3 + 2, 36), 4, false)
+	BrickFluid.terrain_changed(Vector3i(-8010, FLOOR * 3, -6), Vector3i(-7960, FLOOR * 3 + 2, 36))
+	BrickFluid.place(Vector3i(-7985, W, 15), 1, BrickFluid.SOURCE, 3)
+	var worst_up := 0.0
+	var tilted := 0
+	var tops := 0
+	for t in 14:
+		BrickFluid.tick_now(1)
+		var em: Dictionary = BrickFluid.build_tile_mesh(-250, 0)
+		var arr: Array = em.water
+		if arr.is_empty():
+			continue
+		var v: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var n: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+		var c: PackedFloat32Array = arr[Mesh.ARRAY_CUSTOM0]
+		for q in range(0, v.size(), 4):
+			if n[q].y < 0.9:
+				continue
+			tops += 1
+			var s0 := v[q].y + c[q * 4]
+			for k in range(1, 4):
+				if absf(v[q + k].y + c[(q + k) * 4] - s0) > 0.001:
+					tilted += 1
+					break
+			for k in 4:
+				worst_up = maxf(worst_up, c[(q + k) * 4])
+	_ok("spreading tops ease up from their floor, level", tops > 50 and worst_up <= 0.001 and tilted == 0,
+			"%d tops, worst start %.3f m above, %d tilted" % [tops, worst_up, tilted])
+	# Its water away again: later sections clear the terrain's edits, and a
+	# source without its floor would pour onto the generated world below.
+	for x in range(-8010, -7959):
+		for z in range(-6, 37):
+			if _amt(x, W, z) > 0:
+				BrickFluid.remove(Vector3i(x, W, z), -1)
+	_settle(50)
 
 	# 1. A source on flat ground.
 	_sec("1")
@@ -450,6 +495,20 @@ func _run() -> void:
 				and _region_units(found.x - 6, found.x + 12, found.y - 9, found.y + 9, top + 1) == 0
 				and int(_info(found.x + 3, top, found.y).kind) == BrickFluid.SOURCE,
 				"%d left" % _region_units(found.x - 6, found.x + 12, found.y - 9, found.y + 9, top + 1))
+		# A source brick on the open sea runs out only SEA_REACH (2) studs:
+		# the sea takes the rest in (the user, 2026-11-23: it spread 14).
+		var sx := found.x + 3
+		BrickFluid.place(Vector3i(sx, top + 1, found.y), 1, BrickFluid.SOURCE, 3)
+		BrickFluid.tick_now(40)
+		var reach := 0
+		for d in range(1, 16):
+			if _amt(sx + d, top + 1, found.y) > 0:
+				reach = d
+		_ok("a source on the sea runs out 2 studs", reach == 2, "%d studs" % reach)
+		BrickFluid.remove(Vector3i(sx, top + 1, found.y), -1)
+		BrickFluid.tick_now(40)
+		_ok("and the sea takes it back", _region_units(sx - 4, sx + 4, found.y - 4, found.y + 4, top + 1) == 0,
+				"%d left" % _region_units(sx - 4, sx + 4, found.y - 4, found.y + 4, top + 1))
 		# 11.9: a brick set in the open sea gets a band of real sea round it,
 		# six studs; the wave tiers' mask hides those studs and no others.
 		BrickFluid.set_real_sea(true)

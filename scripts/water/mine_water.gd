@@ -112,8 +112,8 @@ var _spare_lights: Array[OmniLight3D] = []
 func setup(p_host: Node) -> void:
 	host = p_host
 	var shader: Shader = load("res://shaders/water_fluid.gdshader")
-	_water_mat = ShaderMaterial.new()
-	_water_mat.shader = shader
+	# See-through, Minecraft's way (Docs/MineWater.md 7.4); lava stays solid.
+	_water_mat = WaterShaders.material("res://shaders/water_fluid.gdshader", true)
 	_lava_mat = ShaderMaterial.new()
 	_lava_mat.shader = shader
 	_lava_mat.set_shader_parameter("lava", true)
@@ -170,6 +170,7 @@ func reset_world(sea_m: float, near_tiles: int, p_sea_on: bool, p_wave_scale := 
 		sea.name = "Sea"
 		sea.use_pools = false
 		sea.use_fluid_mask = true
+		sea.see_through = true
 		sea.surface_collide = false     # a ceiling to a swimmer; nothing floats yet
 		sea.wave_gain = 2.2 * wave_scale
 		add_child(sea)
@@ -230,6 +231,7 @@ func _process_body(delta: float) -> void:
 		_follow_field(delta)
 	_swap_some()
 	_copy_sea_waves(delta)
+	WaterShaders.sync_all()
 	_underwater(eye)
 	_burn_in -= delta
 	if _burn_in <= 0.0:
@@ -245,6 +247,7 @@ func step(ticks: int) -> void:
 	while not _queued_meshes.is_empty():
 		_swap_some()
 	_copy_sea_waves(1.0)
+	WaterShaders.sync_all()
 
 
 func apply(res: Dictionary) -> void:
@@ -291,7 +294,11 @@ func apply(res: Dictionary) -> void:
 		for k in tiles:
 			flat.append(k.x)
 			flat.append(k.y)
-		host.terrain_edited({"tiles": flat, "box_lo": blo, "box_hi": bhi, "changed": any})
+		# "anchored": lava rock is part of the world, like Minecraft's: it
+		# stays where it formed, over water too, so it dams the lava (it fell
+		# as loose bricks and the lava ran on, for ever -- the user,
+		# 2026-11-23). Adding ground takes no one's support: no survey.
+		host.terrain_edited({"tiles": flat, "box_lo": blo, "box_hi": bhi, "changed": any, "anchored": true})
 
 
 ## An edit's result (fill_box, carve, clear_runs): its plate box. Ground

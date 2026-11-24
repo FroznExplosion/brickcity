@@ -48,6 +48,7 @@ constexpr int SCELLS = SCOL * SB;
 constexpr double TICK_S = 0.1;      ///< 10 Hz (MineWater.md 4)
 constexpr int LAVA_EVERY = 5;       ///< lava: every 5th tick
 constexpr int MAX_EVALS = 65536;    ///< a tick's budget (6)
+constexpr int SEA_REACH = 2;       ///< studs water runs out over the open sea
 constexpr int DROP_SEEK = 5;        ///< studs flowing water looks for a drop (4.1.5)
 constexpr int MESH_PER_TICK = 24;
 constexpr float TOP_SINK = 0.015f;  ///< tops a hair under the course: no z-fight with ground tops
@@ -815,6 +816,13 @@ void eval(int x, int b, int z) {
         }
         if (f == F_LAVA && !lt) { deferred = true; continue; }
         if (c_kind(n) != K_SOURCE && !supported(nx, b, nz, n)) continue;
+        // Running out over the open sea the sea takes it in: SEA_REACH studs,
+        // not a stream's whole reach across the top of the ocean (the user,
+        // 2026-11-23).
+        if (g_sea_on && f == F_WATER && c_kind(n) == K_FLOW && c_dist(n) >= SEA_REACH && b == g_sea_b) {
+            const Cell &nd = wcell(nx, b - 1, nz);
+            if (c_wet(nd) && c_ocean(nd)) continue;
+        }
         const int d = c_dist(n) + 1;
         const FluidDef &def = DEFS[f];
         if (d > def.reach || d > best_d) continue;
@@ -1429,13 +1437,26 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
     MeshBuf buf[3];
     std::unordered_map<int64_t, float> &prev = g_prev_tops[tkey(tx, tz)];
     std::unordered_map<int64_t, float> now;
-    // The corner (cx, cz) of course b's fluid f is at y now; it was at prev
-    // (or, new, at `base`, so a new cell rises from its floor).
-    auto moved = [&](int cx, int b, int cz, int f, float y, float base) -> float {
-        const int64_t k = pack3(cx, b * 4 + f, cz);
+    // Corner (ox, oz) (0 or 1) of cell (x, z)'s top, course b, fluid f, is at
+    // y now; it was at prev (or, new, at `base`, so a new cell rises from its
+    // floor). Keyed by the CELL's corner, not the shared grid corner: two
+    // cells with flat tops at different levels share a grid corner, and a new
+    // cell took its neighbour's last height there -- it flashed up to a brick
+    // and dropped, its corners at different heights (the user, 2026-11-23).
+    auto ckey = [](int x, int b, int z, int ox, int oz, int f) -> int64_t {
+        return pack3(2 * x + ox, b * 4 + f, 2 * z + oz);
+    };
+    auto moved = [&](int x, int b, int z, int ox, int oz, int f, float y, float base) -> float {
+        const int64_t k = ckey(x, b, z, ox, oz, f);
         now[k] = y;
         auto it = prev.find(k);
         return (it != prev.end() ? it->second : base) - y;
+    };
+    // Where a neighbour's corner was last mesh (its side's foot follows it),
+    // or `fallback` when it was not drawn in this tile.
+    auto was = [&](int x, int b, int z, int ox, int oz, int f, float fallback) -> float {
+        auto it = prev.find(ckey(x, b, z, ox, oz, f));
+        return it != prev.end() ? it->second : fallback;
     };
     const bool real = real_tile(tx, tz);
     bool sea_top[SX * SX] = {};
@@ -1451,7 +1472,7 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                 // Flat tops of a course, merged into rectangles afterwards
                 // (stage 8, "mixed water pieces"): a calm pond was a quad a
                 // stud; meshing was two thirds of a spreading spill's time.
-                struct Top { bool on; float h; Color c; int f; };
+                struct Top { bool on; float h; Color c; int f; float mv; };
                 Top flat[SX * SX];
                 for (int i = 0; i < SX * SX; ++i) flat[i].on = false;
                 bool any_flat = false;
@@ -1508,7 +1529,14 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                             any_sea = true;
                         } else if (top_open && !(c_ocean(c) && own == g_sea_b * 3)
                                 && h00 == h10 && h10 == h11 && h11 == h01) {
-                            flat[lx + SX * lz] = { true, h00, cc, f };
+                            // One easing for the whole top (a rect merges only
+                            // tops moving alike); all four corners recorded.
+                            const float y = h00 * P - TOP_SINK, yb0 = (float)bottom * P;
+                            const float mv = moved(x, b, z, 0, 0, f, y, yb0);
+                            moved(x, b, z, 1, 0, f, y, yb0);
+                            moved(x, b, z, 0, 1, f, y, yb0);
+                            moved(x, b, z, 1, 1, f, y, yb0);
+                            flat[lx + SX * lz] = { true, h00, cc, f, mv };
                             any_flat = true;
                         } else if (top_open && !(c_ocean(c) && own == g_sea_b * 3)) {
                             const Vector3 a(x0, h00 * P - TOP_SINK, z0), bb(x1, h10 * P - TOP_SINK, z0);
@@ -1517,8 +1545,8 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                             if (nrm.y < 0) nrm = -nrm;
                             nrm = nrm.normalized();
                             const float yb0 = (float)bottom * P;
-                            m.quad(a, d, cq, bb, nrm, cc, moved(x, b, z, f, a.y, yb0), moved(x, b, z + 1, f, d.y, yb0),
-                                    moved(x + 1, b, z + 1, f, cq.y, yb0), moved(x + 1, b, z, f, bb.y, yb0));
+                            m.quad(a, d, cq, bb, nrm, cc, moved(x, b, z, 0, 0, f, a.y, yb0), moved(x, b, z, 0, 1, f, d.y, yb0),
+                                    moved(x, b, z, 1, 1, f, cq.y, yb0), moved(x, b, z, 1, 0, f, bb.y, yb0));
                         }
                         // Sides: down to whatever covers the neighbour.
                         const float ch[4][2] = { { h10, h11 }, { h00, h01 }, { h01, h11 }, { h00, h10 } };
@@ -1527,6 +1555,8 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                             const Cell &n = wcell(nx, b, nz);
                             int cover;
                             if (c_cap(n) <= 0) continue;
+                            const bool wet_n = c_wet(n) && c_fluid(n) == f
+                                    && !(c_wet(wcell(nx, b + 1, nz)) && c_fluid(wcell(nx, b + 1, nz)) == f);
                             if (c_wet(n) && c_fluid(n) == f) cover = top_plates(nx, b, nz, n);
                             else cover = b * 3 + floor_of(n.solid);
                             const float lo = (float)std::max(cover, bottom);
@@ -1540,11 +1570,20 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                             else if (i == 2) { p0 = Vector3(x0, 0, z1); p1 = Vector3(x1, 0, z1); }
                             else { p0 = Vector3(x0, 0, z0); p1 = Vector3(x1, 0, z0); }
                             const Vector3 nrm((float)DX[i], 0.0f, (float)DZ[i]);
-                            const int c0x = (int)std::lround(p0.x / STUD_M), c0z = (int)std::lround(p0.z / STUD_M);
-                            const int c1x = (int)std::lround(p1.x / STUD_M), c1z = (int)std::lround(p1.z / STUD_M);
+                            const int o0x = (int)std::lround(p0.x / STUD_M) - x, o0z = (int)std::lround(p0.z / STUD_M) - z;
+                            const int o1x = (int)std::lround(p1.x / STUD_M) - x, o1z = (int)std::lround(p1.z / STUD_M) - z;
+                            // The foot on a neighbour's water top follows that
+                            // top as it eases (no gap under a rising cell).
+                            float f0 = 0.0f, f1 = 0.0f;
+                            if (wet_n && cover >= bottom) {
+                                const float nb0 = (float)(b * 3 + floor_of(n.solid)) * P;
+                                const float yn = (float)cover * P - TOP_SINK;
+                                f0 = std::min(was(nx, b, nz, o0x - DX[i], o0z - DZ[i], f, nb0) - yn, 0.0f);
+                                f1 = std::min(was(nx, b, nz, o1x - DX[i], o1z - DZ[i], f, nb0) - yn, 0.0f);
+                            }
                             m.quad(Vector3(p0.x, y0, p0.z), Vector3(p1.x, y0, p1.z),
                                     Vector3(p1.x, yb, p1.z), Vector3(p0.x, ya, p0.z), nrm, cc,
-                                    0.0f, 0.0f, moved(c1x, b, c1z, f, yb, y0), moved(c0x, b, c0z, f, ya, y0));
+                                    f0, f1, moved(x, b, z, o1x, o1z, f, yb, y0), moved(x, b, z, o0x, o0z, f, ya, y0));
                         }
                         // Bottom over open air (a fall seen from under it).
                         if (floor_of(c.solid) == 0) {
@@ -1562,7 +1601,8 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                 // far as whole rows of it go.
                 bool used[SX * SX] = {};
                 auto same = [&](int i, const Top &t) {
-                    return flat[i].on && !used[i] && flat[i].f == t.f && flat[i].h == t.h && flat[i].c == t.c;
+                    return flat[i].on && !used[i] && flat[i].f == t.f && flat[i].h == t.h && flat[i].c == t.c
+                            && flat[i].mv == t.mv;
                 };
                 for (int lz = 0; lz < SX; ++lz) {
                     for (int lx = 0; lx < SX; ++lx) {
@@ -1584,12 +1624,8 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                         const float x0 = (float)(tx * SX + lx) * STUD_M, x1 = (float)(tx * SX + lx + w) * STUD_M;
                         const float z0 = (float)(tz * SX + lz) * STUD_M, z1 = (float)(tz * SX + lz + h) * STUD_M;
                         const float y = t.h * PLATE_M - TOP_SINK;
-                        const int cb = sb * SB + lb;
-                        const int gx0 = tx * SX + lx, gx1 = tx * SX + lx + w;
-                        const int gz0 = tz * SX + lz, gz1 = tz * SX + lz + h;
                         buf[t.f].quad(Vector3(x0, y, z0), Vector3(x0, y, z1), Vector3(x1, y, z1), Vector3(x1, y, z0),
-                                Vector3(0, 1, 0), t.c, moved(gx0, cb, gz0, t.f, y, y), moved(gx0, cb, gz1, t.f, y, y),
-                                moved(gx1, cb, gz1, t.f, y, y), moved(gx1, cb, gz0, t.f, y, y));
+                                Vector3(0, 1, 0), t.c, t.mv, t.mv, t.mv, t.mv);
                     }
                 }
             }

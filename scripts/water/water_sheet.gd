@@ -37,14 +37,15 @@ extends MeshInstance3D
 ## How many doublings past the first ring.
 @export var levels := 6
 
+## See-through copy of the shader (WaterShaders); set before it is built.
+var see_through := false
 var _mat: ShaderMaterial = null
 var _tris := 0
 
 
 func build(seabed: Texture2D, origin: Vector2, extent: Vector2) -> void:
 	mesh = _ring_mesh()
-	_mat = ShaderMaterial.new()
-	_mat.shader = load("res://shaders/water.gdshader")
+	_mat = WaterShaders.material("res://shaders/water.gdshader", see_through)
 	push_waves()
 	_mat.set_shader_parameter("lod_base_cell", base_cell)
 	_mat.set_shader_parameter("lod_inner_radius", inner_radius)

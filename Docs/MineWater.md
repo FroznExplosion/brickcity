@@ -271,6 +271,34 @@ sheet past that) draws it exactly as in heightfield_test (R6). Three changes:
 The sea's still level is **snapped to a brick course**, so its top is a course of bricks like
 everything else and the calm water beside it lines up with it.
 
+### 7.4 See-through water (2026-11-23)
+
+All the mine world's water is see-through, Minecraft's way: the fluid mesher's water and the
+sea's tiers and sheet (lava stays solid). `WaterShaders.material(path, true)` gives the shader
+with `#define SEE_THROUGH` (alpha from `shaders/see_through.gdshaderinc`) over a next pass with
+`#define SEE_DEPTH`, drawn first (render priority -1), that writes only depth a hair behind the
+surface (`FRAGCOORD.z * 0.9995`). So only the nearest water surface is drawn: every riser and
+side behind it fails the depth test. Two things that did not work:
+
+* `depth_prepass_alpha` alone: Godot's prepass keeps only pixels at alpha 0.99 or more, so
+  every piece's inside showed (glass cubes);
+* an `ALPHA_SCISSOR_THRESHOLD`: the water became opaque.
+
+How opaque goes by the water the eye looks through, from the opaque depth under it:
+`mix(see_min_alpha 0.45, 1, 1 - exp(-thick / see_clear_m 1.0))`, so a film shows its floor,
+a metre is two-thirds opaque, the open sea and water with only sky behind it are opaque.
+Both passes must move vertices alike: `WaterShaders.sync_all()` (MineWater, every frame)
+copies each colour material's uniforms to its depth pass, about 0.15 ms. Other scenes draw
+their water opaque, as before.
+
+### 7.5 Spreading water eases per cell (2026-11-23)
+
+A new top rises from its floor; a changed one eases from its last height. The easing was keyed
+by grid corner, which two neighbouring cells share: with flat tops at different levels a new
+cell took its neighbour's last height there, flashed up to a brick and dropped, its corners at
+different heights (gaps). Now each cell's four corners are its own keys; merged flat rects
+merge only tops easing alike; a side's foot on a neighbour's top follows that top's easing.
+
 ## 8. The LOD
 
 | Ring | Range | What draws | What runs |
@@ -568,6 +596,10 @@ drying tile could lose its timer to a same-tick write (timers now run first).
    and the source is unchanged.
 7. Water shares the terrain's grid (same stud columns, brick courses of its plates) as a layer of
    its own (section 2).
+8. (2026-11-23) A source on the open sea runs out only `SEA_REACH` (2) studs: the sea takes
+   the rest in. Rock made by lava meeting water is part of the world: laid as terrain with
+   `anchored` (no collapse survey), so it stays over water and dams the lava. All water is
+   see-through (7.4).
 
 ## 14. Build order
 

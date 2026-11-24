@@ -22,6 +22,8 @@ const STUD := 0.35
 ## Pitch of this tier's pieces, in metres.
 var _pitch := STUD
 
+## See-through copy of the shader (WaterShaders); set before it is built.
+var see_through := false
 @export var radius := 20.0
 ## Tall waves are the point of the brick step: a 3 m swell is seven steps
 ## rather than a ramp needing more vertices. The shore taper is what stops
@@ -71,8 +73,7 @@ func _ready() -> void:
 	if _side % 2 == 0:
 		_side += 1
 
-	_mat = ShaderMaterial.new()
-	_mat.shader = load("res://shaders/water.gdshader")
+	_mat = WaterShaders.material("res://shaders/water.gdshader", see_through)
 	# Before uniform_array(), which bakes the gain into the amplitudes.
 	BrickWave.set_wave_gain(wave_gain)
 	push_waves()
