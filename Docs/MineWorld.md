@@ -1216,3 +1216,39 @@ item 4 too (it splits the same bake and tile); 6 last.
   `--gate`, `--gate=collapse`, `--gate=handover`, `--gate=deep` and the
   three terrain probes pass; `--gate`'s one slow frame after landing from
   fast flight (95-112 ms) is on main too.
+
+**A broken brick still drawn under fire, fixed (2026-11-23).** The user:
+some breaks take a few frames too long, some full seconds.
+`-- --gate=breaklag --burst [--burst-every=N]` fires 30 shots, one every N
+frames (6), and times each from the trigger to the frame its hole is DRAWN
+(`TerrainStreamer.drawn_gen`: every tile it changed swapped in at the
+generation its edit made, or later); it also splits each shot into queued /
+find / land / tile. A shot a frame, before: the FIRST shot's hole showed
+after 534 ms -- when the shooting stopped. Finding took 4-10 ms; the rest
+was the swap. A tile counted as ready only with no newer edit coming, and
+every edit made a new batch whose 300 ms wait (`BATCH_WAIT_MS`) began again,
+so a tile under fire never swapped. A falling piece's hold waited for the
+same, up to its 2 s `WAIT_MAX_MS`, and held the tiles' swaps meanwhile.
+
+- A tile (and a deep section) is ready to swap once its waiting refresh is
+  built and collided; a newer bake still coming swaps after it. A merged
+  batch keeps the time its wait began. `force` swaps what is ready.
+- A hold records the generation of its own clear; the piece is let go once
+  that generation is drawn or waiting ready -- not when nothing newer comes.
+- The deep tier: a section edited while it baked threw the bake away and
+  baked again, so sustained fire never showed a cave wall's hole; the older
+  bake is now swapped in and the newer one follows. Edits rebuild on the
+  surface too (a section stays drawn after the player climbs out, and only
+  rebuilt underground). Its swaps and holds go by generation as above.
+- At most `BAKES_PER_TILE` (2) bakes of a tile at once: a whole-tile bake
+  each frame under fire was wasted work.
+
+| `--burst-every` | before: mean / worst | after: mean / worst |
+|---|---|---|
+| 1 (60 shots a second) | 306 / 547 ms (290 / 540 a second run) | 57 / 84 ms |
+| 2 | 61 / 118 ms | 50 / 70 ms |
+| 6 | 50 / 57 ms | 50 / 62 ms |
+
+What is left, ~47 ms at best, is the frame finding the brick and the bake
+(items 1 and 3). Not measured: the same in a cave (the deep tier's change
+passed `--gate=deep` and `--gate=handover`), and fire into falling sand.
