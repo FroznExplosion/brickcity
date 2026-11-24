@@ -937,8 +937,10 @@ public:
     /// The instance: transform = the box (scale its size, origin its middle),
     /// colour = (rgb as 24 bits, block word, 0, material * 2 + studs), custom = the faces' sky
     /// words (overlay_bricks' floats 11-14). Main thread, no renderer.
+    /// `hidden`: boxes (lo, hi pairs, terrain frame) whose bricks are left out
+    /// (bricks shot and hidden till their tile is rebuilt, TerrainBricks).
     static Dictionary overlay_pick(const Array &lists, Vector3 eye, Vector3 forward, double range_m,
-            double cos_half, int max_bricks);
+            double cos_half, int max_bricks, const PackedVector3Array &hidden);
     /// FOR PROBES (Docs/MineWorld.md 20): the flat mesh and colliders of a
     /// tile (sy = INT32_MIN) or deep section, checked against the field.
     ///   exposed, undrawn   faces of owned solid cells against OPEN air, and

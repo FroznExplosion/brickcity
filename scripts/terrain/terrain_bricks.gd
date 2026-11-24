@@ -28,6 +28,10 @@ extends Node3D
 ## (`hole_wait`: the tiles' and sections' generations), then the hole is the
 ## ground's own.
 
+## On for every scene with ground (TerrainStreamer.setup makes one); off,
+## the old chamfered near tier as before (-- --old-chamfer).
+static var overlay_default := not ("--old-chamfer" in OS.get_cmdline_user_args())
+
 ## How far round the eye bricks are laid (metres, to the brick's box).
 @export var range_m := 12.0
 ## The most instances drawn; past it the farthest are left out (and `far_m`
@@ -205,7 +209,11 @@ func fill(eye: Vector3, fwd: Vector3, cam: Camera3D) -> void:
 			continue
 		src.append(tile.overlay)
 	lists = src.size()
-	var r: Dictionary = BrickTerrain.overlay_pick(src, eye, fwd, range_m, cos(minf(half, PI)), max_bricks)
+	var hid := PackedVector3Array()
+	for h: Dictionary in holes:
+		hid.append(h.lo)
+		hid.append(h.hi)
+	var r: Dictionary = BrickTerrain.overlay_pick(src, eye, fwd, range_m, cos(minf(half, PI)), max_bricks, hid)
 	count = int(r.count)
 	inside = int(r.inside)
 	seen = int(r.seen)
@@ -219,11 +227,6 @@ func fill(eye: Vector3, fwd: Vector3, cam: Camera3D) -> void:
 		_mm.instance_count = _cap
 	if buf.size() < _cap * STRIDE:
 		buf.resize(_cap * STRIDE)
-	# Bricks of open holes stay hidden till their tile is rebuilt.
-	for h: Dictionary in holes:
-		for i in count:
-			if _slot_in(buf, i, h.lo, h.hi):
-				_zero_slot(buf, i)
 	_mm.buffer = buf
 	buffer = buf
 	_mm.visible_instance_count = count
@@ -337,6 +340,14 @@ func hole_wait(id: int, want: Dictionary, deep: Dictionary, rect: Rect2i) -> voi
 			h.waiting = false
 
 
+## The hole's box (terrain frame), or an empty AABB.
+func hole_box(id: int) -> AABB:
+	for h: Dictionary in holes:
+		if int(h.id) == id:
+			return AABB(h.lo, h.hi - h.lo)
+	return AABB()
+
+
 ## The shot found nothing to clear: its brick comes back.
 func drop_hole(id: int) -> void:
 	for i in holes.size():
@@ -365,7 +376,8 @@ func _release_holes() -> void:
 			for k in h.deep:
 				if deep == null or int(deep.drawn_gen.get(k, -1)) < int(h.deep[k]):
 					done = false
-			if done and h.rect.has_area() and not bool(world.call("tiles_fresh", h.rect)):
+			if done and h.rect.has_area() and world.has_method("tiles_fresh") \
+					and not bool(world.call("tiles_fresh", h.rect)):
 				done = false
 		if done:
 			holes.remove_at(i)
@@ -415,18 +427,6 @@ func _push_holes() -> void:
 		m.set_shader_parameter(&"overlay_holes", n)
 		m.set_shader_parameter(&"overlay_hole_lo", los)
 		m.set_shader_parameter(&"overlay_hole_hi", his)
-
-
-## Its box inside the hole's (a millimetre's give).
-static func _slot_in(buf: PackedFloat32Array, i: int, lo: Vector3, hi: Vector3) -> bool:
-	var k := i * STRIDE
-	var h := Vector3(buf[k], buf[k + 5], buf[k + 10]) * 0.5
-	var c := Vector3(buf[k + 3], buf[k + 7], buf[k + 11])
-	var e := Vector3(0.001, 0.001, 0.001)
-	var a := c - h
-	var b := c + h
-	return a.x >= lo.x - e.x and a.y >= lo.y - e.y and a.z >= lo.z - e.z \
-			and b.x <= hi.x + e.x and b.y <= hi.y + e.y and b.z <= hi.z + e.z
 
 
 static func _zero_slot(buf: PackedFloat32Array, i: int) -> void:
