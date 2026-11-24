@@ -148,7 +148,10 @@ Tiles are whole and are conserved exactly; nothing is ever a fraction of a tile.
    patches, not all at once) — the tile is gone. Deeper ponds never dry; their thin edges are
    next to deeper water, so they do not either.
 4. **Into fed water**: still water that reaches a source or flowing water joins it (the river
-   or the sea takes it; the tiles are gone into the infinite body).
+   or the sea takes it; the tiles are gone into the infinite body). **A FULL cell touching a
+   source becomes source** (R9, 2026-11-24): the next full cells turn the tick after, so a
+   source in a brim-full pond makes the whole connected full body a lake that heals; a
+   part-full cell drains in a unit a tick as before. Water only.
 5. Fed water spreading over still water whose top is lower takes those cells over, keeping
    the pond's own units in the cell (`held`, st bits 5-7). Cut the river and each cell gives
    back exactly what it held: the pond as it was, no more (R6, 2026-11-24; it used to keep the
