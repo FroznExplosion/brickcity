@@ -176,7 +176,16 @@ have needed work before.
    Was: **S2** R9: full still water beside a source becomes source (decision B).
    Probe: a source bucket into a brim-full pond makes it heal like a lake; a
    half-full pond does not turn.
-5. **S3** R1/R2: waves on lakes and rivers; `surface_at`, floaters and
+5. **S3 -- done 2026-11-24 (lakes).** An infinite body's open top -- a water source not of
+   the open sea, a full course, open to the sky -- is a piece a stud riding a small wave at
+   its middle (`lake_wave` in brick_fluid.cpp and water_fluid.gdshader, the same two sines on
+   MineWater's clock: `now_s` / `BrickFluid.set_wave_clock`), 0.09 m at most, ramped over 5
+   studs from the body's rim (`lake_amp`: a lone source, a channel, a rim stays flat and
+   merged). `BrickFluid.surface_at` gives that wave from the water or the crest over it, so
+   swimmers and floaters ride it (MineWater.fluid_at counts under a crest as water);
+   `ray_cell` through a crest hits the source under it (R2). Rivers at the sea's level were
+   the sea band's already. `fluid_probe` 14, `water_lake*.png` in `--gate=water`.
+   Was: **S3** R1/R2: waves on lakes and rivers; `surface_at`, floaters and
    swimming on every body; the bucket on a crest or trough. Gate pictures of
    a lake; a probe for the bucket's aim at a crest.
 6. **S4** R3/R4: no placing on water (decision A); the beach on lakes and

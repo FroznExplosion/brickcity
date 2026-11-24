@@ -1079,6 +1079,8 @@ bool g_bond_top = false;
 
 /// Sky light in the cells (Docs/MineWorld.md 18); set_sky_light.
 static std::atomic<bool> g_sky_light{ false };
+/// Bake behind faces (BrickTerrain.set_behind_faces; the mine world).
+static std::atomic<bool> g_behind_faces{ false };
 
 bool g_deep_tier = false;
 
@@ -2970,6 +2972,13 @@ void BrickTerrain::clear_terrain_edits() { clear_edits(); }
 
 void BrickTerrain::set_flat_mode(bool on) { g_flat_mode = on; }
 
+void BrickTerrain::set_behind_faces(bool on) {
+    g_behind_faces.store(on, std::memory_order_relaxed);
+    brick::bump_field_version();
+}
+
+bool BrickTerrain::get_behind_faces() { return g_behind_faces.load(std::memory_order_relaxed); }
+
 void BrickTerrain::set_plate_steps(bool on) { g_plate_steps = on; }
 bool BrickTerrain::get_plate_steps() { return g_plate_steps; }
 
@@ -4136,6 +4145,22 @@ Color piece_colour(const TileSample &s, int ox, int oz, int mat, bool studded) {
 constexpr uint8_t BOXED_FACE = 64;
 /// How far such a face sinks near the eye (terrain.gdshader OVERLAY_RECESS).
 constexpr float OVERLAY_RECESS_M = 0.013f;
+/// CUSTOM0.b of a BEHIND face (Docs/BrickOverlay.md 6b): a face of the solid
+/// behind the overlay's bricks -- the brick under a top brick, a wall's next
+/// course in -- drawn now, inside the ground, so a shot brick's hole shows
+/// real bricks the frame it is hit. The shader keeps it only within the
+/// overlay's reach (and sunk like a boxed face); past it, it is collapsed.
+constexpr uint8_t BEHIND_FACE = 96;
+/// Set by build_tile / build_section for their behind pass: the cells of
+/// every exposed brick (the sample's vox layout, 1 = part of a brick open
+/// air touches). mask_faces then draws only faces of other solid cells
+/// that touch one; sky_light_pass reads a behind vertex's light from the
+/// far side of the brick in front of it.
+static thread_local const std::vector<uint8_t> *t_behind = nullptr;
+/// The bond view mask_faces takes for the behind pass (the main pass's).
+static thread_local bool t_behind_tops = false;
+/// The plates the behind pass looks at: the exposed bricks' and one past.
+static thread_local int t_behind_lo = 0, t_behind_hi = 0;
 
 struct OutBrick {
     int x0, z0, x1, z1;   ///< studs, absolute, [x0, x1)
@@ -4293,6 +4318,152 @@ static PackedFloat32Array bricks_floats(const std::map<std::array<int, 3>, OutBr
 void push_stud(PackedFloat32Array &buf, float px, float py, float pz, const Color &c);
 
 void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &owner,
+        const std::vector<Piece> &pieces, uint32_t seed, PackedFloat32Array &studs, int &stud_count);
+
+/// Every cell of every brick open air touches (a face of it drawn: the
+/// overlay's bricks), in the sample's vox layout. A brick is its bond
+/// rectangle (the `tops` view, as the main pass draws it) and the solid
+/// plates of its course.
+static void exposed_brick_cells(const TileSample &s, bool tops, std::vector<uint8_t> &out,
+        int &ylo_out, int &yhi_out) {
+    out.assign(s.vox.size(), 0);
+    ylo_out = INT_MAX;
+    yhi_out = INT_MIN;
+    BondView view(s, tops);
+    const int gx0 = s.tx * TILE, gz0 = s.tz * TILE;
+    const int ylo = s.y0, yhi = s.y0 + s.ysize;
+    for (int lz = -MARGIN; lz < TILE + MARGIN; ++lz) {
+        for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
+            for (int yp = ylo; yp < yhi; ++yp) {
+                const size_t i = (size_t)s.vidx(lx, yp, lz);
+                if (out[i] != 0 || s.vox[i] == MAT_AIR) {
+                    continue;
+                }
+                // Deep in the rock (all six neighbours solid, read straight
+                // from vox) most cells are: no open air beside them.
+                if (lx > -MARGIN && lz > -MARGIN && lx < TILE + MARGIN - 1 && lz < TILE + MARGIN - 1
+                        && yp > ylo && yp < yhi - 1) {
+                    const size_t sy = (size_t)SPAN, sz = (size_t)SPAN * (size_t)s.ysize;
+                    if (s.vox[i - 1] != MAT_AIR && s.vox[i + 1] != MAT_AIR && s.vox[i - sy] != MAT_AIR
+                            && s.vox[i + sy] != MAT_AIR && s.vox[i - sz] != MAT_AIR && s.vox[i + sz] != MAT_AIR) {
+                        continue;
+                    }
+                }
+                if (!(s.open_air(lx - 1, yp, lz) || s.open_air(lx + 1, yp, lz)
+                            || s.open_air(lx, yp - 1, lz) || s.open_air(lx, yp + 1, lz)
+                            || s.open_air(lx, yp, lz - 1) || s.open_air(lx, yp, lz + 1))) {
+                    continue;
+                }
+                const int c = floor_div(yp, PLATES_PER_CELL);
+                const BondRect r = view.rect(gx0 + lx, c, gz0 + lz);
+                for (int z = r.z; z < r.z + r.sz; ++z) {
+                    for (int x = r.x; x < r.x + r.sx; ++x) {
+                        const int bx = x - gx0, bz = z - gz0;
+                        if (bx < -MARGIN || bz < -MARGIN || bx >= TILE + MARGIN || bz >= TILE + MARGIN) {
+                            continue;
+                        }
+                        for (int q = c * PLATES_PER_CELL; q < (c + 1) * PLATES_PER_CELL; ++q) {
+                            if (s.in_y(q) && s.solid(bx, q, bz)) {
+                                out[(size_t)s.vidx(bx, q, bz)] = 1;
+                                ylo_out = std::min(ylo_out, q);
+                                yhi_out = std::max(yhi_out, q);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Every BEHIND_FACE triangle moved out of `m` into mesh arrays of its own
+/// (build_tile's "behind_mesh"): drawn by a node of its own with a short
+/// visibility range, so a far tile's are not processed at all. Empty: none.
+static Array split_behind(MeshBuf &m) {
+    const int nv = m.verts.size();
+    const uint8_t *cu = m.custom0.ptr();
+    std::vector<uint8_t> which((size_t)nv, 0);
+    bool any = false;
+    for (int i = 0; i < nv; ++i) {
+        which[(size_t)i] = cu[(size_t)i * 4 + 2] == BEHIND_FACE ? 1 : 0;
+        any = any || which[(size_t)i] != 0;
+    }
+    if (!any) {
+        return Array();
+    }
+    MeshBuf part[2];
+    std::vector<int32_t> map((size_t)nv, -1);
+    const Vector3 *v = m.verts.ptr();
+    const Vector3 *nr = m.normals.ptr();
+    const Color *co = m.colours.ptr();
+    const Vector2 *uv = m.uvs.ptr();
+    const Vector2 *uv2 = m.uv2s.ptr();
+    for (int i = 0; i < nv; ++i) {
+        MeshBuf &d = part[which[(size_t)i]];
+        map[(size_t)i] = d.verts.size();
+        d.verts.push_back(v[i]);
+        d.normals.push_back(nr[i]);
+        d.colours.push_back(co[i]);
+        d.uvs.push_back(uv[i]);
+        d.uv2s.push_back(uv2[i]);
+        for (int k = 0; k < 4; ++k) {
+            d.custom0.push_back(cu[(size_t)i * 4 + k]);
+        }
+    }
+    const int ni = m.indices.size();
+    const int32_t *ix = m.indices.ptr();
+    for (int t = 0; t < ni; ++t) {
+        part[which[(size_t)ix[t]]].indices.push_back(map[(size_t)ix[t]]);
+    }
+    m.verts = part[0].verts;
+    m.normals = part[0].normals;
+    m.colours = part[0].colours;
+    m.uvs = part[0].uvs;
+    m.uv2s = part[0].uv2s;
+    m.indices = part[0].indices;
+    m.custom0 = part[0].custom0;
+    const MeshBuf &b = part[1];
+    Array mesh;
+    mesh.resize(Mesh::ARRAY_MAX);
+    mesh[Mesh::ARRAY_VERTEX] = b.verts;
+    mesh[Mesh::ARRAY_NORMAL] = b.normals;
+    mesh[Mesh::ARRAY_COLOR] = b.colours;
+    mesh[Mesh::ARRAY_TEX_UV] = b.uvs;
+    mesh[Mesh::ARRAY_TEX_UV2] = b.uv2s;
+    mesh[Mesh::ARRAY_INDEX] = b.indices;
+    mesh[Mesh::ARRAY_CUSTOM0] = b.custom0;
+    return mesh;
+}
+
+/// The behind pass (BEHIND_FACE): into `m`, after the main pass; `cells`
+/// stays set (t_behind) for sky_light_pass, which the caller clears.
+static thread_local double t_behind_cells_ms = 0.0, t_behind_mask_ms = 0.0;
+static void behind_faces(MeshBuf &m, const TileSample &s, bool tops, std::vector<uint8_t> &cells) {
+    const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
+    int ylo = 0, yhi = 0;
+    exposed_brick_cells(s, tops, cells, ylo, yhi);
+    const uint64_t t1 = Time::get_singleton()->get_ticks_usec();
+    t_behind_cells_ms = (double)(t1 - t0) / 1000.0;
+    const std::vector<int32_t> owner((size_t)TILE * TILE, -1);
+    const std::vector<Piece> pieces;
+    PackedFloat32Array no_studs;
+    int no_count = 0;
+    auto *bricks = t_bricks;
+    t_bricks = nullptr;   // nothing here is an overlay brick's face
+    if (ylo > yhi) {
+        t_behind_mask_ms = 0.0;
+        return;
+    }
+    t_behind = &cells;
+    t_behind_tops = tops;
+    t_behind_lo = ylo - 1;
+    t_behind_hi = yhi + 2;
+    mask_faces(m, s, owner, pieces, g_field.seed, no_studs, no_count);
+    t_bricks = bricks;
+    t_behind_mask_ms = (double)(Time::get_singleton()->get_ticks_usec() - t1) / 1000.0;
+}
+
+void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &owner,
         const std::vector<Piece> &pieces, uint32_t seed, PackedFloat32Array &studs, int &stud_count) {
     static const int DIRS[6][3] = {
         { -1, 0, 0 }, { 1, 0, 0 }, { 0, -1, 0 }, { 0, 1, 0 }, { 0, 0, -1 }, { 0, 0, 1 }
@@ -4300,8 +4471,9 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
 
     // The plates this sample draws (a guard plate past a deep-tier boundary
     // is sampled for its faces but drawn by its owner).
-    const int y0 = s.lo_owned();
-    const int y1 = s.hi_owned();
+    // The behind pass looks only where the exposed bricks are.
+    const int y0 = t_behind != nullptr ? std::max(s.lo_owned(), t_behind_lo) : s.lo_owned();
+    const int y1 = t_behind != nullptr ? std::min(s.hi_owned(), t_behind_hi) : s.hi_owned();
     std::vector<uint8_t> face_buf;
     std::vector<int64_t> key_buf;
 
@@ -4311,7 +4483,7 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
     // holds. They used to come from a random cut lattice that nothing else
     // knew about. Memoised per cell and course (a cell's three plates and up
     // to six faces ask the same).
-    BondView view(s, !pieces.empty());
+    BondView view(s, t_behind != nullptr ? t_behind_tops : !pieces.empty());
     std::vector<BondRect> rect_memo((size_t)TILE * TILE * view.c_n, BondRect{ 0, 0, 0, 0 });
     auto brick_rect = [&](int lx, int yp, int lz) -> BondRect {
         const int c = floor_div(yp, PLATES_PER_CELL);
@@ -4484,6 +4656,20 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                     if (!s.solid(lx, yp, lz)) {
                         continue;
                     }
+                    if (t_behind != nullptr) {
+                        // BEHIND: a face of a cell that is not an exposed
+                        // brick's, toward one that is. Keyed by both bricks,
+                        // so a quad faces one brick in front (its light).
+                        const int nx = lx + dx, ny = yp + dy, nz = lz + dz;
+                        if (!s.in_y(ny) || (*t_behind)[(size_t)s.vidx(lx, yp, lz)] != 0
+                                || (*t_behind)[(size_t)s.vidx(nx, ny, nz)] == 0) {
+                            continue;
+                        }
+                        face[(size_t)u + su * v] = (uint8_t)s.voxel(lx, yp, lz);
+                        fkey[(size_t)u + su * v] = (brick_key(lx, yp, lz)
+                                ^ (brick_key(nx, ny, nz) * (int64_t)0x9E3779B97F4A7C1LL)) & INT64_MAX;
+                        continue;
+                    }
                     if (s.solid(lx + dx, yp + dy, lz + dz)) {
                         continue;   // interior face, never drawn
                     }
@@ -4607,7 +4793,7 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                     // than the surface, smooth otherwise, by the brick's corner
                     // and course, so every face of one brick agrees.
                     bool studded = false;
-                    if (dy > 0 && g_bond_top && material_studded(mat)) {
+                    if (dy > 0 && g_bond_top && material_studded(mat) && t_behind == nullptr) {
                         const int c = floor_div(yp, PLATES_PER_CELL);
                         studded = hashf(br.x, br.z, (int32_t)(seed ^ 0xCA5EU) + c) < CAVE_STUD_CHANCE;
                     }
@@ -4882,7 +5068,7 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                         }
                         // Every face here is a listed brick's (note_brick).
                         if (g_face_bevel <= 0.0f) {
-                            m.facet = BOXED_FACE;
+                            m.facet = t_behind != nullptr ? BEHIND_FACE : BOXED_FACE;
                         }
                         if (dy < 0) {
                             // Wound a0 -> b0 along Z here: UV.x stays along X.
@@ -6386,7 +6572,31 @@ static void sky_light_pass(MeshBuf &m, const TileSample &s, bool surface, Dictio
         fy = cy - (float)iy;
         fz = cz - (float)iz;
     };
+    // A BEHIND vertex (BEHIND_FACE) faces the brick in front of it, solid
+    // now: its light is what the hole will have, read from the far side of
+    // that brick (stepping along the normal while the cell is that brick's).
+    const uint8_t *c0 = m.custom0.ptr();
+    auto behind_at = [&](int i) -> Vector3 {
+        const Vector3 nrm = nr[i];
+        const Vector3 step(nrm.x * STUD_M, nrm.y * PLATE_M, nrm.z * STUD_M);
+        Vector3 q = v[i];
+        for (int k = 0; k < 64; ++k) {
+            const Vector3 mid = q + step * 0.5f;
+            const int lx = (int)std::floor(mid.x / STUD_M), yp = (int)std::floor(mid.y / PLATE_M);
+            const int lz = (int)std::floor(mid.z / STUD_M);
+            if (lx < -MARGIN || lz < -MARGIN || lx >= TILE + MARGIN || lz >= TILE + MARGIN
+                    || !s.in_y(yp) || (*t_behind)[(size_t)s.vidx(lx, yp, lz)] == 0) {
+                break;
+            }
+            q += step;
+        }
+        return q;
+    };
     auto corners = [&](int i, int &ix, int &iy, int &iz, float &fx, float &fy, float &fz) {
+        if (t_behind != nullptr && c0[(size_t)i * 4 + 2] == BEHIND_FACE) {
+            corners_at(behind_at(i), nr[i], ix, iy, iz, fx, fy, fz);
+            return;
+        }
         corners_at(v[i], nr[i], ix, iy, iz, fx, fy, fz);
     };
     // Which of those cells are under their column's sky floor and open: the
@@ -6954,8 +7164,14 @@ Dictionary BrickTerrain::build_section(int tx, int sy, int tz) {
         const std::vector<int32_t> owner((size_t)TILE * TILE, -1);
         const std::vector<Piece> pieces;
         mask_faces(m, s, owner, pieces, g_field.seed, studs, stud_count);
+        std::vector<uint8_t> behind;
+        if (g_behind_faces.load(std::memory_order_relaxed) && g_face_bevel <= 0.0f) {
+            behind_faces(m, s, false, behind);
+        }
         cave_boxes = add_cave_boxes(s, boxes, true, nullptr);
         sky_light_pass(m, s, false, out, &studs);
+        t_behind = nullptr;
+        out["behind_mesh"] = split_behind(m);
         out["own_lo"] = s.own_lo;
         out["own_hi"] = s.own_hi;
     }
@@ -7955,6 +8171,11 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
     PackedFloat32Array cave_studs;
     int cave_stud_count = 0;
     mask_faces(m, s, owner, pieces, g_field.seed, cave_studs, cave_stud_count);
+    std::vector<uint8_t> behind;
+    if (g_behind_faces.load(std::memory_order_relaxed) && g_face_bevel <= 0.0f && t_bricks != nullptr) {
+        behind_faces(m, s, !pieces.empty(), behind);
+    }
+    struct BehindReset { ~BehindReset() { t_behind = nullptr; } } behind_reset;
 
     // --- scatter (section 8), then studs (section 7.2 tier 0) -------------
     //
@@ -8235,6 +8456,8 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
     stud_count += cave_stud_count;
     Dictionary sky;
     sky_light_pass(m, s, true, sky, &studs);
+    t_behind = nullptr;
+    const Array behind_mesh = split_behind(m);
 
     // No edge skirt on the detail tiles (19.18): the detail square always
     // surrounds the camera, so a skirt facing out of it is never seen, and
@@ -8254,6 +8477,9 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
 
     Dictionary out = sky;
     out["mesh"] = mesh;
+    out["behind_mesh"] = behind_mesh;
+    out["behind_cells_ms"] = t_behind_cells_ms;
+    out["behind_mask_ms"] = t_behind_mask_ms;
     // The bricks it drew a face of (Docs/BrickOverlay.md).
     out["overlay_bricks"] = bricks_floats(overlay);
     t_bricks = nullptr;
@@ -8918,6 +9144,8 @@ void BrickTerrain::_bind_methods() {
         &BrickTerrain::clear_runs);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_edits"), &BrickTerrain::get_edits);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_edits", "bytes"), &BrickTerrain::set_edits);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_behind_faces", "on"), &BrickTerrain::set_behind_faces);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_behind_faces"), &BrickTerrain::get_behind_faces);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("fill_box", "lo", "hi", "material", "only_air"),
         &BrickTerrain::fill_box);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("ray_cell", "from", "dir", "max_metres"),

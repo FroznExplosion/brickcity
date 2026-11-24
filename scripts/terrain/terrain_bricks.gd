@@ -464,6 +464,22 @@ func _push_holes() -> void:
 		else:
 			los.append(Vector3.ZERO)
 			his.append(Vector3.ZERO)
+	# With behind faces baked (BrickTerrain.set_behind_faces) the hole's own
+	# walls are already there in the reach: the stand-in, a millimetre inside
+	# them, would cover them. Past the reach (a far shot) there are none, so
+	# its stand-in stays.
+	if BrickTerrain.get_behind_faces():
+		var cam := get_viewport().get_camera_3d() if get_viewport() != null else null
+		var eye: Vector3 = world.to_local(cam.global_position) if cam != null else Vector3.INF
+		var reach := maxf(far_m - move_m, 0.0) if count > 0 else 0.0
+		for j in n:
+			var h: Dictionary = holes[holes.size() - n + j]
+			var mid: Vector3 = (h.lo + h.hi) * 0.5
+			if mid.distance_to(eye) < reach:
+				var o := j * STRIDE
+				cb[o] = 0.0
+				cb[o + 5] = 0.0
+				cb[o + 10] = 0.0
 	_cav_mm.buffer = cb
 	_cav_mm.visible_instance_count = n
 	# The ground, and its studs (a hidden brick's studs go with it).
