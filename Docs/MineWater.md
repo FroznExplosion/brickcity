@@ -326,6 +326,12 @@ the tile's `swap_s` is the build's time (`built_s`), so both reckon alike. Ease 
 
 ## 8. The LOD
 
+**Water goes with its ground (2026-11-23).** A tile's water and lava (and its lava light) are
+drawn only while the terrain draws that tile's detail (`TerrainStreamer.has_tile`). Before, a
+tile once meshed kept a far mesh for good, at any distance, over coarse ground or none (the user:
+"flowing water never seems to unload"). Let go, a tile is parked (`MineWater._parked`) and asked
+for again when the terrain draws it. The water gate's `unload` line checks it.
+
 | Ring | Range | What draws | What runs |
 |---|---|---|---|
 | **W0 near** | the terrain's detail tiles (4–8 tiles) | water meshes per tile (7.1); sea by the studded wave tier | ticks |
