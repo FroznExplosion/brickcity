@@ -149,18 +149,21 @@ Tiles are whole and are conserved exactly; nothing is ever a fraction of a tile.
    next to deeper water, so they do not either.
 4. **Into fed water**: still water that reaches a source or flowing water joins it (the river
    or the sea takes it; the tiles are gone into the infinite body).
-5. Fed water spreading over still water whose top is lower takes those cells over: a river
-   running into a pond keeps the pond topped up. Cut the river and those cells become still
-   water again (4.1.6), so the pond stays a pond.
+5. Fed water spreading over still water whose top is lower takes those cells over, keeping
+   the pond's own units in the cell (`held`, st bits 5-7). Cut the river and each cell gives
+   back exactly what it held: the pond as it was, no more (R6, 2026-11-24; it used to keep the
+   river's depth, so a river made pond water).
 6. **Spreading out by one plate** (stage 5; replaced stage 2's "a core thins"): each still
    cell keeps its distance to dry floor at its own level the sheet could spread onto (0 beside
    it, else one more than its nearest still neighbour's; 63 = none, as for a walled pond). A
    cell two or more deep gives a tile to a neighbour one plate lower that is nearer that edge.
    A spill on open ground thins to a tile and dries; water only moves outward, so nothing
    ping-pongs; a pond with walls round it has no edge and stays.
-7. **A cut-off stream keeps a tile** (4.1.6): flowing water losing its feed becomes still water of
-   one tile, unless it held more than its stream level (pond water a river ran over: kept). A
-   cut-off fall keeps its whole brick and drains down.
+7. **A cut-off stream is gone** (4.1.6, changed 2026-11-24 by the user's R6,
+   Docs/MineWaterNext.md: infinite water adds water nowhere): running water losing its feed
+   dries, cell by cell from where it was cut, as Minecraft's recedes; a pond it ran over is given
+   back (5). It used to become still water a tile deep, which dried later. Lava keeps the old
+   way: cut off it comes to rest and cools into stone (4.6).
 
 Gather form (STA's rule, [Reference/sta.md](Reference/sta.md)): each cell works out only its own
 next state from the last tick's states, so a tick is the same whatever order cells are visited
@@ -719,7 +722,10 @@ Each stage is merged on its own. C++ stages need the main folder's DLL rebuilt a
    * The Sea & Water tab has lava pools, the lava line, springs and the spring chance.
      `-- --gate=gen` pictures a spring near the spawn and a lava pool down a dug shaft.
    *Built 2026-11-19 (the rest):*
-   * **Pits filling from rivers (4.5)**: still water as deep as what would feed it stays
+   * **Pits filling from rivers (4.5)** -- *taken out 2026-11-24 (R6): a fall into a pit covers
+     its floor as a stream and never fills it; finite water fills pits (stage P will level it).
+     The code is in git before that date (`check_pits`, `g_landings`).* Still water as deep as
+     what would feed it stays
      still (a fall lands on a full pit as on ground; a river no longer turns a pond into a
      river). Every 10 ticks the running water round each landed fall is looked at: a closed
      body (no drop, no dry floor lower than its top, no source joined) becomes full still

@@ -33,7 +33,8 @@ extends SceneTree
 ## - a big still spill's tick cost, as a number;
 ## - stage 8: a calm pond's top is one merged quad; generated lava pools in
 ##   caves under the lava line, drawn once primed and still; springs run; a
-##   pit under a fall fills to its rim and spills; lakes over the sea; cave
+##   fall into a pit never fills it and, cut off, is gone; a river over a
+##   pond leaves its volume as it was (R6, MineWaterNext.md); lakes over the sea; cave
 ##   pools with no water beside cave air; a mirror rebuilds an authority's
 ##   water from its change log (multiplayer groundwork); a source on the open
 ##   sea runs out 2 studs and its water goes back to the sea once it is gone.
@@ -293,8 +294,10 @@ func _run() -> void:
 			ups += 1
 	_ok("a calm pond's top is one quad", ups == 4, "%d top vertices" % ups)
 
-	# 4e. A pit filling from a river (4.5, stage 8): a fall into a closed pit
-	# fills it a course at a time to its rim, then spills over.
+	# 4e. A fall into a pit never fills it (R6, Docs/MineWaterNext.md: water
+	# running from a source adds water nowhere; the pit rule 4.5 went
+	# 2026-11-24): its floor is covered as a stream, no still water, nothing
+	# over the rim; cut off, it is gone.
 	_floor(2900, -20, 2960, 20)
 	for wall in [[2920, -5, 2930, -5], [2920, 5, 2930, 5], [2920, -5, 2920, 5], [2930, -5, 2930, 5]]:
 		BrickTerrain.fill_box(Vector3i(wall[0], W * 3, wall[1]), Vector3i(wall[2], (W + 2) * 3 + 2, wall[3]), 4, false)
@@ -310,9 +313,42 @@ func _run() -> void:
 				var pc: Dictionary = _info(x, b, z)
 				if int(pc.fluid) == 1 and int(pc.kind) == BrickFluid.STILL and int(pc.units) == 6:
 					pit_full += 1
+	# (Over the floor only the fall itself: still water at no course.)
+	var pit_still := 0
+	for b in range(W, W + 3):
+		for x in range(2921, 2930):
+			for z in range(-4, 5):
+				var sc: Dictionary = _info(x, b, z)
+				if int(sc.fluid) == 1 and int(sc.kind) == BrickFluid.STILL:
+					pit_still += 1
 	var outside := _region_units(2900, 2918, -20, 20, W)
-	_ok("a pit under a fall fills to its rim", pit_full >= 9 * 9 * 3 - 3, "%d of %d cells full" % [pit_full, 9 * 9 * 3])
-	_ok("and spills over it", outside > 0, "%d tiles outside" % outside)
+	_ok("a fall into a pit never fills it", pit_full == 0 and pit_still == 0 and _region_units(2921, 2929, -4, 4, W) > 0
+			and outside == 0, "%d full, %d still, %d outside" % [pit_full, pit_still, outside])
+	BrickFluid.remove(Vector3i(2925, W + 5, 0), -1)
+	_settle(200)
+	_ok("cut off, the fall's water is gone", _region_units(2921, 2929, -4, 4, W) == 0,
+			"%d units left" % _region_units(2921, 2929, -4, 4, W))
+	# 4f. A river over a pond leaves the pond's volume as it was (R6): a
+	# walled 3 x 3 pond a tile deep, a source set in it runs over the rest;
+	# the source gone, the pond is back -- no more water, no less.
+	_floor(3000, -10, 3020, 10)
+	for wall in [[3008, -2, 3012, -2], [3008, 2, 3012, 2], [3008, -2, 3008, 2], [3012, -2, 3012, 2]]:
+		BrickTerrain.fill_box(Vector3i(wall[0], W * 3, wall[1]), Vector3i(wall[2], W * 3 + 2, wall[3]), 4, false)
+	BrickFluid.terrain_changed(Vector3i(3008, W * 3, -2), Vector3i(3012, W * 3 + 2, 2))
+	for x in range(3009, 3012):
+		for z in range(-1, 2):
+			BrickFluid.place(Vector3i(x, W, z), 1, BrickFluid.STILL, 1)
+	_settle(50)
+	var pond0 := _region_units(3009, 3011, -1, 1, W)
+	BrickFluid.place(Vector3i(3009, W, -1), 1, BrickFluid.SOURCE, 3)
+	BrickFluid.tick_now(20)
+	var ran := _info(3010, W, -1)
+	BrickFluid.remove(Vector3i(3009, W, -1), -1)
+	_settle(200)
+	# (The source's own cell had 2 units of the pond; the source took them.)
+	_ok("a river over a pond leaves its volume as it was", int(ran.kind) == BrickFluid.FLOW
+			and _region_units(3009, 3011, -1, 1, W) == pond0 - 2,
+			"pond %d, ran over %s, after %d (want %d)" % [pond0, int(ran.kind) == BrickFluid.FLOW, _region_units(3009, 3011, -1, 1, W), pond0 - 2])
 
 	# 4f. Still water touching a source drains into it (the user, 2026-11-19:
 	# finite water meeting the sea joins the sea).
