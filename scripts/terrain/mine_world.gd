@@ -2772,11 +2772,17 @@ func _run_breaklag_gate() -> void:
 		if streaming:
 			_streamer.invalidate(Rect2i(t_eye + Vector2i(-3 if k % 2 == 0 else 2, -4), Vector2i(2, 9)))
 		var t0 := Time.get_ticks_usec()
+		var hid0: int = bricks.hidden_total if bricks != null else 0
 		for j in n:
 			var p := e + Vector3(1.6 + float((k * 3 + j) % 6) * 0.7, 0.0, -2.4 - floorf(float(k * 3 + j) / 6.0) * 0.7)
 			var c := Vector2i(floori(p.x / stud), floori(p.z / stud))
 			p.y = _ground_m(c.x, c.y) - 0.2
 			_mine(p, Vector3.DOWN, null)
+		# What the player sees: bricks of the brick overlay go the frame they
+		# are shot (Docs/BrickOverlay.md 6), drawn in the next picture.
+		var hid: int = (bricks.hidden_total if bricks != null else 0) - hid0
+		await RenderingServer.frame_post_draw
+		var seen_ms := (Time.get_ticks_usec() - t0) / 1000.0
 		for f in 45:
 			await get_tree().process_frame
 		var found := 0
@@ -2794,13 +2800,16 @@ func _run_breaklag_gate() -> void:
 		if _streamer.latency_log.is_empty():
 			print("[breaklag] %d brick(s): no tile swapped (missed?)" % n)
 			return
-		var row := {"n": n, "tiles": _streamer.latency_log.size(), "find": found / 1000.0,
+		var row := {"n": n, "hid": hid, "seen": seen_ms if hid >= n else -1.0,
+				"tiles": _streamer.latency_log.size(), "find": found / 1000.0,
 				"mark": (first_dirty - t0 - found) / 1000.0, "wait": (first_bake - first_dirty) / 1000.0,
 				"bake": (last_land - first_bake) / 1000.0, "swap": (last_swap - last_land) / 1000.0,
 				"total": (last_swap - t0) / 1000.0}
 		rows.append(row)
-		print("[breaklag] %d brick(s), %d tile(s): found %.0f ms, marked +%.0f, bake started +%.0f, baked +%.0f, swapped +%.0f = %.0f ms" % [
-				n, row.tiles, row.find, row.mark, row.wait, row.bake, row.swap, row.total])
+		print("[breaklag] %d brick(s), %d tile(s): found %.0f ms, marked +%.0f, bake started +%.0f, baked +%.0f, swapped +%.0f = %.0f ms; %s" % [
+				n, row.tiles, row.find, row.mark, row.wait, row.bake, row.swap, row.total,
+				"SEEN GONE in %.0f ms (the overlay hid %d of %d)" % [seen_ms, hid, n] if hid >= n
+				else "seen with the tile (the overlay hid %d of %d)" % [hid, n]])
 	for k in 12:
 		await shoot.call(k, 1)
 	for k in 4:
@@ -2809,10 +2818,17 @@ func _run_breaklag_gate() -> void:
 		var sum := {}
 		var worst := 0.0
 		var cnt := 0
+		var seen_sum := 0.0
+		var seen_n := 0
+		var seen_worst := 0.0
 		for r in rows:
 			if int(r.n) != n:
 				continue
 			cnt += 1
+			if float(r.seen) >= 0.0:
+				seen_n += 1
+				seen_sum += float(r.seen)
+				seen_worst = maxf(seen_worst, float(r.seen))
 			worst = maxf(worst, float(r.total))
 			for k in ["find", "mark", "wait", "bake", "swap", "total"]:
 				sum[k] = float(sum.get(k, 0.0)) + float(r[k])
@@ -2820,6 +2836,8 @@ func _run_breaklag_gate() -> void:
 			continue
 		print("[breaklag] %d brick(s), mean of %d: found %.0f, marked +%.0f, bake started +%.0f, baked +%.0f, swapped +%.0f = %.0f ms (worst %.0f)" % [
 				n, cnt, sum.find / cnt, sum.mark / cnt, sum.wait / cnt, sum.bake / cnt, sum.swap / cnt, sum.total / cnt, worst])
+		print("[breaklag] %d brick(s): seen gone in %.0f ms mean (worst %.0f) in %d of %d, the brick overlay hiding them at the shot" % [
+				n, seen_sum / maxf(1.0, seen_n), seen_worst, seen_n, cnt])
 	_streamer.log_latency = false
 	print("[breaklag] done")
 	get_tree().quit()
@@ -5953,6 +5971,24 @@ func _run_bricks_gate() -> void:
 	await _frames(4)
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png(dev + "mine_bricks_shot_later.png")
+	# A FAR shot, past the laid bricks (~20 m): found in the tiles' own lists,
+	# hidden at once the same way (TerrainBricks._hide_far).
+	var far_at := to_local(cam.global_position) + Vector3(-cam.global_transform.basis.z.x, 0.0,
+			-cam.global_transform.basis.z.z).normalized() * 20.0
+	var fc := Vector2i(floori(far_at.x / stud), floori(far_at.z / stud))
+	var far_shot := Vector3((fc.x + 0.5) * stud, _ground_m(fc.x, fc.y) - 0.02, (fc.y + 0.5) * stud)
+	var far0 := bricks.far_hidden
+	_mine(to_global(far_shot), Vector3.DOWN, null)
+	ok = bricks.far_hidden == far0 + 1
+	check.call(ok, "a far brick (%.0f m) is hidden the frame it is hit" % to_local(cam.global_position).distance_to(far_shot))
+	fails += 0 if ok else 1
+	waited = 0
+	while not bricks.holes.is_empty() and waited < 300:
+		await get_tree().process_frame
+		waited += 1
+	ok = bricks.holes.is_empty()
+	check.call(ok, "its hole handed to the rebuilt tile (%d frames)" % waited)
+	fails += 0 if ok else 1
 	print("[mine-bricks] %s; %s" % ["PASS" if fails == 0 else "%d FAILED" % fails, bricks.readout()])
 	get_tree().quit()
 

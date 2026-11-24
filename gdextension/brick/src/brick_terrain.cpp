@@ -7057,6 +7057,96 @@ Dictionary BrickTerrain::overlay_pick(const Array &lists, Vector3 eye, Vector3 f
     return out;
 }
 
+Dictionary BrickTerrain::overlay_find(const Array &lists, Vector3 point) {
+    constexpr int IN = 17;
+    constexpr float E = 1e-3f;
+    Dictionary out;
+    const float *hit = nullptr;
+    PackedFloat32Array best;   // a copy of the brick's floats, merged
+    std::vector<PackedFloat32Array> held;
+    held.reserve((size_t)lists.size());
+    for (int64_t li = 0; li < lists.size(); ++li) {
+        const Variant &v = lists[li];
+        if (v.get_type() != Variant::PACKED_FLOAT32_ARRAY) {
+            continue;
+        }
+        held.push_back(v);
+    }
+    // The brick: the first box holding the point; then the same brick in the
+    // other lists, each face from the one that drew more of it.
+    for (const PackedFloat32Array &a : held) {
+        const float *p = a.ptr();
+        const int64_t n = a.size() / IN;
+        for (int64_t i = 0; i < n; ++i) {
+            const float *b = p + i * IN;
+            if (point.x < b[0] || point.y < b[1] || point.z < b[2] || point.x > b[3] || point.y > b[4]
+                    || point.z > b[5]) {
+                continue;
+            }
+            if (hit == nullptr) {
+                hit = b;
+                best.resize(IN);
+                std::memcpy(best.ptrw(), b, sizeof(float) * IN);
+                continue;
+            }
+            if (std::fabs(b[0] - hit[0]) > E || std::fabs(b[2] - hit[2]) > E || std::fabs(b[1] - hit[1]) > 0.13f) {
+                continue;
+            }
+            float *w = best.ptrw();
+            int sky[4] = { (int)w[11], (int)w[12], (int)w[13], (int)w[14] };
+            int blk = (int)w[15], drawn = (int)w[16];
+            for (int f = 0; f < 6; ++f) {
+                const int mine = (drawn >> (4 * f)) & 15, theirs = ((int)b[16] >> (4 * f)) & 15;
+                if (theirs <= mine) {
+                    continue;
+                }
+                for (int cc = 0; cc < 4; ++cc) {
+                    const int k = f * 4 + cc, wq = k / 6, sh = 4 * (k % 6);
+                    sky[wq] = (sky[wq] & ~(15 << sh)) | ((((int)b[11 + wq]) >> sh & 15) << sh);
+                }
+                blk = (blk & ~(15 << (4 * f))) | ((((int)b[15]) >> (4 * f) & 15) << (4 * f));
+                drawn = (drawn & ~(15 << (4 * f))) | (theirs << (4 * f));
+            }
+            for (int q = 0; q < 4; ++q) {
+                w[11 + q] = (float)sky[q];
+            }
+            w[15] = (float)blk;
+            w[16] = (float)drawn;
+        }
+    }
+    if (hit == nullptr) {
+        return out;
+    }
+    const float *w = best.ptr();
+    Vector3 lo(w[0], w[1], w[2]), hi(w[3], w[4], w[5]);
+    // Stacked on or under it, the same footprint: one piece.
+    for (bool grew = true; grew;) {
+        grew = false;
+        for (const PackedFloat32Array &a : held) {
+            const float *p = a.ptr();
+            const int64_t n = a.size() / IN;
+            for (int64_t i = 0; i < n; ++i) {
+                const float *b = p + i * IN;
+                if (std::fabs(b[0] - lo.x) > E || std::fabs(b[3] - hi.x) > E || std::fabs(b[2] - lo.z) > E
+                        || std::fabs(b[5] - hi.z) > E) {
+                    continue;
+                }
+                if (std::fabs(b[1] - hi.y) < E && b[4] > hi.y + E) {
+                    hi.y = b[4];
+                    grew = true;
+                } else if (std::fabs(b[4] - lo.y) < E && b[1] < lo.y - E) {
+                    lo.y = b[1];
+                    grew = true;
+                }
+            }
+        }
+    }
+    out["brick"] = best;
+    out["lo"] = lo;
+    out["hi"] = hi;
+    return out;
+}
+
 Dictionary BrickTerrain::build_section(int tx, int sy, int tz) {
     std::map<std::array<int, 3>, OutBrick> overlay;
     t_bricks = &overlay;
@@ -9017,6 +9107,8 @@ void BrickTerrain::_bind_methods() {
     ClassDB::bind_static_method("BrickTerrain",
         D_METHOD("overlay_pick", "lists", "eye", "forward", "range_m", "cos_half", "max_bricks", "hidden"),
         &BrickTerrain::overlay_pick, DEFVAL(PackedVector3Array()));
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("overlay_find", "lists", "point"),
+        &BrickTerrain::overlay_find);
     ClassDB::bind_static_method("BrickTerrain",
         D_METHOD("build_coarse", "tx0", "tz0", "span", "step"),
         &BrickTerrain::build_coarse);
