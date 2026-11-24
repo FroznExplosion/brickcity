@@ -20,7 +20,7 @@ var _world: Node3D = null
 
 func _ready() -> void:
 	var bench := "--bench" in OS.get_cmdline_user_args()
-	var node: Node3D = Bench.new() if bench else MineWorld.new()
+	var node: Node3D = (Bench.new() as Node3D) if bench else (MineWorld.new() as Node3D)
 	node.name = "Bench" if bench else "MineWorld"
 	add_child(node)
 	if not bench:

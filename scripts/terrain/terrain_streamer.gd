@@ -394,28 +394,28 @@ func fresh(rect: Rect2i) -> bool:
 
 ## Hold the resident tiles over `rect` for `owner` (any key): built and
 ## collided, they wait to be swapped until released (unhold, swap_ready).
-func hold_tiles(rect: Rect2i, owner) -> void:
+func hold_tiles(rect: Rect2i, who) -> void:
 	for c in _tiles:
 		if rect.has_point(c):
 			if not _holds.has(c):
 				_holds[c] = {}
 			# The generation its own clear is drawn at (_tile_ready).
-			_holds[c][owner] = int(_gen.get(c, 0))
+			_holds[c][who] = int(_gen.get(c, 0))
 
 
-func unhold(rect: Rect2i, owner) -> void:
+func unhold(rect: Rect2i, who) -> void:
 	for c in _holds.keys():
 		if rect.has_point(c):
-			(_holds[c] as Dictionary).erase(owner)
+			(_holds[c] as Dictionary).erase(who)
 			if (_holds[c] as Dictionary).is_empty():
 				_holds.erase(c)
 
 
 ## Could every refresh over `rect` -- and the rest of each one's batch -- swap
-## NOW, holds by anyone but `owner` aside? (Nothing waiting: true.)
-func tiles_ready(rect: Rect2i, owner = null) -> bool:
+## NOW, holds by anyone but `who` aside? (Nothing waiting: true.)
+func tiles_ready(rect: Rect2i, who = null) -> bool:
 	for c in _batch_tiles(rect):
-		if not _tile_ready(c, owner):
+		if not _tile_ready(c, who):
 			return false
 	return true
 
@@ -433,12 +433,12 @@ func swap_ready(rect: Rect2i) -> void:
 		_swap_batch(c, true)
 
 
-func _held(c: Vector2i, owner = null) -> bool:
+func _held(c: Vector2i, who = null) -> bool:
 	var h = _holds.get(c)
 	if h == null:
 		return false
 	for o in h:
-		if o != owner:
+		if o != who:
 			return true
 	return false
 
@@ -448,15 +448,15 @@ func _held(c: Vector2i, owner = null) -> bool:
 ## after): under sustained fire a tile was never "ready" and the first
 ## shot's hole waited till the shooting stopped (--gate=breaklag --burst
 ## --burst-every=1: 534 ms, Docs/MineWorld.md 21). Nothing waiting: ready
-## unless its bake is still coming. For `owner`'s own hold: its clear's
+## unless its bake is still coming. For `who`'s own hold: its clear's
 ## generation drawn, or in the waiting swap.
-func _tile_ready(c: Vector2i, owner = null) -> bool:
+func _tile_ready(c: Vector2i, who = null) -> bool:
 	if not _tiles.has(c):
 		return true
-	if _held(c, owner):
+	if _held(c, who):
 		return false
-	if owner != null and _holds.has(c) and (_holds[c] as Dictionary).has(owner):
-		var need := int(_holds[c][owner])
+	if who != null and _holds.has(c) and (_holds[c] as Dictionary).has(who):
+		var need := int(_holds[c][who])
 		if int(drawn_gen.get(c, -1)) >= need:
 			return true
 		return _swaps.has(c) and int(_swaps[c].step) == SWAP_READY and int(_swaps[c].get("gen", -1)) >= need
@@ -483,9 +483,9 @@ func _batch_tiles(rect: Rect2i) -> Array:
 ## the holds). One frame, so nothing is drawn half old and half new.
 func _swap_batch(c: Vector2i, force := false) -> void:
 	var b = _batch_of.get(c)
-	var tiles: Array = b.tiles.keys() if b != null else [c]
+	var keys: Array = b.tiles.keys() if b != null else [c]
 	var all := true
-	for t in tiles:
+	for t in keys:
 		if _held(t):
 			return
 		if not _tile_ready(t):
@@ -500,7 +500,7 @@ func _swap_batch(c: Vector2i, force := false) -> void:
 			b.since = now
 		if now - int(b.since) < BATCH_WAIT_MS:
 			return
-	for t in tiles:
+	for t in keys:
 		if _swaps.has(t) and int(_swaps[t].step) == SWAP_READY:
 			_swap_now(t)
 			if b != null and _batch_of.get(t) == b:
@@ -508,7 +508,7 @@ func _swap_batch(c: Vector2i, force := false) -> void:
 	# Whole: the batch is done. Waited too long: the tiles still coming stay
 	# in it and swap alone when they are ready (its wait is over).
 	if all and b != null:
-		for t in tiles:
+		for t in keys:
 			if _batch_of.get(t) == b:
 				_batch_of.erase(t)
 

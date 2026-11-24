@@ -81,11 +81,11 @@ static func item_shader(alpha: bool) -> Shader:
 	return _item_shaders[i]
 
 
-static func _with_define(src: Shader, name: String) -> Shader:
+static func _with_define(src: Shader, define: String) -> Shader:
 	var code := src.code
 	var at := code.find("\n") + 1
 	var s := Shader.new()
-	s.code = code.insert(at, "#define %s\n" % name)
+	s.code = code.insert(at, "#define %s\n" % define)
 	return s
 
 
