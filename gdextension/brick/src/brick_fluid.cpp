@@ -1471,18 +1471,20 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
         return e.y + e.off * (float)(1.0 - k);
     };
     // Corner (ox, oz) (0 or 1) of cell (x, z)'s top, course b, fluid f, is at
-    // y now; it was at prev (or, new, at `base`, so a new cell rises from its
-    // floor). Keyed by the CELL's corner, not the shared grid corner: two
+    // y now; it was drawn at prev's eased height. A NEW top pops in at its
+    // height and holds it, easing only when its level changes: rising from
+    // its floor, a cell that took water rose and at once fell again as it
+    // passed water on -- the choppy flow (the user, 2026-11-24). Keyed by the CELL's corner, not the shared grid corner: two
     // cells with flat tops at different levels share a grid corner, and a new
     // cell took its neighbour's last height there -- it flashed up to a brick
     // and dropped, its corners at different heights (the user, 2026-11-23).
     auto ckey = [](int x, int b, int z, int ox, int oz, int f) -> int64_t {
         return pack3(2 * x + ox, b * 4 + f, 2 * z + oz);
     };
-    auto moved = [&](int x, int b, int z, int ox, int oz, int f, float y, float base) -> float {
+    auto moved = [&](int x, int b, int z, int ox, int oz, int f, float y) -> float {
         const int64_t k = ckey(x, b, z, ox, oz, f);
         auto it = prev.find(k);
-        const float off = (it != prev.end() ? shown(it->second, f) : base) - y;
+        const float off = it != prev.end() ? shown(it->second, f) - y : 0.0f;
         now[k] = Ease{ y, off, t_now };
         return off;
     };
@@ -1565,11 +1567,11 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
                                 && h00 == h10 && h10 == h11 && h11 == h01) {
                             // One easing for the whole top (a rect merges only
                             // tops moving alike); all four corners recorded.
-                            const float y = h00 * P - TOP_SINK, yb0 = (float)bottom * P;
-                            const float mv = moved(x, b, z, 0, 0, f, y, yb0);
-                            moved(x, b, z, 1, 0, f, y, yb0);
-                            moved(x, b, z, 0, 1, f, y, yb0);
-                            moved(x, b, z, 1, 1, f, y, yb0);
+                            const float y = h00 * P - TOP_SINK;
+                            const float mv = moved(x, b, z, 0, 0, f, y);
+                            moved(x, b, z, 1, 0, f, y);
+                            moved(x, b, z, 0, 1, f, y);
+                            moved(x, b, z, 1, 1, f, y);
                             flat[lx + SX * lz] = { true, h00, cc, f, mv };
                             any_flat = true;
                         } else if (top_open && !(c_ocean(c) && own == g_sea_b * CU)) {
@@ -1578,9 +1580,8 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
                             Vector3 nrm = (d - a).cross(bb - a);
                             if (nrm.y < 0) nrm = -nrm;
                             nrm = nrm.normalized();
-                            const float yb0 = (float)bottom * P;
-                            m.quad(a, d, cq, bb, nrm, cc, moved(x, b, z, 0, 0, f, a.y, yb0), moved(x, b, z, 0, 1, f, d.y, yb0),
-                                    moved(x, b, z, 1, 1, f, cq.y, yb0), moved(x, b, z, 1, 0, f, bb.y, yb0));
+                            m.quad(a, d, cq, bb, nrm, cc, moved(x, b, z, 0, 0, f, a.y), moved(x, b, z, 0, 1, f, d.y),
+                                    moved(x, b, z, 1, 1, f, cq.y), moved(x, b, z, 1, 0, f, bb.y));
                         }
                         // Sides: down to whatever covers the neighbour.
                         const float ch[4][2] = { { h10, h11 }, { h00, h01 }, { h01, h11 }, { h00, h10 } };
@@ -1607,17 +1608,16 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
                             const int o0x = (int)std::lround(p0.x / STUD_M) - x, o0z = (int)std::lround(p0.z / STUD_M) - z;
                             const int o1x = (int)std::lround(p1.x / STUD_M) - x, o1z = (int)std::lround(p1.z / STUD_M) - z;
                             // The foot on a neighbour's water top follows that
-                            // top as it eases (no gap under a rising cell).
+                            // top as it eases (no gap under a rising one).
                             float f0 = 0.0f, f1 = 0.0f;
                             if (wet_n && cover >= bottom) {
-                                const float nb0 = (float)(b * CU + floor_u(n.solid)) * P;
                                 const float yn = (float)cover * P - TOP_SINK;
-                                f0 = std::min(was(nx, b, nz, o0x - DX[i], o0z - DZ[i], f, nb0) - yn, 0.0f);
-                                f1 = std::min(was(nx, b, nz, o1x - DX[i], o1z - DZ[i], f, nb0) - yn, 0.0f);
+                                f0 = std::min(was(nx, b, nz, o0x - DX[i], o0z - DZ[i], f, yn) - yn, 0.0f);
+                                f1 = std::min(was(nx, b, nz, o1x - DX[i], o1z - DZ[i], f, yn) - yn, 0.0f);
                             }
                             m.quad(Vector3(p0.x, y0, p0.z), Vector3(p1.x, y0, p1.z),
                                     Vector3(p1.x, yb, p1.z), Vector3(p0.x, ya, p0.z), nrm, cc,
-                                    f0, f1, moved(x, b, z, o1x, o1z, f, yb, y0), moved(x, b, z, o0x, o0z, f, ya, y0));
+                                    f0, f1, moved(x, b, z, o1x, o1z, f, yb), moved(x, b, z, o0x, o0z, f, ya));
                         }
                         // Bottom over open air (a fall seen from under it).
                         if (floor_of(c.solid) == 0) {

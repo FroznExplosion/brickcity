@@ -316,6 +316,12 @@ cell took its neighbour's last height there, flashed up to a brick and dropped, 
 different heights (gaps). Now each cell's four corners are its own keys; merged flat rects
 merge only tops easing alike; a side's foot on a neighbour's top follows that top's easing.
 
+**New tops pop in (2026-11-24).** A top that was not drawn before appears at its own height
+and holds it; only a change of level eases. Rising from its floor, a cell that took water rose
+and at once fell again as it passed water on: the flow looked choppy (the user). Side feet on a
+new neighbour stand at its height too. `fluid_probe` section 0 checks both: a source's new tops
+are not eased at all; poured water's tops ease down as they give water.
+
 Easing goes on from where a corner is DRAWN when the next mesh is built, not from where it
 was heading: water meshes again every tick, and each new mesh snapped every cell still rising to
 its full height (the "jump up" as water and lava enter a cell). The mesher keeps per corner its
