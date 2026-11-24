@@ -4942,6 +4942,19 @@ func _run_sea_gate() -> void:
 	await _frames(2)
 	await _shot(dev + "sea_pillar_big_tint.png")
 	water._water_mat.set_shader_parameter("debug_band", false)
+	# No bricks on water (R3, decision A): one laid sideways off the pillar
+	# over deep water is refused; one on the sea floor goes.
+	var size0: int = builder.size_i
+	builder.size_i = (builder.SIZES as Array).find(1)
+	var deep_to := Vector3i(pc.x + 2, sea_b - 1, pc.y)
+	var fx := pc.x + 5
+	var fp := BrickTerrain.surface_plate(fx, pc.y)
+	var floor_to := Vector3i(fx, floori(fp / 3.0) + (1 if posmod(fp, 3) == 2 else 0), pc.y)
+	var refused: bool = builder.floats_on_water(deep_to)
+	var allowed: bool = not builder.floats_on_water(floor_to)
+	builder.size_i = size0
+	print("[sea-gate] no bricks on water: sideways over deep water refused %s, on the sea floor allowed %s" % [
+			refused, allowed])
 	water.sea.wave_gain = gain0
 	water.sea.push_waves()
 	# A river mouth: a river column under the sea line near the coast.
