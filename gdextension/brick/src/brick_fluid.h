@@ -47,6 +47,9 @@ public:
     /// Where the player is, and how far round them fluid ticks. Past it,
     /// cells wait (frozen) until someone comes back.
     static void set_centre(Vector3 at, double sim_radius_m);
+    /// Inland water (not open sea) keeps its sections out to this many
+    /// metres, to be drawn out to the chosen terrain LOD; 0: as the rest.
+    static void set_keep_inland(double metres);
     /// Minecraft's sloped tops (corners averaged) or flat plate steps.
     static void set_sloped(bool on);
     static bool get_sloped();

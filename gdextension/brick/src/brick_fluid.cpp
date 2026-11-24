@@ -199,6 +199,11 @@ int g_sea_b = 0;          ///< the first course ABOVE the sea
 bool g_sea_on = false;
 bool g_sloped = false;   ///< flat plate steps (the user, 2026-11-21); true = MC slopes
 double g_cx = 0.0, g_cz = 0.0, g_sim_r = 90.0;
+/// How far inland water (lakes, rivers, the player's -- not the open sea,
+/// which the tiers draw) keeps its sections, metres: water is drawn out to
+/// the terrain LOD the player chose (MineWater.drop_lod). 0: no further than
+/// the rest (EVICT_PAST).
+double g_keep_inland_m = 0.0;
 double g_recheck_x = 1e30, g_recheck_z = 1e30;
 
 // THE REAL SEA (MineWater.md 11.8, 11.9): sea water within REAL_BAND studs
@@ -1820,7 +1825,17 @@ void evict_far() {
         const Section *s = e.second.get();
         const double cx = ((double)s->sx + 0.5) * tile_m - g_cx;
         const double cz = ((double)s->sz + 0.5) * tile_m - g_cz;
-        if (cx * cx + cz * cz <= r * r) continue;
+        const double d2 = cx * cx + cz * cz;
+        if (d2 <= r * r) continue;
+        if (g_keep_inland_m > r && d2 <= g_keep_inland_m * g_keep_inland_m && s->wet > 0) {
+            // Inland water out to the chosen LOD stays, to be drawn (its
+            // far mesh reads sections); a section of only open sea goes.
+            bool inland = false;
+            for (const Cell &c : s->c) {
+                if (c_wet(c) && !c_ocean(c)) { inland = true; break; }
+            }
+            if (inland) continue;
+        }
         bool queued = false;
         for (uint8_t q : s->queued) {
             if (q) { queued = true; break; }
@@ -2267,6 +2282,10 @@ void BrickFluid::set_centre(Vector3 at, double sim_radius_m) {
     g_cx = at.x;
     g_cz = at.z;
     g_sim_r = std::max(8.0, sim_radius_m);
+}
+
+void BrickFluid::set_keep_inland(double metres) {
+    g_keep_inland_m = std::max(0.0, metres);
 }
 
 void BrickFluid::set_sloped(bool on) {
@@ -2953,6 +2972,7 @@ void BrickFluid::_bind_methods() {
     ClassDB::bind_static_method("BrickFluid", D_METHOD("busy"), &BrickFluid::busy);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("build_tile_mesh", "tx", "tz"), &BrickFluid::build_tile_mesh);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("ease_seconds"), &BrickFluid::ease_seconds);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("set_keep_inland", "metres"), &BrickFluid::set_keep_inland);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("request_mesh", "tx", "tz"), &BrickFluid::request_mesh);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("drawn_tiles"), &BrickFluid::drawn_tiles);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("cell_info", "cell"), &BrickFluid::cell_info);

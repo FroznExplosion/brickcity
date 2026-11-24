@@ -183,6 +183,10 @@ func _apply_setting(id: StringName, value: Variant) -> void:
 			BrickGridLight.near_shadowed = [0, 1, 2, 4][clampi(int(value), 0, 3)]
 		&"near_lamps":
 			BrickGridLight.near_max = [0, 2, 4, 8][clampi(int(value), 0, 3)]
+		&"water_lod":
+			# mine_water.gd has no class_name (preloaded by the mine world).
+			var mw: GDScript = load("res://scripts/water/mine_water.gd")
+			mw.set("drop_lod", clampi(int(value), 0, 2) + 1)
 		&"sun_cascades":
 			sun_cascades = 2 if int(value) == 1 else 4
 			var city := _city()
@@ -303,6 +307,13 @@ func _setting_defs() -> Array:
 			"min": 0.0, "max": 120.0, "step": 5.0, "suffix": " m",
 			"hint": "How far the tops of buildings still show studs, as flat cards. Past it they "
 			+ "are smooth. Under Real Studs: no cards."},
+		{"id": &"water_lod", "tab": "video", "type": MENU_SETTINGS.T_ENUM,
+			"label": "Water Drops At", "default": 1,
+			"choices": ["LOD 1 (detailed ground only)", "LOD 2", "LOD 3"],
+			"hint": "The mine world's water (not the sea) is drawn until the ground turns "
+			+ "this coarse. LOD 1: water runs and shows on the detailed ground only, the "
+			+ "cheapest. LOD 2: still water shows on the near coarse ground too (~180 m). "
+			+ "LOD 3: twice as far, more memory."},
 		{"id": &"near_lamps", "tab": "video", "type": MENU_SETTINGS.T_ENUM,
 			"label": "Lamp Lights", "default": 2, "choices": ["Off", "2", "4", "8"],
 			"hint": "How many of the lamps nearest you light the room for real. "
