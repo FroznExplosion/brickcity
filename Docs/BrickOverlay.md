@@ -148,3 +148,39 @@ sunken face is hard to see for that time.
 - Not done: the city on terrain was not looked at in a picture (its streamer
   makes the overlay as every scene does); --gate=breaklag --streaming does
   not report the overlay.
+
+- **2026-11-24 (the audit chat took over): see-through slits fixed, behind
+  faces built.**
+  - Slits: the user saw see-through lines along the grid with the overlay on,
+    none with it off. Each flat face sank 13 mm along ITS OWN normal, so faces
+    meeting at an angle (a top and the side under it) or a sunk face beside an
+    unsunk one (a tile's edge strips) moved apart. terrain.gdshader now moves
+    each vertex back along its own ray from the eye (13 mm under the face
+    along its normal, more at a grazing view, as far as 4x): a vertex stays on
+    its pixel, so the ground covers exactly what it covered and no slit can
+    open. POSITION is written on every path of the flat branch (a shader that
+    writes it anywhere uses it everywhere). New `--gate=slits` (magenta sky,
+    162 scoped views across tile edges): overlay whole 39359 -> 3 px, sunk
+    with its bricks hidden 600288 -> 6 px, the flat ground alone 46 (its own
+    1-3 px T-junction pinholes).
+  - **6b. Behind faces** (the user's idea: bake as if the real bricks were
+    missing, so what is behind them is not culled). `build_tile` /
+    `build_section` (BrickTerrain.set_behind_faces, the mine world; off
+    elsewhere) run mask_faces a second time over the cells NOT in an exposed
+    brick, keeping each face that touches one (exposed_brick_cells: every
+    brick open air touches, its bond rect and course). CUSTOM0.b = 96
+    (BEHIND_FACE); `behind_mesh`, a node of its own (TerrainTile
+    "SurfaceBehind", visibility to 30 m, no shadow). The shader keeps them
+    only within the overlay's reach, sunk like a boxed face; past it they
+    collapse. Their sky light is read past the brick in front of them (what
+    the hole will have). A shot brick's neighbours' sides are their own
+    instances' (whole boxes), so the hole shows real bricks the frame it is
+    hit; the stand-in box (TERRAIN_CAVITY) is off while behind faces are on
+    (`-- --no-behind`: the old way). The rebuild still brings the under
+    brick's studs (~35 ms).
+  - Cost (terrain_cost_probe, a tile, sky light on): 2095 behind triangles
+    (the flat mesh 592); a bake 4.6 -> 7.1 ms on its worker (exposed cells
+    0.6, the faces 0.75, light 0.5, the rest the split). GPU not measured yet
+    (`--gate=gpu` needs the editor closed).
+  - Not done: a second shot into the brick behind before the rebuild lands
+    (~35 ms) has no layer behind it (seen through till then).

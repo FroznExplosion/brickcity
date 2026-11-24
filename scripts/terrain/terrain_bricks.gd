@@ -419,7 +419,10 @@ func _push_holes() -> void:
 			los.append(Vector3.ZERO)
 			his.append(Vector3.ZERO)
 	_cav_mm.buffer = cb
-	_cav_mm.visible_instance_count = n
+	# With behind faces baked (BrickTerrain.set_behind_faces) the hole's own
+	# walls are already there: the stand-in, a millimetre inside them, would
+	# cover them.
+	_cav_mm.visible_instance_count = 0 if BrickTerrain.get_behind_faces() else n
 	# The ground, and its studs (a hidden brick's studs go with it).
 	for m: ShaderMaterial in [_ground, TerrainTile.sky_stud_material()]:
 		if m == null:

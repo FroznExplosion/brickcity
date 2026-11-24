@@ -351,14 +351,22 @@ void vertex() {
     v_block = CUSTOM0.g < 0.25 ? CUSTOM0.g * (255.0 / 60.0) : 0.0;
 #endif
     float push = 0.0;
-    if (overlay_reach > 0.0 && abs(CUSTOM0.b * 255.0 - 64.0) < 0.5) {
+    // BEHIND faces (CUSTOM0.b = 96, Docs/BrickOverlay.md 6b): the solid behind
+    // the overlay's bricks, there for a shot brick's hole. Only inside the
+    // reach, where a brick can be shot out; collapsed past it (and with no
+    // overlay), sunk like a boxed face inside it.
+    bool behind = abs(CUSTOM0.b * 255.0 - 96.0) < 0.5;
+    if (behind && (overlay_reach <= 0.0
+            || distance(v_world, INV_VIEW_MATRIX[3].xyz) >= overlay_reach)) {
+        VERTEX = vec3(0.0);
+    } else if (overlay_reach > 0.0 && (behind || abs(CUSTOM0.b * 255.0 - 64.0) < 0.5)) {
         float od = distance(v_world, INV_VIEW_MATRIX[3].xyz);
         float ok = 1.0 - smoothstep(overlay_reach - overlay_fade, overlay_reach, od);
         // Where the face would lie sunk along its normal: the hole test's
         // place in its brick (below) is measured from there.
         vec3 sunk = VERTEX - normalize(NORMAL) * (OVERLAY_RECESS * ok);
         bool folded = false;
-        if (overlay_holes > 0 && UV2.x > 0.0 && UV2.y > 0.0) {
+        if (!behind && overlay_holes > 0 && UV2.x > 0.0 && UV2.y > 0.0) {
             // The middle of this face's BRICK face (UV is the place in it,
             // UV2 its size; the mesher's axes: x faces u along z (+ on +x),
             // z faces u along x (+ on -z), tops and bottoms u x and v z, a

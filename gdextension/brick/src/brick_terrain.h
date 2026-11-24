@@ -858,6 +858,9 @@ public:
     static bool smooth_at(int x, int z);
 
     static void set_flat_mode(bool on);
+    /// Bake the faces behind the overlay's bricks (Docs/BrickOverlay.md 6b).
+    static void set_behind_faces(bool on);
+    static bool get_behind_faces();
     static bool get_flat_mode();
     static void set_overlay_chance(double chance);
     static double get_overlay_chance();

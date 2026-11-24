@@ -42,6 +42,15 @@ func _initialize() -> void:
 		BrickTerrain.configure(int(s.seed))
 		BrickTerrain.set_gen_params(s.gen)
 		_run(sky, stud)
+	# The mine world's bake: sky light on, the faces behind the overlay's
+	# bricks too (Docs/BrickOverlay.md 6b).
+	BrickTerrain.set_sky_light(true)
+	BrickTerrain.set_behind_faces(true)
+	BrickTerrain.configure(int(s.seed))
+	BrickTerrain.set_gen_params(s.gen)
+	print("[cost] with behind faces:")
+	_run(true, stud)
+	BrickTerrain.set_behind_faces(false)
 	BrickTerrain.set_generator(0)
 	BrickTerrain.set_bond_top(false)
 	quit(0)
