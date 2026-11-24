@@ -21,6 +21,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -270,6 +271,18 @@ inline bool c_lava(const Cell &c) { return c_wet(c) && c_fluid(c) == F_LAVA; }
 
 std::unordered_set<int64_t> g_mesh_requests;
 std::unordered_set<int64_t> g_far_requests;   ///< tiles wanting the coarse mesh
+
+/// LEVELLING (stage P, Docs/MineWaterNext.md 4): still water has no
+/// pressure -- poured down one arm of a U-bend it stood there; a sealed room
+/// filled unevenly. A still cell resting on full still water (a head on it)
+/// marks its body due; once calm a moment it is levelled as one body: its
+/// units laid again from the lowest floor up through every opening, a unit
+/// layer at a time. Seed cell -> the tick it is due.
+std::unordered_map<int64_t, uint32_t> g_level_due;
+constexpr int LEVEL_EVERY = 10;          ///< ticks between looks
+constexpr int LEVEL_LOOKS = 8;           ///< bodies a look
+constexpr int LEVEL_MAX = 4096;          ///< cells a body may have
+constexpr uint32_t LEVEL_WAIT = 20;      ///< ticks calm before levelling
 
 /// Multiplayer groundwork (MineWater.md 11.5): the cells whose drawn state
 /// changed, with the write count at the time, kept while `g_log_on`. A peer
@@ -1051,6 +1064,14 @@ void eval(int x, int b, int z) {
         }
     }
     if (moved) return;
+    // Resting on full still water: there is a head here -- the body may not
+    // be level (a U-bend's arm). Looked at once it has been calm (stage P).
+    if (floor_of(cur.solid) == 0) {
+        const Cell &dl = wcell(x, b - 1, z);
+        if (c_wet(dl) && c_fluid(dl) == cf && c_kind(dl) == K_STILL && floor_u(dl.solid) + dl.amt >= CU) {
+            g_level_due.emplace(pack3(x, b, z), g_tick + LEVEL_WAIT);
+        }
+    }
     // The edge distance (4.2.6): 0 beside dry floor at this cell's own level
     // that the sheet could spread onto, else one more than the nearest still
     // neighbour's. A cell two or more deep gives a tile to a neighbour one
@@ -1878,6 +1899,165 @@ int tile_coord(int64_t k, bool z) {
 // --- the tick ------------------------------------------------------------------------
 
 
+/// Level the still body holding (x, b, z) (stage P). False when it was left
+/// alone: open (a way out lower than its level), joined to running or
+/// infinite water, too big, or already level. `done`: cells of bodies seen.
+bool level_body(int x0, int b0, int z0, std::unordered_set<int64_t> &done, std::unordered_set<int64_t> &wrote) {
+    const Cell &s0 = wcell(x0, b0, z0);
+    if (!c_wet(s0) || c_kind(s0) != K_STILL) return false;
+    const int f = c_fluid(s0);
+    // The body: connected still cells of its fluid.
+    std::vector<int64_t> body{ pack3(x0, b0, z0) };
+    std::unordered_set<int64_t> in_body{ body[0] };
+    int64_t units = 0;
+    static const int NX[6] = { 1, -1, 0, 0, 0, 0 }, NB[6] = { 0, 0, 0, 0, 1, -1 }, NZ[6] = { 0, 0, 1, -1, 0, 0 };
+    for (size_t h = 0; h < body.size(); ++h) {
+        if (body.size() > (size_t)LEVEL_MAX) return false;
+        int x, b, z;
+        unpack3(body[h], x, b, z);
+        units += wcell(x, b, z).amt;
+        for (int i = 0; i < 6; ++i) {
+            const Cell &n = wcell(x + NX[i], b + NB[i], z + NZ[i]);
+            if (!c_wet(n) || c_fluid(n) != f) continue;
+            if (c_kind(n) != K_STILL) return false;      // running or infinite water joined
+            const int64_t nk = pack3(x + NX[i], b + NB[i], z + NZ[i]);
+            if (in_body.insert(nk).second) body.push_back(nk);
+        }
+    }
+    for (int64_t k : body) done.insert(k);
+    // Fill again from the lowest floor up: cells join as the level reaches
+    // their floor (a priority flood); each unit layer gives a unit to every
+    // cell the level is inside. A cell found lower than the level is a way
+    // out: the rules run it, not this.
+    struct Q { int key; int64_t k; bool operator>(const Q &o) const { return key > o.key; } };
+    std::priority_queue<Q, std::vector<Q>, std::greater<Q>> pq;
+    std::unordered_set<int64_t> seen;
+    auto floor_key = [](int b, const Cell &c) { return b * CU + floor_u(c.solid); };
+    {
+        int best = INT_MAX;
+        int64_t bk = body[0];
+        for (int64_t k : body) {
+            int x, b, z;
+            unpack3(k, x, b, z);
+            const int fk = floor_key(b, wcell(x, b, z));
+            if (fk < best) { best = fk; bk = k; }
+        }
+        pq.push({ best, bk });
+        seen.insert(bk);
+    }
+    struct In { int64_t k; int lo, hi; int fill; };
+    std::vector<In> reach;
+    int level = pq.top().key;
+    int64_t left = units;
+    while (left > 0) {
+        while (!pq.empty() && pq.top().key <= level) {
+            const Q q = pq.top();
+            pq.pop();
+            if (q.key < level) return false;              // a way out below the level
+            int x, b, z;
+            unpack3(q.k, x, b, z);
+            const Cell &c = wcell(x, b, z);
+            reach.push_back({ q.k, q.key, (b + 1) * CU, 0 });
+            for (int i = 0; i < 6; ++i) {
+                const int nx = x + NX[i], nb = b + NB[i], nz = z + NZ[i];
+                const Cell &n = wcell(nx, nb, nz);
+                if (c_cap(n) <= 0) continue;
+                if (c_wet(n) && c_fluid(n) != f) continue;   // another fluid: a wall
+                if (NB[i] > 0 && (n.solid & 1)) continue;   // a plate over this cell
+                if (NB[i] < 0 && floor_of(c.solid) > 0) continue;
+                const int64_t nk = pack3(nx, nb, nz);
+                if (!seen.insert(nk).second) continue;
+                if (seen.size() > (size_t)LEVEL_MAX * 4) return false;
+                pq.push({ floor_key(nb, n), nk });
+            }
+        }
+        int active = 0;
+        for (const In &r : reach) {
+            if (r.lo <= level && level < r.hi) ++active;
+        }
+        if (active == 0) return false;
+        if (left >= active) {
+            for (In &r : reach) {
+                if (r.lo <= level && level < r.hi) ++r.fill;
+            }
+            left -= active;
+            ++level;
+        } else {
+            for (In &r : reach) {
+                if (left == 0) break;
+                if (r.lo <= level && level < r.hi) { ++r.fill; --left; }
+            }
+        }
+    }
+    // Write what changed: the reached cells' new water, and nothing left in
+    // body cells above the level.
+    std::unordered_map<int64_t, int> fill;
+    for (const In &r : reach) fill[r.k] = r.fill;
+    for (int64_t k : body) fill.emplace(k, 0);
+    bool any = false;
+    for (const auto &e : fill) {
+        int x, b, z;
+        unpack3(e.first, x, b, z);
+        const Cell &c = wcell(x, b, z);
+        const int have = (c_wet(c) && c_fluid(c) == f) ? (int)c.amt : 0;
+        if (have == e.second) continue;
+        Cell n = c;
+        if (e.second > 0) {
+            n.st = mk_st(f, K_STILL, false);
+            n.amt = (uint8_t)e.second;
+            n.aux = E_NONE;
+        } else {
+            n = Cell{ c.solid, 0, 0, 0 };
+        }
+        g_sets.push_back({ x, b, z, n });
+        wrote.insert(e.first);
+        any = true;
+    }
+    return any;
+}
+
+int g_levelled = 0;
+
+/// The bodies due a levelling, a few a look, in the sim radius.
+void level_due() {
+    if (g_level_due.empty() || g_tick % LEVEL_EVERY != 0) return;
+    std::vector<int64_t> now;
+    for (const auto &e : g_level_due) {
+        if (e.second > g_tick) continue;
+        int x, b, z;
+        unpack3(e.first, x, b, z);
+        if (dist2_centre(x, z) > g_sim_r * g_sim_r) continue;
+        now.push_back(e.first);
+        if ((int)now.size() >= LEVEL_LOOKS) break;
+    }
+    std::unordered_set<int64_t> done, wrote;
+    const size_t sets_before = g_sets.size();
+    for (int64_t k : now) {
+        g_level_due.erase(k);
+        if (done.count(k)) continue;
+        int x, b, z;
+        unpack3(k, x, b, z);
+        if (level_body(x, b, z, done, wrote)) ++g_levelled;
+    }
+    // This tick's moves were worked out from the water before the levelling:
+    // one into or out of a levelled cell would take or add units twice.
+    if (!wrote.empty()) {
+        // The apply keeps a cell's first set: the rules' own sets to a
+        // levelled cell this tick (its edge distance, say) would win.
+        std::vector<SetOp> keep;
+        keep.reserve(g_sets.size());
+        for (size_t i = 0; i < g_sets.size(); ++i) {
+            const SetOp &o = g_sets[i];
+            if (i < sets_before && wrote.count(pack3(o.x, o.b, o.z))) continue;
+            keep.push_back(o);
+        }
+        g_sets.swap(keep);
+        g_moves.erase(std::remove_if(g_moves.begin(), g_moves.end(), [&](const MoveOp &m) {
+            return wrote.count(pack3(m.x, m.b, m.z)) || wrote.count(pack3(m.tx, m.tb, m.tz));
+        }), g_moves.end());
+    }
+}
+
 /// SECTIONS FAR AWAY ARE LET GO. Every column the water ever sampled kept its
 /// section for good -- the flow's look for a drop, priming, the sea's floor
 /// -- so a long walk left thousands behind, and the save, the sea mask and
@@ -2122,6 +2302,7 @@ void do_tick() {
         ++evals;
         eval(x, b, z);
     }
+    if (g_simulate) level_due();
 
     // Apply (MineWater.md 4.2: sets first, then the moves that still hold).
     std::unordered_set<int64_t> set_now;
@@ -2305,6 +2486,7 @@ double BrickFluid::reset(double sea_m, bool sea_on) {
     g_sec.clear();
     g_parked.clear();
     g_parked_bytes = 0;
+    g_level_due.clear();
     g_sec_epoch.fetch_add(1);
     g_tile_secs.clear();
     g_due.clear();

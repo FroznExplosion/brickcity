@@ -4778,7 +4778,7 @@ func _run_water_gate() -> void:
 	W.drop_lod = 1
 	await _frames(60)
 	var shown_lod1: bool = water.has_tile_drawn(pt)
-	W.drop_lod = 2
+	W.drop_lod = -1
 	await _frames(60)
 	print("[water-gate] water LOD: 160 m off (ground LOD %d), platform water drawn at drop LOD 2 %s (want true), at LOD 1 %s (want false), back %s; past the drop LOD %d (want 0)" % [
 			Water.tile_lod(pt, Vector2i(floori(_eye().x / (32.0 * stud)), floori(_eye().z / (32.0 * stud))), _streamer),

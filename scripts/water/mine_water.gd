@@ -64,7 +64,15 @@ var _near_tiles := 4
 ## and is drawn on the detailed ground only (cheapest); at 2 (the default) the
 ## coarse ring's water stays drawn, frozen; inland water keeps its sections
 ## that far (BrickFluid.set_keep_inland), the open sea is the tiers'.
-static var drop_lod := 2
+## The menu sets Engine meta `water_drop_lod`; this, when set (1+), wins over
+## it (the water gate).
+static var drop_lod := -1
+
+
+static func _drop_lod() -> int:
+	if drop_lod >= 1:
+		return drop_lod
+	return int(Engine.get_meta(&"water_drop_lod", 2))
 var sea_on := false
 var wave_scale := 1.0
 ## The sea's tiers (WaterSea), when the sea is on.
@@ -570,21 +578,22 @@ func _check_lod(eye: Vector3) -> void:
 	# The chosen drop LOD: the sim's reach (LOD 1: the detailed ground only)
 	# and how far inland water keeps its sections (to the drop LOD's edge,
 	# that square's corner).
-	if drop_lod <= 1:
+	var dl := _drop_lod()
+	if dl <= 1:
 		sim_radius_m = minf(_base_sim_m, (float(_near_tiles) + 0.5) * tile_m)
 		BrickFluid.set_keep_inland(0.0)
 	else:
 		sim_radius_m = _base_sim_m
-		BrickFluid.set_keep_inland(float(TerrainCoarse.FIRST << (drop_lod - 2)) * tile_m * 1.42 + tile_m)
+		BrickFluid.set_keep_inland(float(TerrainCoarse.FIRST << (dl - 2)) * tile_m * 1.42 + tile_m)
 	var st: Object = host.get("_streamer") if host != null else null
 	var ct := Vector2i(floori(eye.x / tile_m), floori(eye.z / tile_m))
 	if st != null and st.has_method("has_tile"):
 		for t in _tiles.keys():
-			if tile_lod(t, ct, st) >= drop_lod:
+			if tile_lod(t, ct, st) >= dl:
 				_release(t)
 				_parked[t] = true
 		for t in _parked.keys():
-			if tile_lod(t, ct, st) < drop_lod:
+			if tile_lod(t, ct, st) < dl:
 				_parked.erase(t)
 				var c := Vector2((t.x + 0.5) * tile_m, (t.y + 0.5) * tile_m)
 				_lod_pending[t] = true
@@ -668,7 +677,7 @@ func drawn_on_bare() -> int:
 		var e: Vector3 = host._eye()
 		var ct := Vector2i(floori(e.x / tile_m), floori(e.z / tile_m))
 		for t in _tiles.keys():
-			if tile_lod(t, ct, st) >= drop_lod:
+			if tile_lod(t, ct, st) >= _drop_lod():
 				n += 1
 	return n
 

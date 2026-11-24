@@ -184,9 +184,9 @@ func _apply_setting(id: StringName, value: Variant) -> void:
 		&"near_lamps":
 			BrickGridLight.near_max = [0, 2, 4, 8][clampi(int(value), 0, 3)]
 		&"water_lod":
-			# mine_water.gd has no class_name (preloaded by the mine world).
-			var mw: GDScript = load("res://scripts/water/mine_water.gd")
-			mw.set("drop_lod", clampi(int(value), 0, 2) + 1)
+			# Read by the mine world's water (mine_water.gd, MineWater.drop_lod);
+			# a flag, so the menu loads none of the mine world's scripts.
+			Engine.set_meta(&"water_drop_lod", clampi(int(value), 0, 2) + 1)
 		&"sun_cascades":
 			sun_cascades = 2 if int(value) == 1 else 4
 			var city := _city()
