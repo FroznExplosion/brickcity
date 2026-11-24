@@ -33,6 +33,16 @@ reads the terrain as solid or open.
 **A water cell is 1 stud x 1 brick** (0.35 x 0.42 x 0.35 m), on the brick courses. Inside the
 cell the water has a **level in plates: 1, 2 or 3**. One plate of water is a **tile** of water.
 
+**Since 2026-11-23 the level is in half tiles ("units"), 1 to 6** (`U` = 2 a plate, `CU` = 6 a
+course, brick_fluid.cpp): the user asked for water that thins by half a tile a stud. Water from
+a source is 5 units a stud out, then 4, 3, 2, 1: it reaches **5 studs** and ends half a tile
+deep (it was 2 plates to 7 studs, a tile to 14). Lava keeps 2 plates to 3 studs, a tile to 6.
+Still water moves and dries by the unit (a lone half tile dries). The terrain stays in plates;
+the script API (`place`, `remove`, `cell_info.amount`, buckets) still counts tiles, a half
+rounded up (`cell_info.units` gives units); saves are format 2 (format 1 is read doubled). A
+pit under a fall fills when its floor, wet or dry, has no drop out of it (a 5-stud stream no
+longer covers a pit's floor before it fills).
+
 ```
    side view, one cell              level 3 = a full brick of water
    +-----------+  plate 3           level 2 = a plate-and-tile
@@ -596,6 +606,8 @@ drying tile could lose its timer to a same-tick write (timers now run first).
    and the source is unchanged.
 7. Water shares the terrain's grid (same stud columns, brick courses of its plates) as a layer of
    its own (section 2).
+9. (2026-11-23) Water levels in **half tiles**, a source thinning half a tile a stud to 5 studs
+   (section 2). Lava unchanged.
 8. (2026-11-23) A source on the open sea runs out only `SEA_REACH` (2) studs: the sea takes
    the rest in. Rock made by lava meeting water is part of the world: laid as terrain with
    `anchored` (no collapse survey), so it stays over water and dams the lava. All water is
