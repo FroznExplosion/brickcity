@@ -9,8 +9,8 @@ extends SceneTree
 ## heightfield test can do to its ground the arena has to be able to do to its
 ## own. Two things were the heightfield test's alone and are checked in both:
 ##
-##   * the geometry chamfer near the camera (TerrainTile.bevel_enabled) -- a
-##     switch each scene set for itself, and only one did;
+##   * real bevels near the camera (the brick overlay the streamer makes,
+##     TerrainBricks) -- once a switch each scene set for itself;
 ##   * the terrain dev menu (F10, terrain_dev_menu.gd) -- every row it offers
 ##     a scene has to do something on that scene;
 ##   * the level editor's tools (terrain_editor.gd) -- always in hand in the
@@ -38,18 +38,10 @@ func _frames(n: int) -> void:
 		await process_frame
 
 
-## Chamfered triangles held by the tiles round the camera, and how many of
-## those tiles are showing their chamfered mesh.
+## The streamer's brick overlay: on, and how many real bricks it lays.
 func _chamfer(streamer: TerrainStreamer) -> Dictionary:
-	var tris := 0
-	var shown := 0
-	for t in streamer.tiles():
-		var tile := t as TerrainTile
-		tris += tile.bevel_tri_count
-		var near := tile.get_node_or_null(^"SurfaceChamfered") as MeshInstance3D
-		if near != null and near.visible:
-			shown += 1
-	return {"tris": tris, "shown": shown}
+	var b: TerrainBricks = streamer.bricks
+	return {"on": b != null and b.enabled, "bricks": b.count if b != null and b.enabled else 0}
 
 
 ## The rows a dev menu built: its controls, by what they say.
@@ -77,7 +69,7 @@ func _run() -> void:
 	print("ground tools probe")
 	# A probe's scene must never take the mouse (CLAUDE.md, "Testing").
 	PlayerCamera.hands_off = true
-	_ok("the geometry chamfer is on without a scene asking", TerrainTile.bevel_enabled)
+	_ok("real bevels are on without a scene asking", TerrainBricks.overlay_default)
 
 	await _arena()
 	await _heightfield()
@@ -100,8 +92,8 @@ func _arena() -> void:
 	streamer.settle(Vector2(cam.global_position.x, cam.global_position.z))
 	await _frames(4)
 	var c := _chamfer(streamer)
-	_ok("its ground near the camera is chamfered", int(c.tris) > 0 and int(c.shown) > 0,
-			"%d chamfered triangles held, %d tile(s) showing them" % [c.tris, c.shown])
+	_ok("its ground near the camera has the brick overlay", bool(c.on),
+			"%d real bricks laid" % int(c.bricks))
 	# Streamed like the heightfield test (Terrain.md 22.18): the city's square
 	# is pinned, so every tile of it is resident with a collider, but one
 	# outside the streamed square is not drawn -- coarse ground is.
@@ -153,15 +145,15 @@ func _arena() -> void:
 		streamer.settle(Vector2(cam.global_position.x, cam.global_position.z))
 		await _frames(4)
 		var off := _chamfer(streamer)
-		_ok("Real chamfers off: every tile rebuilt flat", not TerrainTile.bevel_enabled
-				and int(off.tris) == 0 and streamer.tile_count() == tiles,
-				"%d chamfered triangles, %d of %d tiles" % [off.tris, streamer.tile_count(), tiles])
+		_ok("Real chamfers off: no real bricks laid", not bool(off.on) and int(off.bricks) == 0
+				and streamer.tile_count() == tiles,
+				"%d bricks, %d of %d tiles" % [off.bricks, streamer.tile_count(), tiles])
 		_press(menu, "Real chamfers near the camera")
 		streamer.settle(Vector2(cam.global_position.x, cam.global_position.z))
 		await _frames(4)
 		var on := _chamfer(streamer)
-		_ok("and on again: chamfered again", TerrainTile.bevel_enabled and int(on.tris) > 0,
-				"%d chamfered triangles" % on.tris)
+		_ok("and on again: real bricks again", bool(on.on) and int(on.bricks) > 0,
+				"%d bricks" % on.bricks)
 
 		scene._toggle_terrain_dev_menu()
 		await _frames(2)
@@ -261,8 +253,8 @@ func _heightfield() -> void:
 	streamer.settle(Vector2(cam.global_position.x, cam.global_position.z))
 	await _frames(4)
 	var c := _chamfer(streamer)
-	_ok("its ground near the camera is chamfered", int(c.tris) > 0 and int(c.shown) > 0,
-			"%d chamfered triangles held, %d tile(s) showing them" % [c.tris, c.shown])
+	_ok("its ground near the camera has the brick overlay", bool(c.on),
+			"%d real bricks laid" % int(c.bricks))
 
 	var ed = scene._editor
 	_ok("the editing tools are in hand, sites and all", ed != null and ed.is_processing()

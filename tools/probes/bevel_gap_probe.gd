@@ -133,29 +133,21 @@ func _run() -> void:
 	var scope := _scope_views()
 
 	# The chamfer is the brick overlay's real bricks over the sunken flat
-	# ground (Docs/BrickOverlay.md) when the streamer has one; the old
-	# chamfered near tier with -- --old-chamfer.
+	# ground (Docs/BrickOverlay.md): off, then on.
 	var overlay: TerrainBricks = scene._streamer.bricks
-	TerrainTile.bevel_enabled = false
-	if overlay != null:
-		overlay.set_enabled(false)
+	_ok("the scene has the brick overlay", overlay != null)
+	if overlay == null:
+		quit(1)
+		return
+	overlay.set_enabled(false)
 	_rebuild(scene)
 	var off := await _count(scene, views, "off")
 	var scope_off := await _count(scene, scope, "scope_off", 12.0)
-	if overlay != null:
-		overlay.set_enabled(true)
-	else:
-		TerrainTile.bevel_enabled = true
+	overlay.set_enabled(true)
 	_rebuild(scene)
 	var on := await _count(scene, views, "on")
 	var scope_on := await _count(scene, scope, "scope_on", 12.0)
-	if overlay != null:
-		_ok("the overlay laid its bricks", overlay.fills > 0 and overlay.count > 0, overlay.readout())
-	else:
-		var tris := 0
-		for t in scene._streamer.tiles():
-			tris += t.bevel_tri_count
-		_ok("the chamfered tiles were built", tris > 0, "%d chamfered triangles held" % tris)
+	_ok("the overlay laid its bricks", overlay.fills > 0 and overlay.count > 0, overlay.readout())
 	_ok("the chamfer opens no holes in the ground", on <= off,
 			"%d magenta with it, %d without" % [on, off])
 	_ok("...nor through a scope", scope_on <= scope_off,

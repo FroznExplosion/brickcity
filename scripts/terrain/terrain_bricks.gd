@@ -28,9 +28,8 @@ extends Node3D
 ## (`hole_wait`: the tiles' and sections' generations), then the hole is the
 ## ground's own.
 
-## On for every scene with ground (TerrainStreamer.setup makes one); off,
-## the old chamfered near tier as before (-- --old-chamfer).
-static var overlay_default := not ("--old-chamfer" in OS.get_cmdline_user_args())
+## On for every scene with ground (TerrainStreamer.setup makes one).
+static var overlay_default := true
 
 ## How far round the eye bricks are laid (metres, to the brick's box).
 @export var range_m := 12.0

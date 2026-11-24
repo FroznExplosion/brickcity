@@ -62,13 +62,10 @@ group_uniforms chamfer;
 // baked vertex buffer on a distance test. Real bevels go on shared instanced
 // meshes instead -- PieceMeshes.chamfered_box and the stud's rim.
 uniform bool chamfer_enabled = true;
-// On a tile drawn with REAL chamfer geometry (TerrainTile.add_bevel sets
-// geo_bevel = 1 on that mesh) the drawn seam and the shaded chamfer fade IN
-// with distance: none inside outline_blend_begin, where the geometry is the
-// edge; both together out to outline_blend_end; the outline alone past it,
-// where a 13 mm bevel is under a pixel or two anyway. Elsewhere geo_bevel
-// is 0 and nothing changes.
-instance uniform float geo_bevel = 0.0;
+// On the brick overlay's real bricks (TERRAIN_BOX) the drawn seam and the
+// shaded chamfer fade IN with distance: none inside outline_blend_begin,
+// where the geometry is the edge; both together out to outline_blend_end;
+// the outline alone past it, where a 13 mm bevel is a pixel or two anyway.
 uniform float outline_blend_begin = 3.0;
 uniform float outline_blend_end = 9.0;
 uniform float chamfer_width : hint_range(0.0, 0.05) = 0.013;
@@ -504,8 +501,7 @@ void fragment() {
     mat3 model3 = mat3(normalize(MODEL_MATRIX[0].xyz), normalize(MODEL_MATRIX[1].xyz),
             normalize(MODEL_MATRIX[2].xyz));
 #else
-    float outline_w = geo_bevel > 0.5
-            ? smoothstep(outline_blend_begin, outline_blend_end, dist) : 1.0;
+    float outline_w = 1.0;
     mat3 model3 = mat3(MODEL_MATRIX);
 #endif
     if (seams_enabled && !no_piece) {

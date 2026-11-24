@@ -36,7 +36,6 @@ func _initialize() -> void:
 	BrickTerrain.set_bond_top(true)
 	BrickTerrain.set_coarse_smooth_step(0)
 	BrickTerrain.clear_terrain_edits()
-	BrickTerrain.set_face_bevel(0.0)
 	BrickTerrain.set_sky_light(true)
 
 	var tiles: Array[Vector2i] = []
