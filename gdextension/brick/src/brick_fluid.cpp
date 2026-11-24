@@ -58,16 +58,16 @@ enum { F_NONE = 0, F_WATER = 1, F_LAVA = 2 };
 
 struct FluidDef {
     int reach;      ///< the last distance that still holds water
-    int split;      ///< distances up to this are 2 plates deep, past it 1
+    int split;      ///< lava: distances up to this are 2 plates deep, past it 1
     bool renew;     ///< two sources make a third (4.1.7)
-    bool dries;     ///< a lone tile of still fluid dries (4.2.3)
+    bool dries;     ///< a lone unit of still fluid dries (4.2.3)
 };
-const FluidDef DEFS[3] = { { 0, 0, false, false }, { 14, 7, true, true }, { 6, 3, false, false } };
+const FluidDef DEFS[3] = { { 0, 0, false, false }, { 5, 0, true, true }, { 6, 3, false, false } };
 
 struct Cell {
     uint8_t solid = 0;   ///< bit per plate (0 bottom), from the terrain
     uint8_t st = 0;      ///< fluid (2 bits) | kind << 2 | ocean << 4
-    uint8_t amt = 0;     ///< plates of fluid, 0..3
+    uint8_t amt = 0;     ///< units of fluid (half plates), 0..CU
     uint8_t aux = 0;     ///< FLOW: distance. STILL: low 6 bits the edge distance
                          ///< (E_NONE: none known), 0x80 = drying timer set
 };
@@ -79,10 +79,24 @@ inline uint8_t mk_st(int fluid, int kind, bool ocean) {
     return (uint8_t)(fluid | (kind << 2) | (ocean ? 16 : 0));
 }
 inline int floor_of(uint8_t m) { return (m & 4) ? 3 : (m & 2) ? 2 : (m & 1) ? 1 : 0; }
+/// Fluid is counted in UNITS, half a plate (a half tile; the user,
+/// 2026-11-23): six to a brick course. The terrain stays in plates.
+constexpr int U = 2;                 ///< units a plate
+constexpr int CU = 3 * U;            ///< units a course
+constexpr float UNIT_M = PLATE_M / (float)U;
+inline int floor_u(uint8_t m) { return floor_of(m) * U; }
 inline bool c_wet(const Cell &c) { return c_fluid(c) != F_NONE && c.amt > 0; }
 inline bool c_fed(const Cell &c) { return c_wet(c) && c_kind(c) != K_STILL; }
-inline int c_cap(const Cell &c) { return 3 - floor_of(c.solid); }
+inline int c_cap(const Cell &c) { return CU - floor_u(c.solid); }
 inline int c_dist(const Cell &c) { return c_kind(c) == K_FLOW ? (int)c.aux : 0; }
+/// Running fluid's depth `d` studs from its source, in units. Water: half a
+/// tile less a stud, 5 to 1 (a source is a brick, 6): it ends half a tile
+/// deep 5 studs out (the user, 2026-11-23; was 2 plates to 7, 1 to 14).
+/// Lava as before: 2 plates to 3 studs, 1 to 6.
+inline int flow_level(int f, int d) {
+    if (f == F_WATER) return std::max(1, CU - d);
+    return d <= DEFS[f].split ? 2 * U : U;
+}
 /// Still water's distance, in cells, to the dry floor its sheet can spread
 /// onto (4.2.6): 0 beside it, E_NONE when none is known (enclosed, or new).
 constexpr uint8_t E_NONE = 63;
@@ -296,7 +310,7 @@ void out_rock(int x, int b, int z, const Cell &c, int mat) {
     g_out_terrain.push_back(x);
     g_out_terrain.push_back(z);
     g_out_terrain.push_back(lo);
-    g_out_terrain.push_back(lo + std::max(1, (int)c.amt) - 1);
+    g_out_terrain.push_back(lo + std::max(1, ((int)c.amt + U - 1) / U) - 1);
     g_out_terrain.push_back(mat);
 }
 bool g_out_mask = false;
@@ -673,7 +687,7 @@ bool supported(int x, int b, int z, const Cell &c) {
     if (d.solid & 4) return true;
     // Falling water is not a floor: water over a waterfall only falls (else it
     // spreads across the top of every course of the fall, its reach anew).
-    if (c_wet(d) && c_kind(d) != K_FALL && (floor_of(d.solid) + d.amt >= 3 || c_kind(d) == K_SOURCE)) return true;
+    if (c_wet(d) && c_kind(d) != K_FALL && (floor_u(d.solid) + d.amt >= CU || c_kind(d) == K_SOURCE)) return true;
     if (c_wet(d) && c_wet(c) && c_fluid(d) != c_fluid(c)) return true;
     return false;
 }
@@ -785,7 +799,7 @@ void eval(int x, int b, int z) {
     }
 
     // --- fed water: what should this cell be? (4.1)
-    const int my_floor = b * 3 + floor_of(cur.solid);
+    const int my_floor = b * CU + floor_u(cur.solid);
     int best_fluid = 0, best_kind = 0, best_d = 1 << 20, best_amt = 0;
     bool best_ocean = false;
     bool deferred = false;
@@ -810,7 +824,7 @@ void eval(int x, int b, int z) {
         if (!c_fed(n)) continue;
         const int f = c_fluid(n);
         if (cf != F_NONE && f != cf) continue;
-        if (c_kind(n) == K_SOURCE && floor_of(n.solid) + n.amt >= 3) {
+        if (c_kind(n) == K_SOURCE && floor_u(n.solid) + n.amt >= CU) {
             ++sources[f];
             ocean_src = ocean_src || c_ocean(n);
         }
@@ -831,8 +845,8 @@ void eval(int x, int b, int z) {
             const int back = (i == 0) ? 1 : (i == 1) ? 0 : (i == 2) ? 3 : 2;
             if (!(seek_dirs(nx, b, nz, n) & (1 << back))) continue;
         }
-        const int lvl = d <= def.split ? 2 : 1;
-        const int ntop = std::min(my_floor + lvl, b * 3 + floor_of(n.solid) + n.amt);
+        const int lvl = flow_level(f, d);
+        const int ntop = std::min(my_floor + lvl, b * CU + floor_u(n.solid) + n.amt);
         if (ntop <= my_floor) continue;
         const int amt = std::min(ntop - my_floor, cap);
         if (d < best_d || (d == best_d && amt > best_amt)) {
@@ -875,7 +889,7 @@ void eval(int x, int b, int z) {
         // Where a fall meets ground or a full pit: a pit may be filling.
         const Cell &d = wcell(x, b - 1, z);
         if (floor_of(cur.solid) > 0 || (d.solid & 4)
-                || (c_wet(d) && c_kind(d) == K_STILL && floor_of(d.solid) + d.amt >= 3)) {
+                || (c_wet(d) && c_kind(d) == K_STILL && floor_u(d.solid) + d.amt >= CU)) {
             g_landings.emplace(pack3(x, b, z), g_tick);   // kept: an open one's wait stands
         }
     }
@@ -902,7 +916,7 @@ void eval(int x, int b, int z) {
         // round. Water deeper than the stream's own level was a pond the
         // river ran over: it stays (4.2.5). A fall keeps all, to drain.
         if (c_kind(cur) == K_FLOW) {
-            const int lvl = c_dist(cur) <= DEFS[cf].split ? 2 : 1;
+            const int lvl = flow_level(cf, c_dist(cur));
             if ((int)cur.amt <= lvl) n.amt = 1;
         }
         g_sets.push_back({ x, b, z, n });
@@ -937,7 +951,7 @@ void eval(int x, int b, int z) {
             }
         }
     }
-    int s_top = b * 3 + floor_of(cur.solid) + a;
+    int s_top = b * CU + floor_u(cur.solid) + a;
     int left = a;
     const int rot = (int)(hmix((uint32_t)(x * 73856093) ^ (uint32_t)(z * 19349663) ^ g_tick) & 3);
     bool moved = false;
@@ -954,9 +968,9 @@ void eval(int x, int b, int z) {
             if (c_fed(n) || n.amt >= 2) deep_near = true;
             const Cell &na = wcell(nx, b + 1, nz);
             if (c_wet(na)) continue;
-            sn = b * 3 + floor_of(n.solid) + n.amt;
+            sn = b * CU + floor_u(n.solid) + n.amt;
         } else {
-            sn = supported(nx, b, nz, n) ? b * 3 + floor_of(n.solid) : b * 3 - 1000;
+            sn = supported(nx, b, nz, n) ? b * CU + floor_u(n.solid) : b * CU - 1000;
         }
         if (s_top - sn >= 2) {
             g_moves.push_back({ x, b, z, nx, b, nz, 1, cf });
@@ -992,7 +1006,7 @@ void eval(int x, int b, int z) {
             const int nx = x + DX[i], nz = z + DZ[i];
             const Cell &n = wcell(nx, b, nz);
             if (!c_wet(n) || c_fluid(n) != cf || c_kind(n) != K_STILL) continue;
-            if (b * 3 + floor_of(n.solid) + n.amt != s_top - 1 || c_edge(n) >= e_new) continue;
+            if (b * CU + floor_u(n.solid) + n.amt != s_top - 1 || c_edge(n) >= e_new) continue;
             if (c_wet(wcell(nx, b + 1, nz))) continue;
             g_moves.push_back({ x, b, z, nx, b, nz, 1, cf });
             return;
@@ -1293,10 +1307,10 @@ struct MeshBuf {
 
 /// The top of a column's fluid at course b, in plates; full when there is
 /// fluid in the course above.
-inline int top_plates(int x, int b, int z, const Cell &c) {
+inline int top_units(int x, int b, int z, const Cell &c) {
     const Cell &a = wcell(x, b + 1, z);
-    if (c_wet(a) && c_fluid(a) == c_fluid(c)) return (b + 1) * 3;
-    return b * 3 + floor_of(c.solid) + c.amt;
+    if (c_wet(a) && c_fluid(a) == c_fluid(c)) return (b + 1) * CU;
+    return b * CU + floor_u(c.solid) + c.amt;
 }
 
 /// A top corner: the mean of the tops round it that are open at this course.
@@ -1307,7 +1321,7 @@ inline int top_plates(int x, int b, int z, const Cell &c) {
 /// step between them. A stacked cell itself is full at every corner.
 float corner_h(int x, int b, int z, int cx, int cz, int fluid, int own) {
     if (!g_sloped) return (float)own;
-    const int full = (b + 1) * 3;
+    const int full = (b + 1) * CU;
     if (own >= full) {
         const Cell &a = wcell(x, b + 1, z);
         if (c_wet(a) && c_fluid(a) == fluid) return (float)full;
@@ -1321,7 +1335,7 @@ float corner_h(int x, int b, int z, int cx, int cz, int fluid, int own) {
             if (!c_wet(q) || c_fluid(q) != fluid) continue;
             const Cell &qa = wcell(qx, b + 1, qz);
             if (c_wet(qa) && c_fluid(qa) == fluid && !(qx == x && qz == z)) continue;
-            sum += (float)top_plates(qx, b, qz, q);
+            sum += (float)top_units(qx, b, qz, q);
             ++n;
         }
     }
@@ -1353,7 +1367,7 @@ bool mesh_sea_tops(int tx, int tz, const bool *top, const bool *ocean, MeshBuf &
                 const int x = tx * SX + lx, z = tz * SX + lz;
                 const Cell &c = wcell(x, sb, z);
                 const Cell &a = wcell(x, sb + 1, z);
-                wet = c_wet(c) && c_fluid(c) == F_WATER && c.amt >= c_cap(c) && c_cap(c) == 3
+                wet = c_wet(c) && c_fluid(c) == F_WATER && c.amt >= c_cap(c) && c_cap(c) == CU
                         && !(c_wet(a) && c_fluid(a) == F_WATER);
             }
             d[gx + W * gz] = wet ? (uint8_t)OUT_D : 0;
@@ -1484,8 +1498,8 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                         const int x = tx * SX + lx, z = tz * SX + lz, b = sb * SB + lb;
                         const int f = c_fluid(c);
                         MeshBuf &m = buf[f];
-                        const int own = top_plates(x, b, z, c);
-                        const int bottom = b * 3 + floor_of(c.solid);
+                        const int own = top_units(x, b, z, c);
+                        const int bottom = b * CU + floor_u(c.solid);
                         // Corner heights, plates: (x,z) (x+1,z) (x+1,z+1) (x,z+1).
                         const float h00 = corner_h(x, b, z, x, z, f, own);
                         const float h10 = corner_h(x, b, z, x + 1, z, f, own);
@@ -1513,21 +1527,21 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                             if (l > 0.001f) { fx /= l; fz /= l; }
                         }
                         const float kind = c_kind(c) == K_FLOW ? 0.5f : c_kind(c) == K_FALL ? 1.0f : 0.0f;
-                        const Color cc(std::min(1.0f, (float)depth / 12.0f), kind, 1.0f, fz * 0.5f + 0.5f);   // b: sky level (sky_levels_into)
+                        const Color cc(std::min(1.0f, (float)depth / (float)(4 * CU)), kind, 1.0f, fz * 0.5f + 0.5f);   // b: sky level (sky_levels_into)
                         const float x0 = (float)x * STUD_M, x1 = (float)(x + 1) * STUD_M;
                         const float z0 = (float)z * STUD_M, z1 = (float)(z + 1) * STUD_M;
-                        const float P = PLATE_M;
+                        const float P = UNIT_M;
                         const Cell &above = wcell(x, b + 1, z);
                         const bool top_open = !(c_wet(above) && c_fluid(above) == f);
                         // Only an open top sinks under the course; a side under
                         // more water meets the course above (no seam in a fall).
                         const float sink = top_open ? TOP_SINK : 0.0f;
-                        if (real && top_open && f == F_WATER && b == g_sea_b - 1 && own == g_sea_b * 3) {
+                        if (real && top_open && f == F_WATER && b == g_sea_b - 1 && own == g_sea_b * CU) {
                             // At the sea's level: the band's (waves with the sea).
                             sea_top[lx + SX * lz] = true;
                             sea_ocean[lx + SX * lz] = c_ocean(c);
                             any_sea = true;
-                        } else if (top_open && !(c_ocean(c) && own == g_sea_b * 3)
+                        } else if (top_open && !(c_ocean(c) && own == g_sea_b * CU)
                                 && h00 == h10 && h10 == h11 && h11 == h01) {
                             // One easing for the whole top (a rect merges only
                             // tops moving alike); all four corners recorded.
@@ -1538,7 +1552,7 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                             moved(x, b, z, 1, 1, f, y, yb0);
                             flat[lx + SX * lz] = { true, h00, cc, f, mv };
                             any_flat = true;
-                        } else if (top_open && !(c_ocean(c) && own == g_sea_b * 3)) {
+                        } else if (top_open && !(c_ocean(c) && own == g_sea_b * CU)) {
                             const Vector3 a(x0, h00 * P - TOP_SINK, z0), bb(x1, h10 * P - TOP_SINK, z0);
                             const Vector3 cq(x1, h11 * P - TOP_SINK, z1), d(x0, h01 * P - TOP_SINK, z1);
                             Vector3 nrm = (d - a).cross(bb - a);
@@ -1557,8 +1571,8 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                             if (c_cap(n) <= 0) continue;
                             const bool wet_n = c_wet(n) && c_fluid(n) == f
                                     && !(c_wet(wcell(nx, b + 1, nz)) && c_fluid(wcell(nx, b + 1, nz)) == f);
-                            if (c_wet(n) && c_fluid(n) == f) cover = top_plates(nx, b, nz, n);
-                            else cover = b * 3 + floor_of(n.solid);
+                            if (c_wet(n) && c_fluid(n) == f) cover = top_units(nx, b, nz, n);
+                            else cover = b * CU + floor_u(n.solid);
                             const float lo = (float)std::max(cover, bottom);
                             const float t0 = ch[i][0], t1 = ch[i][1];
                             if (std::max(t0, t1) <= lo + 0.01f) continue;
@@ -1576,7 +1590,7 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                             // top as it eases (no gap under a rising cell).
                             float f0 = 0.0f, f1 = 0.0f;
                             if (wet_n && cover >= bottom) {
-                                const float nb0 = (float)(b * 3 + floor_of(n.solid)) * P;
+                                const float nb0 = (float)(b * CU + floor_u(n.solid)) * P;
                                 const float yn = (float)cover * P - TOP_SINK;
                                 f0 = std::min(was(nx, b, nz, o0x - DX[i], o0z - DZ[i], f, nb0) - yn, 0.0f);
                                 f1 = std::min(was(nx, b, nz, o1x - DX[i], o1z - DZ[i], f, nb0) - yn, 0.0f);
@@ -1589,7 +1603,7 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                         if (floor_of(c.solid) == 0) {
                             const Cell &d = wcell(x, b - 1, z);
                             if (!(c_wet(d) && c_fluid(d) == f) && !(d.solid & 4)) {
-                                const float y = (float)(b * 3) * P;
+                                const float y = (float)(b * CU) * P;
                                 m.quad(Vector3(x0, y, z0), Vector3(x1, y, z0), Vector3(x1, y, z1),
                                         Vector3(x0, y, z1), Vector3(0, -1, 0), cc);
                             }
@@ -1623,7 +1637,7 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                         }
                         const float x0 = (float)(tx * SX + lx) * STUD_M, x1 = (float)(tx * SX + lx + w) * STUD_M;
                         const float z0 = (float)(tz * SX + lz) * STUD_M, z1 = (float)(tz * SX + lz + h) * STUD_M;
-                        const float y = t.h * PLATE_M - TOP_SINK;
+                        const float y = t.h * UNIT_M - TOP_SINK;
                         buf[t.f].quad(Vector3(x0, y, z0), Vector3(x0, y, z1), Vector3(x1, y, z1), Vector3(x1, y, z0),
                                 Vector3(0, 1, 0), t.c, t.mv, t.mv, t.mv, t.mv);
                     }
@@ -1668,8 +1682,8 @@ void mesh_tile_far(int tx, int tz, Array &water, Array &lava) {
                                 const Cell &c = s->c[Section::idx(lx, lb, lz)];
                                 if (!c_wet(c)) continue;
                                 const int b = sbs[si] * SB + lb;
-                                const int t = top_plates(x, b, z, c);
-                                if (c_ocean(c) && t == g_sea_b * 3) { found = true; break; }
+                                const int t = top_units(x, b, z, c);
+                                if (c_ocean(c) && t == g_sea_b * CU) { found = true; break; }
                                 if (t > top) { top = t; fl = c_fluid(c); depth = c.amt; }
                                 found = true;
                                 break;
@@ -1681,8 +1695,8 @@ void mesh_tile_far(int tx, int tz, Array &water, Array &lava) {
                 if (top == INT32_MIN) continue;
                 const float x0 = (float)(tx * SX + bx) * STUD_M, x1 = (float)(tx * SX + bx + FAR_B) * STUD_M;
                 const float z0 = (float)(tz * SX + bz) * STUD_M, z1 = (float)(tz * SX + bz + FAR_B) * STUD_M;
-                const float y = (float)top * PLATE_M - TOP_SINK;
-                const Color cc(std::min(1.0f, (float)(depth + 3) / 12.0f), 0.0f, 1.0f, 0.5f);   // b: sky level, open
+                const float y = (float)top * UNIT_M - TOP_SINK;
+                const Color cc(std::min(1.0f, (float)(depth + CU) / (float)(4 * CU)), 0.0f, 1.0f, 0.5f);   // b: sky level, open
                 buf[fl].quad(Vector3(x0, y, z0), Vector3(x0, y, z1), Vector3(x1, y, z1), Vector3(x1, y, z0),
                         Vector3(0, 1, 0), cc);
             }
@@ -1736,7 +1750,7 @@ void check_pits() {
             int bx, bb, bz;
             unpack3(body[h], bx, bb, bz);
             const Cell &bc = wcell(bx, b, bz);
-            const int top = b * 3 + floor_of(bc.solid) + bc.amt;
+            const int top = b * CU + floor_u(bc.solid) + bc.amt;
             for (int i = 0; i < 4 && !open; ++i) {
                 const int nx = bx + DX[i], nz = bz + DZ[i];
                 const Cell &n = wcell(nx, b, nz);
@@ -1748,7 +1762,12 @@ void check_pits() {
                     if (seen.insert(nk).second) body.push_back(nk);
                     continue;
                 }
-                if (!supported(nx, b, nz, n) || b * 3 + floor_of(n.solid) < top) open = true;
+                // Dry floor is part of the basin (the stream may not cover
+                // it: water reaches 5 studs); only a drop lets it out.
+                if (!supported(nx, b, nz, n)) { open = true; break; }
+                (void)top;
+                const int64_t nk = pack3(nx, b, nz);
+                if (seen.insert(nk).second) body.push_back(nk);
             }
         }
         if (open) {
@@ -2229,7 +2248,7 @@ void BrickFluid::place(Vector3i cell, int fluid, int kind, int amount) {
     c.a = cell;
     c.fluid = fluid;
     c.kind = kind == SOURCE ? K_SOURCE : K_STILL;
-    c.amount = amount;
+    c.amount = amount * U;   // tiles -> units
     push_cmd(c);
 }
 
@@ -2237,7 +2256,7 @@ void BrickFluid::remove(Vector3i cell, int amount) {
     Cmd c;
     c.type = 2;
     c.a = cell;
-    c.amount = amount;
+    c.amount = amount < 0 ? amount : amount * U;   // tiles -> units
     push_cmd(c);
 }
 
@@ -2497,11 +2516,12 @@ Dictionary BrickFluid::cell_info(Vector3i cell) {
     Dictionary d;
     d["fluid"] = c_wet(c) ? c_fluid(c) : 0;
     d["kind"] = c_kind(c);
-    d["amount"] = (int)c.amt;
+    d["amount"] = ((int)c.amt + U - 1) / U;   // tiles (plates), a half rounded up
+    d["units"] = (int)c.amt;                   // half tiles
     d["dist"] = c_dist(c);
     d["solid"] = (int)c.solid;
     d["ocean"] = c_ocean(c);
-    d["capacity"] = c_cap(c);
+    d["capacity"] = c_cap(c) / U;
     return d;
 }
 
@@ -2510,7 +2530,7 @@ int BrickFluid::fluid_at(Vector3 p) {
     MainLock lk;
     const Cell c = rcell(k.x, k.y, k.z);
     if (!c_wet(c)) return 0;
-    const double top = (double)(k.y * 3 + floor_of(c.solid) + c.amt) * PLATE_M;
+    const double top = (double)(k.y * CU + floor_u(c.solid) + c.amt) * UNIT_M;
     const Cell a = rcell(k.x, k.y + 1, k.z);
     if (p.y < top || (c_wet(a) && c_fluid(a) == c_fluid(c))) return c_fluid(c);
     return 0;
@@ -2532,7 +2552,7 @@ double BrickFluid::surface_at(Vector3 p) {
         c = a;
         ++b;
     }
-    const double top = (double)(b * 3 + floor_of(c.solid) + c.amt) * PLATE_M;
+    const double top = (double)(b * CU + floor_u(c.solid) + c.amt) * UNIT_M;
     if (b == k.y && p.y > top) return -INFINITY;
     return top;
 }
@@ -2589,7 +2609,8 @@ Dictionary BrickFluid::ray_cell(Vector3 from, Vector3 dir, double max_metres) {
             out["normal"] = nrm;
             out["fluid"] = hit_fluid ? c_fluid(cl) : 0;
             out["kind"] = c_kind(cl);
-            out["amount"] = (int)cl.amt;
+            out["amount"] = ((int)cl.amt + U - 1) / U;
+            out["units"] = (int)cl.amt;
             out["ocean"] = c_ocean(cl);
             out["position"] = from + d * (float)t;
             return out;
@@ -2735,7 +2756,8 @@ int64_t BrickFluid::still_units(int fluid) {
 }
 
 // Save: every cell that differs from the generated world, 15 bytes each:
-// int32 x, course, z; uint8 st, amt, aux. Header "BCFL", format 1.
+// int32 x, course, z; uint8 st, amt, aux. Header "BCFL", format 2 (amt in
+// units; format 1 counted plates and is read doubled).
 /// The difference from gen_fluid, cell by cell (MineWater.md 11). Never waits
 /// for a running tick: the worker writes cells only under g_state, which is
 /// held here, and columns it is still sampling are not ready yet (skipped:
@@ -2746,7 +2768,7 @@ PackedByteArray BrickFluid::get_save() {
     std::vector<uint8_t> buf;
     const char *magic = "BCFL";
     buf.insert(buf.end(), magic, magic + 4);
-    buf.push_back(1);
+    buf.push_back(2);
     auto put32 = [&](int32_t v) {
         for (int i = 0; i < 4; ++i) buf.push_back((uint8_t)((uint32_t)v >> (8 * i)));
     };
@@ -2784,7 +2806,8 @@ int64_t BrickFluid::change_count() { return g_writes.load(); }
 int BrickFluid::set_save(const PackedByteArray &bytes) {
     if (bytes.size() < 5) return 0;
     const uint8_t *r = bytes.ptr();
-    if (r[0] != 'B' || r[1] != 'C' || r[2] != 'F' || r[3] != 'L' || r[4] != 1) return 0;
+    if (r[0] != 'B' || r[1] != 'C' || r[2] != 'F' || r[3] != 'L' || (r[4] != 1 && r[4] != 2)) return 0;
+    const int scale = r[4] == 1 ? U : 1;
     auto get32 = [&](int64_t at) {
         uint32_t v = 0;
         for (int i = 0; i < 4; ++i) v |= (uint32_t)r[at + i] << (8 * i);
@@ -2797,7 +2820,7 @@ int BrickFluid::set_save(const PackedByteArray &bytes) {
         c.type = 3;
         c.a = Vector3i(get32(at), get32(at + 4), get32(at + 8));
         c.st = r[at + 12];
-        c.amt = r[at + 13];
+        c.amt = (uint8_t)std::min(CU, r[at + 13] * scale);
         c.aux = r[at + 14];
         g_cmds.push_back(c);
         ++n;
