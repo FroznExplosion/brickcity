@@ -4557,6 +4557,10 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                     // Square only because this sample stops there (another
                     // tile or tier draws on, flat): the backing reaches past.
                     uint8_t bound = 0;
+                    // Edges whose neighbour is past this sample's plates (a
+                    // tile's floor, a section's top or bottom): the flat
+                    // face must not reach past them (see `reach` below).
+                    uint8_t past_y = 0;
                     {
                         // Unit steps along the slice's U and V axes.
                         const int ux = (dx != 0) ? 0 : 1;
@@ -4588,6 +4592,9 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                             const int nx2 = lx + probe[k][0];
                             const int ny2 = yp + probe[k][1];
                             const int nz2 = lz + probe[k][2];
+                            if (ny2 < y0 || ny2 >= y1) {
+                                past_y |= (uint8_t)(1u << k);
+                            }
                             if (!s.solid(nx2, ny2, nz2)) {
                                 convex |= (uint8_t)(1u << k);
                             } else if (s.solid(nx2 + dx, ny2 + dy, nz2 + dz)) {
@@ -4646,6 +4653,7 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                         square = remap(square);
                         covered = remap(covered);
                         bound = remap(bound);
+                        past_y = remap(past_y);
                     }
                     // UNCHAMFERED (the deep sections, the flat tier): each
                     // face overlaps its neighbours by FLAT_OVERLAP past every
@@ -4680,7 +4688,11 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                             // every wall's foot (--gate=seams --deep --at-top),
                             // where the brick under the wall, buried, has no
                             // box to hide it.
-                            const float reach = FLAT_OVERLAP + ((covered & (1u << i)) ? OVERLAY_RECESS_M : 0.0f);
+                            // Not past the sample's own plates: the tier
+                            // beyond draws that side (mine_world_probe: a
+                            // tile draws nothing under its floor).
+                            const float reach = FLAT_OVERLAP
+                                    + ((covered & ~past_y & (1u << i)) ? OVERLAY_RECESS_M : 0.0f);
                             grow[i] = (convex & (1u << i)) ? Vector3() : o * reach;
                         }
                         for (int i = 0; i < 4; ++i) {
