@@ -5751,16 +5751,25 @@ func _run_seams_gate() -> void:
 		_streamer.invalidate(Rect2i(-(1 << 20), -(1 << 20), 1 << 21, 1 << 21))
 		_streamer.settle(Vector2(mid.x, mid.z))
 		await _frames(90)
+	# With the brick overlay (Docs/BrickOverlay.md) the chamfer is its real
+	# bricks over the sunken flat ground, and the old near tier stays off;
+	# without it (-- --old-chamfer), the old near tier.
 	TerrainTile.bevel_enabled = false
+	if _overlay_on:
+		bricks.set_enabled(false)
 	await settle.call()
 	var off: Array = await count.call("off")
-	TerrainTile.bevel_enabled = true
+	if _overlay_on:
+		bricks.set_enabled(true)
+	else:
+		TerrainTile.bevel_enabled = true
 	await settle.call()
 	var on: Array = await count.call("on")
 	# Both tiers whole: the chamfer's slits and the flat tier's T-junction
 	# cracks were both seen as dots in a dark cave.
 	var ok: bool = on[0] == 0 and off[0] == 0
-	print("[mine-seams] %s  chamfer on %d px, off %d px" % ["PASS" if ok else "FAIL", on[0], off[0]])
+	print("[mine-seams] %s  %s on %d px, off %d px" % ["PASS" if ok else "FAIL",
+			"overlay" if _overlay_on else "chamfer", on[0], off[0]])
 	get_tree().quit()
 
 
@@ -5887,7 +5896,8 @@ func _run_seams_deep() -> void:
 		if n > worst:
 			worst = n
 			img.save_png(dev + "mine_seams_deep.png")
-	print("[mine-seams] deep hall: %d sections drawn, floor plate %d (%d under the ground), chamfer %s" % [_deep._secs.size(), b, t_min - b, TerrainTile.bevel_enabled])
+	print("[mine-seams] deep hall: %d sections drawn, floor plate %d (%d under the ground), chamfer %s, overlay %s" % [_deep._secs.size(), b, t_min - b, TerrainTile.bevel_enabled,
+			bricks.readout() if _overlay_on else "off"])
 	print("[mine-seams] %s  deep: magenta %d px over %d views (%d views with any, worst %d)"
 			% ["PASS" if total == 0 else "FAIL", total, views.size(), hit, worst])
 	get_tree().quit()

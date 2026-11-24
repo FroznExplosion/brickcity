@@ -76,6 +76,21 @@ uniform float chamfer_fade_begin = 18.0;
 uniform float chamfer_fade_end = 55.0;
 uniform float chamfer_gloss : hint_range(0.0, 1.0) = 0.45;
 
+group_uniforms overlay;
+// THE BRICK OVERLAY's recess (Docs/BrickOverlay.md 2, stage 3). Within
+// `overlay_reach` of the eye (TerrainBricks sets it each pick: how far its
+// real bricks reach; 0 = no overlay) every flat face with a brick laid over
+// it (CUSTOM0.b = 64, the bake's BOXED_FACE) sinks 13 mm along its normal:
+// under the brick's box, so it neither z-fights the box's faces nor fills
+// its chamfers -- between two bricks the groove's floor is this sunken face.
+// It fades out over `overlay_fade` before the reach's edge. The boxes
+// (TERRAIN_BOX) are drawn 2 mm toward the eye, so where the recess fades
+// they still win the depth test against the face they lie on.
+uniform float overlay_reach = 0.0;
+uniform float overlay_fade = 1.5;
+const float OVERLAY_RECESS = 0.013;
+const float OVERLAY_PULL = 0.002;
+
 group_uniforms studs;
 // Docs/Terrain.md section 7.2 tier 1: the cheapest stud there is. A dome
 // normal inside each stud cell, in a fragment shader the ground is already
@@ -307,6 +322,9 @@ void vertex() {
     COLOR = vec4(float(box_rgb & 255), float((box_rgb >> 8) & 255), float((box_rgb >> 16) & 255),
             255.0 * float(box_code & 1)) / 255.0;
     v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+    vec4 box_view = MODELVIEW_MATRIX * vec4(VERTEX, 1.0);
+    box_view.xyz -= normalize(box_view.xyz) * OVERLAY_PULL;
+    POSITION = PROJECTION_MATRIX * box_view;
 #else
     v_uv = UV;
     v_face = UV2;
@@ -320,6 +338,11 @@ void vertex() {
     v_sky = CUSTOM0.a;
     v_block = CUSTOM0.g < 0.25 ? CUSTOM0.g * (255.0 / 60.0) : 0.0;
 #endif
+    if (overlay_reach > 0.0 && abs(CUSTOM0.b * 255.0 - 64.0) < 0.5) {
+        float od = distance(v_world, INV_VIEW_MATRIX[3].xyz);
+        float ok = 1.0 - smoothstep(overlay_reach - overlay_fade, overlay_reach, od);
+        VERTEX -= normalize(NORMAL) * (OVERLAY_RECESS * ok);
+    }
 #endif
 }
 

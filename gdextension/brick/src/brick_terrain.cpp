@@ -3617,7 +3617,9 @@ struct MeshBuf {
     PackedByteArray custom0;
     /// What `quad`/`tri` stamp into custom0 for the vertices they emit.
     uint8_t material = 0;
-    /// custom0.b: 255 on a real bevel facet, which the shader draws plain
+    /// custom0.b: BOXED_FACE on a flat face with a brick of the overlay over
+    /// it (Docs/BrickOverlay.md: the shader sinks it under the brick's box
+    /// near the eye); 255 on a real bevel facet, which the shader draws plain
     /// (the top's print paths stop at the edge instead of running down it).
     uint8_t facet = 0;
 
@@ -3978,6 +3980,11 @@ Color piece_colour(const TileSample &s, int ox, int oz, int mat, bool studded) {
 /// Keyed by the brick's corner and course; its plates the union of what the
 /// faces found solid. Set by build_tile / build_section for their own call
 /// (thread-local: bakes run on workers side by side).
+/// CUSTOM0.b of a flat face an overlay brick covers (MeshBuf::facet).
+constexpr uint8_t BOXED_FACE = 64;
+/// How far such a face sinks near the eye (terrain.gdshader OVERLAY_RECESS).
+constexpr float OVERLAY_RECESS_M = 0.013f;
+
 struct OutBrick {
     int x0, z0, x1, z1;   ///< studs, absolute, [x0, x1)
     int p0, p1;           ///< plates, [p0, p1)
@@ -4662,7 +4669,19 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                             if (o.dot((p + q) * 0.5f - centre) < 0.0f) {
                                 o = -o;
                             }
-                            grow[i] = (convex & (1u << i)) ? Vector3() : o * FLAT_OVERLAP;
+                            // An INSIDE corner (the neighbour solid and covered:
+                            // a floor's edge at a wall's foot) reaches the
+                            // brick overlay's recess further, into the solid
+                            // behind the face it meets, where nothing sees it:
+                            // near the eye both faces sink 13 mm under their
+                            // bricks (terrain.gdshader overlay_reach), and a
+                            // floor ending at the wall's old plane stopped
+                            // 13 mm short of the sunken wall -- a slit along
+                            // every wall's foot (--gate=seams --deep --at-top),
+                            // where the brick under the wall, buried, has no
+                            // box to hide it.
+                            const float reach = FLAT_OVERLAP + ((covered & (1u << i)) ? OVERLAY_RECESS_M : 0.0f);
+                            grow[i] = (convex & (1u << i)) ? Vector3() : o * reach;
                         }
                         for (int i = 0; i < 4; ++i) {
                             *rim[i] += grow[i] + grow[(i + 3) % 4];
@@ -4697,6 +4716,10 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                             va = (float)(az - br.z) * STUD_M;   // along Z
                             bf = Vector2((float)br.sx * STUD_M, (float)br.sz * STUD_M);
                         }
+                        // Every face here is a listed brick's (note_brick).
+                        if (g_face_bevel <= 0.0f) {
+                            m.facet = BOXED_FACE;
+                        }
                         if (dy < 0) {
                             // Wound a0 -> b0 along Z here: UV.x stays along X.
                             m.quad(Vector3((float)dx, (float)dy, (float)dz), col, bf,
@@ -4708,6 +4731,9 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                                 a0, b0, c0, d0,
                                 Vector2(ua, va), Vector2(ua + fsz.x, va), Vector2(ua + fsz.x, va + fsz.y),
                                 Vector2(ua, va + fsz.y), convex, square);
+                        }
+                        if (g_face_bevel <= 0.0f) {
+                            m.facet = 0;
                         }
                     }
                     // A wall standing on a floor reaches a bevel below it.
@@ -7215,6 +7241,11 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
             // The overlay's top, one plate up. The brick's own top is NOT
             // emitted: it is covered exactly, so it is culled.
             const float oy = top + OVERLAY_M;
+            // The overlay's top and lips: its one-plate brick's box.
+            const bool boxed = g_face_bevel <= 0.0f && (p.kind == PIECE_BRICK || p.kind == PIECE_TILE);
+            if (boxed) {
+                m.facet = BOXED_FACE;
+            }
             // The top's bevel runs down onto the overlay's OWN lip walls
             // (always drawn), so it needs nobody else; the lips are square.
             m.quad(Vector3(0, 1, 0), col, bface,
@@ -7246,6 +7277,9 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                 Vector3(x1, lb, z0), Vector3(x1, lb, z1),
                 Vector3(x1, oy, z1), Vector3(x1, oy, z0),
                 Vector2(0, lip_z.y), Vector2(lip_z.x, lip_z.y), Vector2(lip_z.x, 0), Vector2(0, 0), 0, LIP_SQ);
+            if (boxed) {
+                m.facet = 0;
+            }
         } else {
             // A side is convex where the ground DROPS AWAY, because that is
             // where a wall face exists for the chamfer to meet. Level with a
@@ -7375,11 +7409,20 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                         }
                     }
                 }
+                // Its top: its brick's box (sides are left flat: one can
+                // run down past its brick, where no box is).
+                const bool boxed = g_face_bevel <= 0.0f && (p.kind == PIECE_BRICK || p.kind == PIECE_TILE);
+                if (boxed) {
+                    m.facet = BOXED_FACE;
+                }
                 m.quad(Vector3(0, 1, 0), col, bface,
                     Vector3(x0, top, z0), Vector3(x1, top, z0),
                     Vector3(x1, top, z1), Vector3(x0, top, z1),
                     uv0, uv0 + Vector2(face.x, 0), uv0 + face, uv0 + Vector2(0, face.y),
                     0, square, cutc);
+                if (boxed) {
+                    m.facet = 0;
+                }
                 // THE SKIRT. A square edge beside a LEVEL neighbour can still
                 // face that neighbour's half-groove: the rule above decides a
                 // whole piece edge, so a 2x4 edge that is square because one

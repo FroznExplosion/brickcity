@@ -88,3 +88,22 @@ sunken face is hard to see for that time.
 - **Next: stage 2** -- TerrainBricks (the pool, the pick by distance and
   view, one MultiMesh buffer) and the `TERRAIN_BOX` copy of terrain.gdshader.
   Branch `skylit-followups`, worktree `C:\Users\lbaun\bc-skylit2`.
+- 2026-11-23 (2nd chat): **Stage 2 done, stage 3 built** on branch
+  `skylit-followups` (NOT merged yet). Lists are 17 floats a brick (studs
+  flag; sky light at each face's 4 corners, sampled like a flat vertex at the
+  nearest DRAWN cell of the face -- a brick through a wall or drawn in an L
+  took the open air's light into the room; block light a face; cells drawn a
+  face). `BrickTerrain.overlay_pick` (C++, ~0.4 ms) dedupes across tiles, each
+  face from the list that drew more of it. TerrainBricks + `TERRAIN_BOX`
+  (colour/light packed as 24-bit whole numbers: read with `int(x)`, never
+  `int(x + 0.5)`). Recess: bake marks covered flat faces CUSTOM0.b = 64
+  (mask faces, packer tops and overlays; packer SIDES not, they can run past
+  their brick), shader sinks them 13 mm within `overlay_reach` (set per pick,
+  1.5 m fade); boxes pulled 2 mm toward the eye; flat faces grow 13 mm more
+  past INSIDE corners (closed the wall-foot slit). Gates: `--gate=bricks`
+  PASS, `--gate=seams` 0/0 px, `--gate=seams --deep --at-top` 0 px (old
+  chamfer 88). Overlay is ON with Chamfered brick edges; `--old-chamfer` = A/B.
+- **Before merging**: run terrain_probe, terrain_audit_probe, mine_world_probe,
+  bevel_gap_probe (the 13 mm inside-corner growth is in every flat mesh), and
+  look at a walk in the real game. Then stages 4-7 (packer sides boxed, GPU
+  cost with editor closed, breaking, retire the old chamfer).

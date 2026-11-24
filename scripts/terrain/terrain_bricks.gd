@@ -105,6 +105,8 @@ func set_enabled(on: bool) -> void:
 	enabled = on
 	if _mmi != null:
 		_mmi.visible = on
+	if not on and _ground != null:
+		_ground.set_shader_parameter(&"overlay_reach", 0.0)
 	_version = -1
 
 
@@ -167,6 +169,9 @@ func fill(eye: Vector3, fwd: Vector3, cam: Camera3D) -> void:
 	_mm.buffer = buf
 	buffer = buf
 	_mm.visible_instance_count = count
+	# The flat ground sinks under the boxes as far as they reach from here,
+	# less the walk before the next pick (terrain.gdshader overlay_reach).
+	_ground.set_shader_parameter(&"overlay_reach", maxf(far_m - move_m, 0.0) if count > 0 else 0.0)
 	fills += 1
 	fill_ms = float(Time.get_ticks_usec() - t0) / 1000.0
 	worst_fill_ms = maxf(worst_fill_ms, fill_ms)
@@ -195,6 +200,8 @@ func _sync(delta: float) -> void:
 		return
 	_sync_in = 1.0
 	for p in _params:
+		if p == &"overlay_reach":
+			continue
 		var v = _ground.get_shader_parameter(p)
 		if v != null:
 			_mat.set_shader_parameter(p, v)
