@@ -120,8 +120,31 @@ sunken face is hard to see for that time.
   `--gate=breaklag --burst`: 30 of 30 hidden the frame they were shot every 6
   frames, 26 of 30 every frame (the rest hit a brick already hidden); the
   tile's own hole still 49-50 ms (the audit chat's items 1, 3, 4).
-- Open: packer SIDES are not sunk (their side bevels read square); the
-  overlay's fill worst 5.3 ms in a 1-shot-a-frame burst (a pick every frame);
-  GPU cost (`--gate=gpu`, editor closed) not taken; stage 7 (retire
-  build_tile_chamfered / add_bevel) not done; find the hit brick from the
-  overlay's own data (skip find_brick's worker frame) not done.
+- 2026-11-23 (late): **the open items done** (main after this merge):
+  - Packer piece SIDES (one brick tall) and the overlay's lips are covered,
+    noted faces: side and corner bevels show.
+  - A shot brick of the overlay is cleared from its box at once
+    (`_break_from_box`, clear_runs; bedrock never): no find_brick worker
+    frame. `--gate=breaklag --burst --burst-every=1`: 26 of 30 hidden the
+    frame shot, the tile's own hole 35 ms mean (was 49).
+  - `overlay_pick(..., hidden)` leaves shot bricks out in C++ (the GDScript
+    holes x instances loop was the 5 ms pick); a turn's picks 0.45 ms mean,
+    0.65 worst.
+  - Light sampled only on drawn faces: the sky pass 6.5 ms a tile (8.3).
+  - **Every scene with ground** takes the overlay: TerrainStreamer.setup makes
+    a TerrainBricks (`auto_overlay`, `TerrainBricks.overlay_default`) and
+    turns the old chamfered near tier off; the mine world keeps its own.
+    `bevel_gap_probe` (heightfield scene) 0 px with it; the dev menu's
+    "Real chamfers" toggles it. `-- --old-chamfer` anywhere = the old tier.
+  - **GPU** (`--gate=gpu`, editor closed, nothing else running, both from
+    52 C): on foot 5.45 ms with the overlay, 6.06 ms with the old chamfered
+    tier (0.90 vs 0.93 M tris); 25 m up 3.99 vs 4.00. Its own row ("brick
+    overlay off") is inside the gate's noise.
+- **Stage 7 (as the user asked, 2026-11-23): the old chamfer is OFF everywhere
+  but its code is KEPT** (build_tile_chamfered, add_bevel, the streamer's
+  _bevel_step, mask_faces' bevel/skirt/backing paths, TerrainTile.bevel_*):
+  delete only when the user says so. Reached only with `-- --old-chamfer`
+  or by setting TerrainBricks.overlay_default false.
+- Not done: the city on terrain was not looked at in a picture (its streamer
+  makes the overlay as every scene does); --gate=breaklag --streaming does
+  not report the overlay.
