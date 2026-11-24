@@ -125,6 +125,13 @@ inline uint32_t hmix(uint32_t h) {
     return h;
 }
 
+/// One cell of a parked section that differs from the generated world (the
+/// save's record): its index in the section and its fluid.
+struct Diff {
+    uint16_t i;
+    uint8_t st, amt, aux;
+};
+
 struct Section {
     int sx = 0, sb = 0, sz = 0;
     std::vector<Cell> c;
@@ -138,6 +145,9 @@ struct Section {
     std::vector<uint8_t> real;
     bool written = false;           ///< any cell ever written (the save skips the rest)
     std::vector<uint8_t> queued;    ///< per cell: in the next tick's list
+    /// Back from parking (W3): its changed cells, by column, put back over
+    /// the generated ones as each column is sampled.
+    std::vector<Diff> pending;
     int wet = 0;                    ///< wet cells (for "anything to draw")
     /// Wet LAVA cells: the terrain's block light (lava_cells_in) reads only
     /// sections with some. The bakes read it under g_state while sample_into
@@ -145,8 +155,17 @@ struct Section {
     std::atomic<int> lava{ 0 };
     static int idx(int lx, int lb, int lz) { return lx + SX * (lz + SX * lb); }
 };
+inline int diff_col(const Diff &d) { return d.i % SCOL; }
 
 std::unordered_map<int64_t, std::unique_ptr<Section>> g_sec;
+/// WATER FAR AWAY IS PARKED (W3, Docs/MineWaterNext.md 6; the terrain chat
+/// measured 122 MB after a 480 m flight over sea, 2026-11-24): a written
+/// section far from the player keeps only the cells that differ from the
+/// generated world, sorted by column -- about 5 bytes a changed cell, not
+/// ~90 KB a section. Asked for again, it is made afresh and they are put
+/// back (sample_into). A section of only generated water is not kept at all.
+std::unordered_map<int64_t, std::vector<Diff>> g_parked;
+int64_t g_parked_bytes = 0;
 std::unordered_map<int64_t, std::vector<int>> g_tile_secs;   ///< tile -> section courses
 std::recursive_mutex g_state;
 std::mutex g_cmd_mx;
@@ -505,6 +524,13 @@ Section *sec_make(int sx, int sb, int sz) {
     ns->queued.assign(SCELLS, 0);
     s = ns.get();
     std::lock_guard<std::recursive_mutex> lk(g_state);
+    auto pk = g_parked.find(pack3(sx, sb, sz));
+    if (pk != g_parked.end()) {
+        ns->pending = std::move(pk->second);
+        ns->written = true;
+        g_parked_bytes -= (int64_t)ns->pending.size() * (int64_t)sizeof(Diff);
+        g_parked.erase(pk);
+    }
     g_sec[pack3(sx, sb, sz)] = std::move(ns);
     g_tile_secs[tkey(sx, sz)].push_back(sb);
     return s;
@@ -528,6 +554,21 @@ void sample_into(Section *s, int lx, int lz) {
         Cell &cl = s->c[Section::idx(lx, lb, lz)];
         cl.solid = masks[lb];
         gen_fluid(cl, x, s->sb * SB + lb, z, gt, sp, lake, gmasks[lb] != 7);
+    }
+    if (!s->pending.empty()) {
+        // Back from parking: this column's changed cells over the generated.
+        const int col = lx + SX * lz;
+        auto at = std::lower_bound(s->pending.begin(), s->pending.end(), col,
+                [](const Diff &d, int c) { return diff_col(d) < c; });
+        for (; at != s->pending.end() && diff_col(*at) == col; ++at) {
+            Cell &cl = s->c[at->i];
+            cl.st = at->st;
+            cl.amt = at->amt;
+            cl.aux = at->aux;
+        }
+    }
+    for (int lb = 0; lb < SB; ++lb) {
+        const Cell &cl = s->c[Section::idx(lx, lb, lz)];
         if (c_wet(cl)) ++s->wet;
         if (c_lava(cl)) {
             ++lava;
@@ -567,7 +608,22 @@ Cell rcell(int x, int b, int z) {
             return s->c[Section::idx(lx, lb, lz)];
         }
     }
-    return gen_cell(x, b, z);
+    // Not sampled: the generated cell, or a parked (or pending) change.
+    Cell g = gen_cell(x, b, z);
+    const std::vector<Diff> *diffs = nullptr;
+    if (s != nullptr) {
+        diffs = &s->pending;
+    } else if (!g_parked.empty()) {
+        auto pk = g_parked.find(pack3(sx, sb, sz));
+        if (pk != g_parked.end()) diffs = &pk->second;
+    }
+    if (diffs != nullptr) {
+        const int i = Section::idx(x - sx * SX, b - sb * SB, z - sz * SX);
+        for (const Diff &d : *diffs) {
+            if (d.i == i) { g.st = d.st; g.amt = d.amt; g.aux = d.aux; break; }
+        }
+    }
+    return g;
 }
 
 inline double dist2_centre(int x, int z) {
@@ -1746,12 +1802,13 @@ int tile_coord(int64_t k, bool z) {
 /// SECTIONS FAR AWAY ARE LET GO. Every column the water ever sampled kept its
 /// section for good -- the flow's look for a drop, priming, the sea's floor
 /// -- so a long walk left thousands behind, and the save, the sea mask and
-/// every lookup walked them. Only a section with nothing of its own goes:
-/// never written, dry, nothing queued in it. All of that is the seed and the
-/// terrain's edits again, sampled afresh if anything asks. Written or wet
-/// sections stay (they ARE the water's state).
+/// every lookup walked them. A section with nothing queued goes: one never
+/// written (dry, or only the generated sea, lakes, pools -- the seed and the
+/// terrain's edits again, sampled afresh if anything asks); a written one is
+/// parked, its changed cells kept (g_parked, W3). Wet sections used to stay
+/// for good: 1,030 of them after a flight over the sea.
 constexpr uint32_t EVICT_EVERY = 50;     ///< ticks (5 s)
-constexpr double EVICT_PAST = 2.0;       ///< x the sim radius, plus a tile
+constexpr double EVICT_PAST = 1.5;       ///< x the sim radius, plus a tile (2.0 kept ~775 sections, 69 MB, round the player: W3)
 int g_evicted = 0;
 
 void evict_far() {
@@ -1761,7 +1818,6 @@ void evict_far() {
     std::vector<int64_t> gone;
     for (const auto &e : g_sec) {
         const Section *s = e.second.get();
-        if (s->written || s->wet != 0) continue;
         const double cx = ((double)s->sx + 0.5) * tile_m - g_cx;
         const double cz = ((double)s->sz + 0.5) * tile_m - g_cz;
         if (cx * cx + cz * cz <= r * r) continue;
@@ -1777,6 +1833,36 @@ void evict_far() {
         auto it = g_sec.find(k);
         if (it == g_sec.end()) continue;
         const Section *s = it->second.get();
+        if (s->written) {
+            // Its changed cells: the ready columns' against the generated
+            // world, and an unsampled column's still-pending ones.
+            std::vector<Diff> keep;
+            for (int col = 0; col < SCOL; ++col) {
+                const int lx = col % SX, lz = col / SX;
+                if (!s->ready[col]) continue;
+                for (int lb = 0; lb < SB; ++lb) {
+                    const int i = Section::idx(lx, lb, lz);
+                    const Cell &c = s->c[i];
+                    Cell g = c;
+                    gen_fluid(g, s->sx * SX + lx, s->sb * SB + lb, s->sz * SX + lz, s->gtop[col],
+                            s->spring[col], s->lake[col]);
+                    if (c.st == g.st && c.amt == g.amt && c.aux == g.aux) continue;
+                    keep.push_back({ (uint16_t)i, c.st, c.amt, c.aux });
+                }
+            }
+            for (const Diff &d : s->pending) {
+                if (!s->ready[diff_col(d)]) keep.push_back(d);
+            }
+            std::sort(keep.begin(), keep.end(), [](const Diff &a, const Diff &b) {
+                return diff_col(a) != diff_col(b) ? diff_col(a) < diff_col(b) : a.i < b.i;
+            });
+            if (!keep.empty()) {
+                g_parked_bytes += (int64_t)keep.size() * (int64_t)sizeof(Diff);
+                g_parked[k] = std::move(keep);
+            }
+        }
+        const int lv = s->lava.load(std::memory_order_relaxed);
+        if (lv != 0) g_lava_total.fetch_add(-lv, std::memory_order_relaxed);
         auto ts = g_tile_secs.find(tkey(s->sx, s->sz));
         if (ts != g_tile_secs.end()) {
             auto &v = ts->second;
@@ -2128,6 +2214,8 @@ double BrickFluid::reset(double sea_m, bool sea_on) {
     join_wait();
     std::lock_guard<std::recursive_mutex> lk(g_state);
     g_sec.clear();
+    g_parked.clear();
+    g_parked_bytes = 0;
     g_sec_epoch.fetch_add(1);
     g_tile_secs.clear();
     g_due.clear();
@@ -2710,6 +2798,9 @@ Dictionary BrickFluid::memory_stats() {
     }
     Dictionary d;
     d["sections"] = (int64_t)g_sec.size();
+    d["parked"] = (int64_t)g_parked.size();
+    d["parked_bytes"] = g_parked_bytes + (int64_t)g_parked.size() * 64;
+    bytes += g_parked_bytes + (int64_t)g_parked.size() * 64;
     d["bytes"] = bytes;
     d["written"] = written;
     d["wet"] = wet;
@@ -2774,6 +2865,35 @@ PackedByteArray BrickFluid::get_save() {
                     buf.push_back(aux);
                 }
             }
+        }
+    }
+    // A section back from parking: the changed cells of columns not yet
+    // sampled are still in `pending`.
+    for (const auto &e : g_sec) {
+        const Section &s = *e.second;
+        for (const Diff &d : s.pending) {
+            if (s.ready[diff_col(d)]) continue;
+            const int lx = d.i % SX, lz = (d.i / SX) % SX, lb = d.i / SCOL;
+            put32(s.sx * SX + lx);
+            put32(s.sb * SB + lb);
+            put32(s.sz * SX + lz);
+            buf.push_back(d.st);
+            buf.push_back(d.amt);
+            buf.push_back((uint8_t)(d.aux & 0x7F));
+        }
+    }
+    // Parked sections: their changed cells are the save's records already.
+    for (const auto &e : g_parked) {
+        int sx, sb, sz;
+        unpack3(e.first, sx, sb, sz);
+        for (const Diff &d : e.second) {
+            const int lx = d.i % SX, lz = (d.i / SX) % SX, lb = d.i / SCOL;
+            put32(sx * SX + lx);
+            put32(sb * SB + lb);
+            put32(sz * SX + lz);
+            buf.push_back(d.st);
+            buf.push_back(d.amt);
+            buf.push_back((uint8_t)(d.aux & 0x7F));
         }
     }
     PackedByteArray out;

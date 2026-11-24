@@ -147,8 +147,19 @@ have needed work before.
   10-13 us; the real-sea square ~12 ms a tile; springs ~10 ms a tile).
 - **W2** re-measure the tick in a release build, editor closed (2026-11-17:
   885 ns a flowing cell, 173 ns a still cell) before adding levelling.
-- **W3** far written or wet sections kept in their save form, expanded when
-  the player comes back (today they stay in memory for good).
+- **W3 -- done 2026-11-24.** Past 1.5 x the sim radius plus a tile (~112 m;
+  was 2 x), with nothing queued: a section never written -- dry, or only the
+  generated sea, lakes, pools -- is let go (sampled afresh if asked); a written
+  one is PARKED: only its cells that differ from the generated world, sorted
+  by column (`g_parked`, ~5 bytes a cell), put back as each column is sampled
+  again (`Section::pending`). The save writes parked cells as they are; the
+  main thread's reads (`rcell`) see them. `--gate=mem` (the terrain chat's
+  probe, a second leg added): 1,359 sections / 122 MB after a 480 m flight
+  over sea before; now 629 / 56 MB, and 566 / 51 MB after a second 480 m --
+  level, not growing; 14 parked sections, 3 KB. `fluid_probe` 13. Seen: far
+  water meshes read only existing sections, so water let go past ~112 m is
+  drawn again once back within the sim ring (as unvisited water always was;
+  the sea is the tiers').
 - **W4** (optional) still tops as packed brick pieces (the region fit).
 
 ## 7. Stages, in order
