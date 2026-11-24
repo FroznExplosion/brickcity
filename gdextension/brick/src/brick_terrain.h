@@ -854,6 +854,10 @@ public:
     /// Bake the faces behind the overlay's bricks (Docs/BrickOverlay.md 6b).
     static void set_behind_faces(bool on);
     static bool get_behind_faces();
+    /// Behind faces only round the eye: its tile (x, z) and plate (y).
+    static void set_behind_centre(Vector3i tile_plate);
+    /// Would a bake now give this tile (sy = INT_MIN) or section behind faces?
+    static bool behind_wanted(int tx, int sy, int tz);
     static bool get_flat_mode();
     static void set_overlay_chance(double chance);
     static double get_overlay_chance();

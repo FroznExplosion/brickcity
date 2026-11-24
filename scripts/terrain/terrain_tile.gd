@@ -22,6 +22,16 @@ extends Node3D
 ## How far from the eye a tile's behind faces are drawn at all: the overlay's
 ## reach (12 m) plus a tile's diagonal (16 m), from the tile's corner.
 const BEHIND_RANGE := 30.0
+## Did this tile's bake make its behind faces (it was near the eye)?
+var behind_baked := false
+
+
+## Its behind faces gone (the eye went away): memory back, drawn no more.
+func drop_behind() -> void:
+	behind_baked = false
+	var n := get_node_or_null(^"SurfaceBehind")
+	if n != null:
+		n.queue_free()
 
 const STUD_RANGE := 18.0      ## §7.2 tier 0 — geometry studs inside this.
 
@@ -136,12 +146,16 @@ func build(tile_x: int, tile_z: int, material: Material,
 	# Docs/BrickOverlay.md 6b): its own node, drawn only near the eye (the
 	# shader keeps it within the overlay's 12 m reach; past BEHIND_RANGE from
 	# the tile the engine skips it whole), no shadow (it is inside the ground).
+	# Baked only round the eye (BrickTerrain.set_behind_centre); the mine
+	# world bakes a tile again as it comes near, and drops them as it leaves.
+	behind_baked = bool(data.get("behind_baked", false))
 	var behind: Array = data.get("behind_mesh", [])
 	if not behind.is_empty():
 		var bs := _add_surface(behind, material, 0.0, BEHIND_RANGE)
 		if bs != null:
 			bs.name = "SurfaceBehind"
 			bs.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	data.erase("behind_mesh")   # on the GPU now: not kept twice
 	overlay = data.get("overlay_bricks", PackedFloat32Array())
 	overlay_version += 1
 	_data = data

@@ -4,6 +4,7 @@
 #include "brick_pools.h"
 #include "brick_fluid.h"
 #include "terrain_collapse.h"
+#include "terrain_fit.h"
 #include "impostor_set.h"
 #include "mesh_merge.h"
 #include "shell_mesher.h"
@@ -35,6 +36,7 @@ void initialize_brick_module(ModuleInitializationLevel p_level) {
     // Pools: dug ground that fills from the sea (Water.md 12).
     ClassDB::register_class<BrickPools>();
     ClassDB::register_class<BrickFluid>();
+    ClassDB::register_class<TerrainFit>();
     ClassDB::register_class<TerrainCollapse>();
     // ImpostorLod's tiering and packing (scripts/render/impostor_lod.gd).
     ClassDB::register_class<ImpostorSet>();
