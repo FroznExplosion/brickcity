@@ -39,7 +39,9 @@ extends SceneTree
 ##   turn (R9); lakes over the sea; cave
 ##   pools with no water beside cave air; a mirror rebuilds an authority's
 ##   water from its change log (multiplayer groundwork); a source on the open
-##   sea runs out 2 studs and its water goes back to the sea once it is gone.
+##   sea runs out 2 studs and its water goes back to the sea once it is gone;
+## - W3: a written section far away is parked (its changed cells only),
+##   reads and saves the same, and is whole again when the player is back.
 
 const FLOOR := 1000          ## floor course: plates 3000-3002
 const W := FLOOR + 1         ## the course water stands in
@@ -805,6 +807,45 @@ func _run() -> void:
 
 	BrickTerrain.set_generator(0)
 	BrickTerrain.reset_gen_params()
+	BrickFluid.reset(20.0, false)
+	BrickTerrain.clear_terrain_edits()
+
+	# 13. Water far away is parked (W3, Docs/MineWaterNext.md 6): a written
+	# section past twice the sim radius keeps only its changed cells; it
+	# still reads and saves the same, and comes back whole when the player
+	# does. (Memory grew for good with distance travelled: 122 MB after a
+	# 480 m flight over sea, the terrain chat, 2026-11-24.)
+	_sec("13")
+	BrickFluid.set_centre(Vector3(0, 0, 0), 100000.0)
+	_floor(6000, -10, 6020, 10)
+	for wall in [[6008, -2, 6012, -2], [6008, 2, 6012, 2], [6008, -2, 6008, 2], [6012, -2, 6012, 2]]:
+		BrickTerrain.fill_box(Vector3i(wall[0], W * 3, wall[1]), Vector3i(wall[2], W * 3 + 2, wall[3]), 4, false)
+	BrickFluid.terrain_changed(Vector3i(6008, W * 3, -2), Vector3i(6012, W * 3 + 2, 2))
+	for x in range(6009, 6012):
+		for z in range(-1, 2):
+			BrickFluid.place(Vector3i(x, W, z), 1, BrickFluid.STILL, 3)
+	_settle(50)
+	var pond_near := _region_units(6009, 6011, -1, 1, W)
+	var save_near := BrickFluid.get_save().size()
+	var mem0: Dictionary = BrickFluid.memory_stats()
+	# The player 2 km away, a small sim radius: past it, the pond parks.
+	BrickFluid.set_centre(Vector3(-2000, 0, 0), 60.0)
+	BrickFluid.tick_now(60)
+	var mem1: Dictionary = BrickFluid.memory_stats()
+	_ok("a written section far away is parked", int(mem1.parked) >= 1 and int(mem1.sections) < int(mem0.sections),
+			"sections %d -> %d, parked %d (%d bytes)" % [int(mem0.sections), int(mem1.sections), int(mem1.parked), int(mem1.parked_bytes)])
+	_ok("parked, it reads and saves the same", _region_units(6009, 6011, -1, 1, W) == pond_near
+			and BrickFluid.get_save().size() == save_near,
+			"%d units (want %d), save %d bytes (want %d)" % [_region_units(6009, 6011, -1, 1, W), pond_near,
+			BrickFluid.get_save().size(), save_near])
+	BrickFluid.set_centre(Vector3(0, 0, 0), 100000.0)
+	BrickFluid.place(Vector3i(6010, W, 0), 1, BrickFluid.STILL, 0)
+	BrickFluid.tick_now(5)
+	var mem2: Dictionary = BrickFluid.memory_stats()
+	_ok("back, it is whole again", _region_units(6009, 6011, -1, 1, W) == pond_near and int(mem2.parked) < int(mem1.parked)
+			and BrickFluid.active_count() == 0,
+			"%d units (want %d), parked %d, %d awake" % [_region_units(6009, 6011, -1, 1, W), pond_near, int(mem2.parked),
+			BrickFluid.active_count()])
 	BrickFluid.reset(20.0, false)
 	BrickTerrain.clear_terrain_edits()
 
