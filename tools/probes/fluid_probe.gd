@@ -34,7 +34,9 @@ extends SceneTree
 ## - stage 8: a calm pond's top is one merged quad; generated lava pools in
 ##   caves under the lava line, drawn once primed and still; springs run; a
 ##   fall into a pit never fills it and, cut off, is gone; a river over a
-##   pond leaves its volume as it was (R6, MineWaterNext.md); lakes over the sea; cave
+##   pond leaves its volume as it was (R6, MineWaterNext.md); a source in a
+##   brim-full pond makes it a lake that heals, a half-full one does not
+##   turn (R9); lakes over the sea; cave
 ##   pools with no water beside cave air; a mirror rebuilds an authority's
 ##   water from its change log (multiplayer groundwork); a source on the open
 ##   sea runs out 2 studs and its water goes back to the sea once it is gone.
@@ -349,6 +351,42 @@ func _run() -> void:
 	_ok("a river over a pond leaves its volume as it was", int(ran.kind) == BrickFluid.FLOW
 			and _region_units(3009, 3011, -1, 1, W) == pond0 - 2,
 			"pond %d, ran over %s, after %d (want %d)" % [pond0, int(ran.kind) == BrickFluid.FLOW, _region_units(3009, 3011, -1, 1, W), pond0 - 2])
+	# 4g. A source in a brim-full pond makes it a lake (R9, decision B: the
+	# whole connected full body turns); a hole dug in it heals. A half-full
+	# pond does not turn: it drains into the source (4.2.4).
+	_floor(3100, -12, 3140, 12)
+	for wall in [[3104, -3, 3110, -3], [3104, 3, 3110, 3], [3104, -3, 3104, 3], [3110, -3, 3110, 3],
+			[3124, -2, 3128, -2], [3124, 2, 3128, 2], [3124, -2, 3124, 2], [3128, -2, 3128, 2]]:
+		BrickTerrain.fill_box(Vector3i(wall[0], W * 3, wall[1]), Vector3i(wall[2], W * 3 + 2, wall[3]), 4, false)
+	BrickFluid.terrain_changed(Vector3i(3104, W * 3, -3), Vector3i(3128, W * 3 + 2, 3))
+	for x in range(3105, 3110):
+		for z in range(-2, 3):
+			BrickFluid.place(Vector3i(x, W, z), 1, BrickFluid.STILL, 3)
+	for x in range(3125, 3128):
+		for z in range(-1, 2):
+			BrickFluid.place(Vector3i(x, W, z), 1, BrickFluid.STILL, 1)
+	_settle(50)
+	BrickFluid.place(Vector3i(3105, W, -2), 1, BrickFluid.SOURCE, 3)
+	BrickFluid.place(Vector3i(3125, W, -1), 1, BrickFluid.SOURCE, 3)
+	BrickFluid.tick_now(30)
+	var lake_src := 0
+	for x in range(3105, 3110):
+		for z in range(-2, 3):
+			if int(_info(x, W, z).kind) == BrickFluid.SOURCE:
+				lake_src += 1
+	_ok("a source in a brim-full pond makes it a lake", lake_src == 25, "%d of 25 cells source" % lake_src)
+	BrickFluid.remove(Vector3i(3107, W, 0), -1)
+	BrickFluid.tick_now(5)
+	_ok("a hole dug in the lake heals", int(_info(3107, W, 0).kind) == BrickFluid.SOURCE)
+	var turned := 0
+	for x in range(3125, 3128):
+		for z in range(-1, 2):
+			var hc: Dictionary = _info(x, W, z)
+			if int(hc.kind) == BrickFluid.SOURCE and not (x == 3125 and z == -1):
+				turned += 1
+	_ok("a half-full pond does not turn", turned == 0, "%d turned" % turned)
+	BrickFluid.remove(Vector3i(3105, W, -2), -1)
+	BrickFluid.remove(Vector3i(3125, W, -1), -1)
 
 	# 4f. Still water touching a source drains into it (the user, 2026-11-19:
 	# finite water meeting the sea joins the sea).

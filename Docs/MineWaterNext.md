@@ -160,7 +160,9 @@ have needed work before.
    exactly. Was: `fluid_probe`: a cut-off
    stream leaves no water; a fall into a pit never fills it; a river over a
    pond leaves its volume as it was.
-4. **S2** R9: full still water beside a source becomes source (decision B).
+4. **S2 -- done 2026-11-24.** A full still cell touching a source turns source, a cell a tick
+   through the full body (no capped flood fill needed: the body turns as the rule passes on).
+   Was: **S2** R9: full still water beside a source becomes source (decision B).
    Probe: a source bucket into a brim-full pond makes it heal like a lake; a
    half-full pond does not turn.
 5. **S3** R1/R2: waves on lakes and rivers; `surface_at`, floaters and
