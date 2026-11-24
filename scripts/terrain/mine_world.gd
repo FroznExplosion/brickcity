@@ -685,8 +685,10 @@ func _mine(point: Vector3, dir: Vector3, _info) -> void:
 	var holder := [{}]
 	var n := -dir
 	var at := to_local(point)
+	# High priority: at low, the shot waited behind every streaming bake
+	# (all high) before it knew what it hit (Docs/MineWorld.md 21).
 	var task := WorkerThreadPool.add_task(
-		func() -> void: holder[0] = BrickTerrain.find_brick(at, n), false, "break brick")
+		func() -> void: holder[0] = BrickTerrain.find_brick(at, n), true, "break brick")
 	_break_jobs.append([task, holder, at - dir * 0.6, Time.get_ticks_usec()])
 
 
@@ -2612,9 +2614,13 @@ func _run_gate() -> void:
 ## -- --gate=breaklag: HOW LONG A BROKEN BRICK TAKES TO GO from the ground
 ## (the user: "a hesitation when I break a brick"). Single shots spaced out,
 ## then three bricks at once; each stage timed: the brick found and cleared
-## (find_brick on a worker), the tile marked (the edits are gathered 0.1 s),
+## (find_brick on a worker), the tile marked,
 ## its bake started (a free slot), the bake landed, the new tile swapped in.
 ## Latency, not frame time: the frames are the edit gate's (--gate).
+## `--streaming`: each shot fired with new ground streaming in, as when
+## walking or flying (Docs/MineWorld.md 21): a strip of 18 tiles beside the
+## player, 2-3 tiles off, is dropped and baked again as new ground just before
+## it -- more than the streamer's slots, so the edit's bake competes with them.
 func _run_breaklag_gate() -> void:
 	await _frames(60)
 	set_on_foot(true)
@@ -2623,9 +2629,13 @@ func _run_breaklag_gate() -> void:
 	var stud := BrickWorld.get_stud_metres()
 	var e := _eye()
 	var rows: Array = []
+	var streaming := "--streaming" in OS.get_cmdline_user_args()
+	var t_eye := _tile_of(e)
 	var shoot := func(k: int, n: int) -> void:
 		break_log.clear()
 		_streamer.latency_log.clear()
+		if streaming:
+			_streamer.invalidate(Rect2i(t_eye + Vector2i(-3 if k % 2 == 0 else 2, -4), Vector2i(2, 9)))
 		var t0 := Time.get_ticks_usec()
 		for j in n:
 			var p := e + Vector3(1.6 + float((k * 3 + j) % 6) * 0.7, 0.0, -2.4 - floorf(float(k * 3 + j) / 6.0) * 0.7)

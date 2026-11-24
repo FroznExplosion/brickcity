@@ -1189,3 +1189,30 @@ explosion's crater in <= 4.
 6. Distance lighting is not where the ground's GPU time is (sky light ~0.7
    ms a bake on a worker; far tier ~0.5 ms GPU). If it is wanted: far tier
    without normal maps or shadow receiving, light baked in the vertex only.
+
+**Done (2026-11-23): items 2 and 5.** Items 1 and 3 wait for the brick
+overlay (real bevelled bricks near the camera), which reworks the same bake;
+item 4 too (it splits the same bake and tile); 6 last.
+- `find_brick` (shot and pickaxe), the collapse's survey and its piece mesh
+  are high-priority tasks.
+- The streamer has `EDIT_SLOTS` (2) bake slots past `max_in_flight` that only
+  an edit's rebake takes; edits sort ahead of new ground; their bakes land
+  first, and their swaps run on a budget of their own -- they waited for new
+  ground landing at the square's edge (the "swapped" stage, up to 48 ms).
+  The deep tier starts edited sections first, with the same extra room.
+- `SURVEY_EVERY` 0: the survey starts the frame the edit lands (one at a
+  time; edits meanwhile merge into the queued boxes).
+- `-- --gate=breaklag --streaming`: each shot fired while a strip of 18 tiles
+  beside the player is baked again as new ground. Main against this, back to
+  back, 73-80 C (another chat's gate ran part of the time):
+
+| | 1 brick, mean (worst) | 3 bricks, mean (worst) |
+|---|---|---|
+| main, streaming | 81 ms (130) | 107 ms (118) |
+| now, streaming | 41 ms (67) | 69 ms (72) |
+| now, standing (no streaming) | 38 ms (78) | 62 ms (76) |
+
+  What is left is find_brick's frame or two and the bake itself: items 1, 3.
+  `--gate`, `--gate=collapse`, `--gate=handover`, `--gate=deep` and the
+  three terrain probes pass; `--gate`'s one slow frame after landing from
+  fast flight (95-112 ms) is on main too.
