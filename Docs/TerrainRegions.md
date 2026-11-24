@@ -521,3 +521,12 @@ blocking edit is the terrain area's, small, and can go any time.
   on the side-stud grid only, gated), and custom bricks such as a 2x4 with
   7 studs. Studs are already drawn one instance a stud, so drawing from a
   mask is natural; joints read the mask's overlap.
+- **Slopes and curves as dress-up (question, not decided).** The old try
+  (Terrain.md 17.15, 19.22) baked them into the tile mesh: 1x1 ramps read
+  as melted, terrace slopes cost 381k -> 660k triangles, specks at tile
+  seams. Now: a slope is a fitted brick kind (fills its cells, studs only
+  on its flat strip by the stud mask), placed by hash at open edges (tops,
+  cliff lips, inverted under overhangs and cave roofs), never 1x1 ramps.
+  Drawn as overlay instances within the overlay's 12 m (one draw call a
+  kind, nothing stored); 12-45 m either plain baked faces or the step as
+  now -- pictures decide; far rings never. Stage B5, after the fit.
