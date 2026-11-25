@@ -214,10 +214,14 @@ func build_begin(reach_tiles: int, material: Material, hole := Rect2i(), split_t
 					for dx in span:
 						covered[Vector2i(bx + dx, bz + dz)] = true
 
-	# Whatever is left, one tile at a time. There is always something: a hole
-	# is not on the block lattice, and the world's edge is not either.
-	for tz in range(-reach, reach + 1):
-		for tx in range(-reach, reach + 1):
+	# Whatever is left, one tile at a time: round a hole, which is not on the
+	# block lattice. Inside the blocks' own square [-reach, reach): one more
+	# row and column (to reach, inclusive) was 257 one-tile blocks along the
+	# far rim, a node and a draw each at the finest sample step, ground at the
+	# horizon nobody asked for (--gate=gpu: the far tier 335 meshes, 257 of
+	# them these; Docs/MineWorld.md 21, item 6).
+	for tz in range(-reach, reach):
+		for tx in range(-reach, reach):
 			var c := Vector2i(tx, tz)
 			if covered.has(c) or (has_hole and hole.has_point(c + a)):
 				continue
