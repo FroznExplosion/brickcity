@@ -43,6 +43,9 @@ const DEFAULT_BRICKS := {
 	"stagger": 0.0, "cave_stagger": 0.35,
 	"cross": 1.0,
 	"mixed": true,
+	## The game draws, breaks and holds these bricks (off: the old 2x4
+	## pattern). Off until the gates pass on it (Docs/TerrainRegions.md 12).
+	"fitted": false,
 	"bands": [{
 		"below_m": 12.0,
 		"shapes": {
@@ -156,6 +159,16 @@ static func complete(d: Dictionary) -> Dictionary:
 
 ## DEFAULT_BRICKS under whatever `b` says; `shapes` and `bands`, when given,
 ## replace the defaults' whole (a mix is one thing).
+## A probe's `--fitted` (Docs/TerrainRegions.md 12): the default fill
+## configured and the game's ground bricks taken from it. Probes that bake
+## or break ground call this first; without the flag it does nothing.
+static func apply_fitted_flag() -> void:
+	if "--fitted" in OS.get_cmdline_user_args():
+		TerrainFit.configure(complete_bricks({}))
+		TerrainFit.set_enabled(true)
+		print("[fitted] the ground's bricks from the region fit")
+
+
 static func complete_bricks(b: Dictionary) -> Dictionary:
 	var out: Dictionary = DEFAULT_BRICKS.duplicate(true)
 	for k in b:

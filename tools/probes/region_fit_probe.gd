@@ -73,6 +73,10 @@ func _initialize() -> void:
 	BrickTerrain.set_gen_params(s.gen)
 
 	var areas: Array = _pick_areas()
+	if "--lookup" in OS.get_cmdline_user_args():
+		_check_lookup(areas)
+		quit(1 if failures > 0 else 0)
+		return
 	# The shipped settings (what a new world uses), the deep band left out:
 	# the surface band this probe samples is only metres deep.
 	var chosen: Dictionary = Presets.complete_bricks({})
@@ -166,19 +170,30 @@ func _pick_areas() -> Array:
 	return best
 
 
-## THE LOOKUP (Docs/TerrainRegions.md 12) the game will ask: each tile and
-## one round fitted together, cached by tile. It must give exactly the
-## batch fit's bricks, asked from 4 threads in any tile order: a brick that
-## crosses a tile edge is fitted from both sides and must agree.
+## THE LOOKUP (Docs/TerrainRegions.md 12) the game asks: regions fitted on a
+## miss and kept. It must give exactly the batch fit's bricks, asked from 4
+## threads in any tile order (a region is fitted by whichever tile asks
+## first), at the surface and deep in the deep tier.
 func _check_lookup(areas: Array) -> void:
 	TerrainFit.configure(Presets.complete_bricks({}))
 	for a: Vector2i in areas:
-		var r: Dictionary = TerrainFit.check_lookup(a, 4)
-		var st: Dictionary = r.stats
-		print("[fit] lookup %s: %d cells checked, %d wrong, %d not answered (band bottom); %d tiles fitted, %.1f ms a tile, %.0f KB a tile" % [
-				a, r.checked, r.wrong, r.missing, st.made, st.ms_each, st.bytes / 1024.0 / maxf(1.0, float(st.kept))])
-		if int(r.wrong) > 0:
-			failures += 1
+		for depth in [0, 200]:
+			var r: Dictionary = TerrainFit.check_lookup(a, 4, depth)
+			if r.has("error"):
+				print("[fit] lookup %s: %s" % [a, r.error])
+				failures += 1
+				continue
+			var st: Dictionary = r.stats
+			print("[fit] lookup %s %s: %d cells checked, %d wrong, %d not answered; %d regions in %d jobs, %.0f us a region (sampling %.0f%%), %.0f cells sampled a region, %.0f B a region kept" % [
+					a, "surface" if depth == 0 else "%d courses down" % depth, r.checked, r.wrong, r.missing,
+					st.fitted, st.jobs, st.us_region, 100.0 * st.sample_ms / maxf(0.001, st.sample_ms + st.fit_ms),
+					st.sampled_per_region, float(st.bytes) / maxf(1.0, float(st.kept))])
+			if int(r.wrong) > 0:
+				print("[fit]     even layers wrong: %d" % r.wrong_even)
+			for e in r.get("examples", []):
+				print("[fit]     ", e)
+			if int(r.wrong) > 0 or int(r.missing) > 0 or int(r.checked) == 0:
+				failures += 1
 	print("[fit] lookup %s" % ("PASS" if failures == 0 else "FAIL (%d areas disagree)" % failures))
 
 

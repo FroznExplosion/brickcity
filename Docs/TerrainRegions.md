@@ -621,21 +621,65 @@ the mesher and `find_brick`; the lookup and the cache are this chat's
 (terrain_fit.*). The callers' switch is one change across their code: agree
 who makes it before starting.
 
-### 12.1 The lookup, built (2026-11-25)
+### 12.1 The lookup, built (2026-11-25; rebuilt per region the same day)
 
-`brick::fitted_brick(x, course, z, FitBrick&)` (terrain_fit.h; scripts:
-`TerrainFit.brick_at`). A tile's bricks are fitted with one tile round it
-(sampled through the kept generated cells), only the regions the tile needs
-(`Fitter::focus`), kept by tile (64, least recently used out), 2-byte ids a
-cell, sand and gravel marked, not listed. Surface band only; the deep tier
-is the next piece. `TerrainFit.configure` clears it.
+`brick::fitted_brick(x, course, z, FitBrick&)` and, for many lookups from
+one thread, `brick::FitView` (terrain_fit.h; scripts: `TerrainFit.brick_at`).
 
-`region_fit_probe` checks it: every cell of 3 areas' middle tiles asked from
-4 threads in a shuffled tile order equals the batch fit (1.1 M cells, 0
-wrong). Bricks crossing tile edges agree from both sides.
+- **Per region, any depth.** A cell's brick is in exactly one region (the
+  square of its course holding it, in its layer). Regions are fitted on a
+  miss and kept, least recently used out (32768, ~500 B each: 4-byte bricks
+  from the region's corner; sand and gravel not listed). An even layer's
+  region is fitted from its own cells; an odd one's with the even regions
+  round it, fitted with it or laid in from the cache (their sand and gravel
+  laid back as 1x1s: the seams there count). Each region's whole reach is in
+  the area it is fitted in, so it is the same whoever asks first.
+- **The generator's cells**, never the edits: `brick::generated_cells` reads
+  the kept generated tiles and the deep tier's sections (deep tier on or off:
+  the fit must not depend on what has been dug or sampled so far). The top
+  course (the surface's pieces) is never fitted.
+- **Checked** (`region_fit_probe -- --lookup`): every cell the batch fit
+  has whole (48 studs in from its sides) asked from 4 threads in a shuffled
+  tile order equals the batch fit, at the surface and 200 courses down
+  (~330k cells, 0 wrong).
+- **Memory**: ~400-650 B a region, ~130 KB a freshly baked tile's worth
+  (regions it needs and those round it; neighbours share them). The old
+  per-tile cache was 390-500 KB a tile.
 
-Cost, debug build, 4 threads at once, hot machine (ratios only): 130-160 ms
-and 390-500 KB a tile. To cut before the game uses it: a release
-measurement; a smaller margin than a whole tile round; FitBrick packed (32 ->
-12 bytes); the cave scan only round the needed regions. Memory goal: what
-it replaces (the packs, ~10 MB) plus the kept cells.
+The old note that a release build would be several times faster was wrong:
+the "debug" template is built optimised (godot-cpp's `speed_trace`).
+
+### 12.2 The switch-over, built (2026-11-25)
+
+`TerrainFit.set_enabled(on)` (preset `bricks.fitted`, M menu Bricks tab
+"Use these bricks in the game (test)", `--fitted` on the mine world and on
+the probes below). **Off by default.** On:
+
+| where | with the fit |
+|---|---|
+| `BondView::rect` (mesher seams, overlay, find_brick, find_bricks) | the fitted brick, with its bottom course and height (`BondRect::c`, `h`): a tall brick draws no seam inside it, breaks whole, is one overlay box |
+| ground no fitted brick holds whole (built up by edits, the rest of a brick a hole cut) | the old pattern among those cells only (it never overlaps a fitted brick) |
+| `terrain_collapse.cpp` survey | the fitted footprint a course (a tall brick is one body a course until stage D), the same fallback |
+| top course | the packer's pieces, as before (plates and tiles on cave surfaces: later) |
+| colours | per cell (coal shows in a stone brick); a brick's strength is its main material's |
+
+The mesh asks the regions of its open faces first (`prefetch_open`), so a
+region is fitted where something of it is drawn, plus the even regions an
+odd one reads.
+
+Probes with `--fitted`: `terrain_bricks_probe`, `terrain_audit_probe`,
+`terrain_collapse_probe` PASS; `mine_world_probe` passes all but its bake
+time; old path unchanged (all four PASS). `mine_world_probe`'s "no seam over
+a seam" is the old pattern's rule; under the fit it checks "few" (10% of
+joints at most, measured 2 of 108): the stagger is scored (section 11).
+
+**Open: the cold bake.** Once a tile's regions are kept a bake costs what it
+did (tiles 15.1 vs 13.6 ms, sections 8.1 vs 5.8). Cold, a tile took 143-174
+ms (120 allowed) and a deep section ~170 ms: about 70% of it is sampling --
+a region's fit reads the generated cells ~1.5 tiles round (an odd region's
+even neighbours), and making those neighbours' noise early is most of the
+cost (3,500 cells sampled a region for 768 fitted). To do before the switch
+is on: keep the fit's own coarse cell store wider than the generated-tile
+store (64 tiles), or fit in the order tiles stream so neighbours are kept;
+then the fitter's own time (~200 us a region: the candidate loop's fits and
+seam counts).

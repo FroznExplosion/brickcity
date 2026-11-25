@@ -2,6 +2,7 @@
 
 #include "brick_terrain.h"
 
+#include <climits>
 #include <cstdint>
 
 /// THE GROUND'S BOND (Docs/TerrainBond.md): which brick a ground cell below
@@ -52,6 +53,10 @@ inline int bond_group(int m) {
 struct BondRect {
     int x = 0, z = 0;     ///< min corner, studs (absolute)
     int sx = 1, sz = 1;   ///< size, studs
+    /// Its bottom course and courses tall (a fitted brick, terrain_fit.h,
+    /// may be 2 or 3 tall; the old pattern's are 1). INT_MIN: the course
+    /// asked about (bond_rect leaves it to the caller).
+    int c = INT_MIN, h = 1;
 };
 
 /// A brick's identity: its corner and its course. Unique per brick.
