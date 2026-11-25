@@ -721,6 +721,28 @@ func craft(r: Dictionary, near: Array, all := false) -> Dictionary:
 	return {"made": made, "left": left}
 
 
+## Take up to `n` of item `id` from what is carried (a harvest replanting its
+## seed, Docs/MineFarming.md). Creative: nothing is used up. How many.
+func take_item(id: StringName, n := 1) -> int:
+	if creative:
+		return n
+	var need := n
+	for a in _carried():
+		if need <= 0:
+			break
+		var s := get_slot(a)
+		if s == null or s.id != id:
+			continue
+		var take := mini(need, s.count)
+		s.count -= take
+		need -= take
+		if s.count <= 0:
+			set_slot(a, null)
+	if need < n:
+		changed.emit()
+	return n - need
+
+
 ## Would all of `s` fit into `areas`?
 func _can_fit(s: ItemStack, areas: Array) -> bool:
 	var need := s.count
