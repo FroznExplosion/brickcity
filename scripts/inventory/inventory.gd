@@ -56,6 +56,8 @@ var creative := true
 ## clicks change it in place) and its key.
 var chest_slots: Array = []
 var chest_key := ""
+## What the open container is called (a chest, a backpack put down).
+var chest_title := "Chest"
 
 var _drag_active := false
 var _drag_button := -1
@@ -126,6 +128,8 @@ func seed_default() -> void:
 		var st := [&"workbench", &"furnace"][k] as StringName
 		if ItemCatalog.has(st) and main.size() > 24:
 			main[23 + k] = ItemStack.make(st, 1)
+	if ItemCatalog.has(&"grenade") and main.size() > 22:
+		main[22] = ItemStack.make(&"grenade", ItemCatalog.max_stack(&"grenade"))
 	changed.emit()
 
 
@@ -717,6 +721,28 @@ func craft(r: Dictionary, near: Array, all := false) -> Dictionary:
 	return {"made": made, "left": left}
 
 
+## Take up to `n` of item `id` from what is carried (a harvest replanting its
+## seed, Docs/MineFarming.md). Creative: nothing is used up. How many.
+func take_item(id: StringName, n := 1) -> int:
+	if creative:
+		return n
+	var need := n
+	for a in _carried():
+		if need <= 0:
+			break
+		var s := get_slot(a)
+		if s == null or s.id != id:
+			continue
+		var take := mini(need, s.count)
+		s.count -= take
+		need -= take
+		if s.count <= 0:
+			set_slot(a, null)
+	if need < n:
+		changed.emit()
+	return n - need
+
+
 ## Would all of `s` fit into `areas`?
 func _can_fit(s: ItemStack, areas: Array) -> bool:
 	var need := s.count
@@ -755,9 +781,10 @@ func clear_craft() -> Array:
 
 ## Borrow `slots` (kept by the chest's owner) under `key`, so the clicks change
 ## it in place.
-func open_chest(key: String, slots: Array) -> void:
+func open_chest(key: String, slots: Array, title := "Chest") -> void:
 	chest_key = key
 	chest_slots = slots
+	chest_title = title
 	changed.emit()
 
 

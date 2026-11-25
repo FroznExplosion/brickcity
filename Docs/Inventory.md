@@ -317,7 +317,32 @@ and runs its own hands. Nothing here changes how a gun fires
     gravel by hand with a real click, sandstone greyed, a workbench placed,
     RMB opens the Craft tab, sandstone made; the Craft tab at 640x400.
 
-Later: placing a backpack as a container (zylanntest), multiplayer authority.
+### Grenades and backpacks put down (2026-11-25, asked by the user)
+
+- **Grenades** are an item (stacks of 16; 16 in the kit's storage, a furnace
+  recipe: 4 from 12 coal ore + 6 iron ore). G throws one from whatever is
+  carried (LMB too with it in the hand), the arsenal's throw
+  (`Grenade.throw`) without the arsenal (`mine_world.throw_grenade`). Its
+  blast reaches the world through `AIServices.on_structure_hit`, which the
+  mine world now sets (`_world_hit`: a blast -> `blast()`, a shot -> `_mine`):
+  every whole brick in the box round it goes (BrickTerrain.find_bricks on a
+  worker, as the Mega Pickaxe's face) and chests in reach break. The crash:
+  `Grenade.blast` asked `services.ai_world.line_clear`, and the mine world
+  has no AI world -- now `Grenade._clear` asks the physics instead there.
+  Rockets and grenade launchers (the player's gun) blast the same way.
+- **Backpacks put down** (zylanntest's): a backpack in the hand + RMB puts it
+  down as a container (MineChests: `is_container`, `slot_count` -- its slots
+  ARE its contents, 9/18/27); it leaves the hand even in creative. RMB opens
+  it (the screen shows only its slots, titled with its name); Shift + RMB
+  picks it up and wears it -- if one is worn they SWAP, yours standing where
+  the other stood with its contents (`mine_world.take_backpack`). Broken
+  (LMB, a shot, a blast, the ground going) it falls as itself with its
+  contents, never scattered. Saved with the world like a chest.
+- Probe: placed backpacks (122 checks). `--gate=inventory` (78): G throws,
+  the blast breaks bricks; a backpack down, opened, picked up and swapped
+  back, broken.
+
+Later: multiplayer authority.
 
 ## 5. Tests
 

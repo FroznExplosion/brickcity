@@ -233,7 +233,74 @@ have needed work before.
    had won and two units went). `fluid_probe` 15: a U-bend fills both arms to one level,
    48 of 48 units.
 8. **W1** after TerrainRegions stage A; **W3**; **R10** rain and **W4** with
-   the user.
+   the user. **R10 -- done 2026-11-25**, section 8.
+
+## 8. Rain (R10, built 2026-11-25)
+
+The user: rain is an AREA that starts in biomes that could have rain, then
+drifts and may fall in any biome; even deserts get rain, rarely.
+
+- **Storms** (`scripts/water/mine_rain.gd`, MineRain under MineWater): a disc
+  70-230 m across, a strength, a life. Every 15 s a point 120-700 m out
+  (upwind 70 % of the time) is tried: odds 0.35 x a weight from the biome's
+  climate `humid` there (generator table; sea 0.5, beach 0.3, river 0.4,
+  peaks 0): 1 in a jungle or dark forest, 0.03 in a desert or badlands. Wet
+  ground makes bigger, stronger, longer storms. At most 3.
+- **Drift and death**: storms ride the wind (3 m/s, turning slowly) over any
+  biome. A storm's life runs 4x faster over a desert (0.6x over a jungle):
+  one that wanders into a desert rains there a little and is gone.
+- **Drawn** round the player: falling drops and splashes (the disasters'
+  RainSplash), a hiss, the ground wet (WeatherFx; it dries over a minute
+  after). Not drawn without open sky (`BrickTerrain.sky_light_at`).
+- **Water** (`BrickFluid.rain`): ~1 tile a column every 4 minutes at full
+  strength, inside the sim radius. A drop lands on the column's top solid
+  plate (`brick::packed_tops`: roofs and edits too) as a still tile; on
+  still water it adds to it; on a source, the sea, a river or lava it is
+  nothing. On dry ground with nothing higher beside it, it SOAKS IN: landing
+  everywhere kept ~50 tiles meshing every tick (tick 24 ms, 16 ms a frame on
+  the main thread drawing them) and those lone tiles only dried. Now drops
+  land at the foot of steps, walls and hollows' sides, run down, and pool;
+  open flat ground is only drawn wet. Storm overhead in the water gate: tick
+  9 ms (on the worker), main thread 0.3 ms.
+- Storms are weather, not saved; the puddles are water and are. Gates get no
+  storms of their own (`MineRain.forced`, `add_storm` for tests).
+- Checks: `fluid_probe` 16 (soaks in on the flat, pools in a basin and stays,
+  nothing on a source); `--gate=water` rain line and `mine_rain.png`.
+- **Options > Gameplay > Rain Water** (the user, 2026-11-25): how much rain
+  stays as water -- Off (soaks in, only wets the ground), Low 0.4x, Normal,
+  High 2.5x, Very High 5x (Engine meta `rain_water`, `MineRain.water_mul`).
+  Not a water world in time: a hollow fills to its brim and no further, the
+  rest runs off as thin water that dries.
+- Open: snow (rain falls as rain in snowy biomes too).
+
+## 9. Packed brick tops (W4, built 2026-11-25)
+
+The user: still and source water should look the same; rain puddles too
+(rainy biomes then grow their own ponds).
+
+- Every calm water top -- still (ponds, puddles, rain pools), sources, lakes,
+  rivers -- is drawn as flat brick TILES (no studs) with joints; running
+  water (flow, falls) stays smooth and keeps its stud grid. Lava unchanged.
+- **Layout fixed by world position** (`piece_rect`): a 4 x 4 block of studs
+  is one tile when its whole top is alike (same kind, height, and easing);
+  else it splits in two -- 4 x 2 or 2 x 4 by the block's parity -- each half
+  into 2 x 2, each into 2 x 1 or 1 x 2 (parity), then 1 x 1. A cell's piece
+  is the first alike rect of its nested chain, so all its cells agree and a
+  piece changes only when its own cells do.
+- **Lakes**: each tile rides the wave at its own middle with its amplitude
+  there (bobbing tiles, skirts under the edges); `surface_at` and the
+  bucket's ray ask the same piece (`lake_piece`). Rim tiles reach a stud or
+  two in, so they bob a little (0.036 m) where 1 x 1 rim pieces were flat.
+- **Encoding**: CUSTOM0 x, w = the way to the piece's middle in studs; y 2
+  lake (z amplitude), 3 still (z the easing offset). The shader takes the
+  joint from that: dark line, a lighter rim inside, a shade per tile
+  (`joint_width`, `joint_darken`).
+- Checks: `fluid_probe` 4d (an off-grid 8 x 8 pond is covered exactly by 27
+  tiles, the biggest 4 x 4), 14 (wave at the piece's middle), 0 (still
+  pieces ease as a whole); `--gate=water` pictures `water_pond.png`,
+  `water_lake.png`.
+- Later: ice -- a frozen pond as the same pieces, opaque, real terrain
+  bricks to stand on and mine (with snow).
 
 Each: `fluid_probe`, `-- --gate=water`, `-- --gate=gen` where generation is
 touched. Windowed gates one at a time, heat check after each (CLAUDE.md);

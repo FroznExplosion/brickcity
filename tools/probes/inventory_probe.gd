@@ -55,6 +55,7 @@ func _init() -> void:
 	_crafting()
 	_wood_and_leaves()
 	_guns()
+	_placed_backpacks()
 	print("inventory probe: %d ok, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -514,6 +515,24 @@ func _wood_and_leaves() -> void:
 				unique = false
 				print("    %s shares filament %d with %s" % [n, f, names[m]])
 	_ok("every wood and leaf colour has a filament of its own", unique)
+	# terrain.gdshader draws these from the PBR sets by number (Docs/PbrWood.md
+	# 8): its lists must be the engine's.
+	var code := FileAccess.get_file_as_string("res://shaders/terrain.gdshader")
+	var lists_ok := true
+	for pair in [["TERRAIN_WOOD", fam[&"wood"]], ["TERRAIN_LEAVES", fam[&"leaves"]]]:
+		var re := RegEx.create_from_string(pair[0] + r"\[\d+\] = int\[\]\(([\d, ]+)\)")
+		var mt := re.search(code)
+		var want := []
+		for n in pair[1]:
+			want.append(names.find(n))
+		var got := []
+		if mt != null:
+			for v in mt.get_string(1).split(","):
+				got.append(int(v.strip_edges()))
+		if got != want:
+			lists_ok = false
+			print("    terrain.gdshader %s %s, the engine's %s" % [pair[0], got, want])
+	_ok("terrain.gdshader's wood and leaf numbers are the engine's", lists_ok)
 	var fl = load("res://scripts/water/floaters.gd")
 	_ok("every colour floats: birch wood, red leaves", fl.density_of("birch wood") < 1.0
 			and fl.density_of("red leaves") < 1.0 and fl.density_of("stone") > 1.0)
@@ -576,3 +595,42 @@ func _guns() -> void:
 	g.free()
 	again.free()
 	hands.free()
+
+
+## A backpack put down (zylanntest's): a container whose slots are its own
+## contents; broken, it falls as itself with them; picked up, nothing drops.
+func _placed_backpacks() -> void:
+	print("placed backpacks")
+	var inv := Inventory.new()
+	var drops := DroppedItems.new()
+	drops.setup(null, inv)
+	var chests := MineChests.new()
+	chests.setup(null, inv, drops)
+	var bag := Inventory.make_backpack(&"small_backpack")
+	bag.contents[2] = ItemStack.make(&"coal_ore", 5)
+	var b := Vector3i(1, 20, 1)
+	_ok("a backpack is a container with its own size (9)", MineChests.is_container(&"small_backpack")
+			and MineChests.slot_count(&"small_backpack") == 9)
+	chests.place(b, bag.contents, true, &"small_backpack")
+	var key := MineChests.key_of(b)
+	_ok("put down: its slots are the very contents it carried", chests.slots_of(key) == bag.contents
+			and chests.slots_of(key)[2].count == 5)
+	var back := MineChests.new()
+	back.setup(null, inv, drops)
+	back.restore(JSON.parse_string(JSON.stringify(chests.to_save())))
+	_ok("saved and back: 9 slots, the coal in slot 3", back.slots_of(key).size() == 9
+			and back.slots_of(key)[2] != null and back.slots_of(key)[2].count == 5)
+	chests.break_chest(key, false)
+	_ok("broken: it falls as one backpack with its contents (creative too)", drops.count() == 1
+			and (drops.drops[0].stack as ItemStack).id == &"small_backpack"
+			and (drops.drops[0].stack as ItemStack).contents[2].count == 5)
+	back.remove(key)
+	_ok("removed (picked up): gone, nothing dropped", back.count() == 0 and drops.count() == 1)
+	for x in [drops, chests, back]:
+		for n in x.get_children():
+			n.free()
+	drops.clear()
+	chests.clear()
+	drops.free()
+	chests.free()
+	back.free()

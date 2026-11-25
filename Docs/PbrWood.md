@@ -270,3 +270,26 @@ before section 1, no longer compiled and is gone.)
 
 Pictures: `tools/shots/print_look_shot.gd -- --out=<dir> --looks=glass,pei
 --views=side,stud,corner,wall,top,tops_close,skin,bottom,under` with and without `--no-bead-tex`.
+
+## 8. Terrain wood and leaves (mine world, 2026-11-25)
+
+The mine world's wood and leaves are terrain materials (Docs/Inventory.md 13): `wood`,
+`pale wood`, `birch wood`, `leaves`, `light leaves`, `autumn leaves`, `red leaves`. Until now
+`terrain.gdshader` drew them as PLA in their filament colours. Now they take the sets above, by
+the same rules as a brick, so a wood block laid in the mine world and a Wood brick in the city
+read as one stuff:
+
+| Piece | How |
+|---|---|
+| Which set | `terrain_pbr_set` in the vertex shader: the material byte (`v_material`, brick_terrain.h's numbers, held in `TERRAIN_WOOD` / `TERRAIN_LEAVES`) says wood or leaves; wood then takes the nearest of `WOOD_RGB` to its colour, as `bm_pbr_set` does for a brick (caramel -> oak's set, birch's sand -> birch's), leaves the leaf set |
+| The field | `v_world`, metres: the block of wood is the world's, one for all the ground. The mine world's origin shift (whole tiles) moves it, so the figure jumps once at a shift, far from where anyone looks |
+| Grain | along X (axis 0) for every wood block: a laid floor reads as boards, a wall's X faces show end grain. Cells have no grain of their own |
+| Fades | `pbr_range` / `pbr_far_range` / `pbr_bump`, brick.gdshader's defaults (14 / 60 m): past 60 m the flat colour, as a brick |
+| Printed lines | none on those materials (wood and leaves are not printed, as `MAT_PRINTED` says for bricks) |
+| Near, far, overlay | one shader: the near tiles (`CUSTOM0.r`), the coarse tiers (the same byte) and the brick overlay (`TERRAIN_BOX`, material in `COLOR.a`) all read the material |
+| Studs | `printed.gdshader` instances: `push_stud` writes the brick material in the alpha (Wood or Leaf for those terrain materials, PLA otherwise), so a stud on a wood block is wood (`printed_core` already draws PBR from alpha) |
+
+Checks: inventory_probe compares the shader's `TERRAIN_WOOD` / `TERRAIN_LEAVES` with
+`BrickTerrain.material_names()`; `scenes/terrain_test.tscn -- --gate=pbrwood` lays a wall of
+every wood and leaf colour beside a felled tree's site and shoots it near and far
+(`user://dev/pbr_terrain_*.png`).

@@ -2948,7 +2948,7 @@ PackedStringArray BrickTerrain::material_names() {
             "copper ore", "gold ore", "redstone ore", "lapis ore", "diamond ore", "podzol",
             "dry grass", "lush grass", "cold grass", "dark grass", "granite", "diorite", "ice", "obsidian",
             "wood", "leaves", "pale wood", "birch wood", "light leaves",
-            "autumn leaves", "red leaves" }) {
+            "autumn leaves", "red leaves", "farmland", "wet farmland" }) {
         out.push_back(n);
     }
     return out;
@@ -4200,7 +4200,7 @@ static PackedFloat32Array bricks_floats(const std::map<std::array<int, 3>, OutBr
 /// already known to render, the packer's top quad -- and every quad emitted
 /// anywhere in this file has to obey it. `_check_winding` in the probe now
 /// asserts it for every triangle of a tile.
-void push_stud(PackedFloat32Array &buf, float px, float py, float pz, const Color &c);
+void push_stud(PackedFloat32Array &buf, float px, float py, float pz, const Color &c, int mat = MAT_AIR);
 
 void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &owner,
         const std::vector<Piece> &pieces, uint32_t seed, PackedFloat32Array &studs, int &stud_count);
@@ -4769,7 +4769,8 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                         for (int b = 0; b < hgt; ++b) {
                             for (int a = 0; a < wdt; ++a) {
                                 push_stud(studs, ((float)(lx + a) + 0.5f) * STUD_M,
-                                        (float)(yp + 1) * PLATE_M, ((float)(lz + b) + 0.5f) * STUD_M, col);
+                                        (float)(yp + 1) * PLATE_M, ((float)(lz + b) + 0.5f) * STUD_M, col,
+                                        s.voxel(lx + a, yp, lz + b));
                                 ++stud_count;
                             }
                         }
@@ -5036,9 +5037,18 @@ int stud_stride() {
     return g_sky_light.load(std::memory_order_relaxed) ? 20 : 16;
 }
 
-void push_stud(PackedFloat32Array &buf, float px, float py, float pz, const Color &c) {
+/// A stud's alpha: the brick material printed.gdshader draws it as
+/// (brick_grid.h BRICK_MATERIALS: 10 Wood, 13 Leaf; the low five bits of
+/// 1 - alpha, grain along X). The ground's wood and leaves are drawn from
+/// the PBR sets, their studs with them (Docs/PbrWood.md 8); the rest PLA.
+static float stud_alpha(int mat) {
+    const int bm = material_is_wood(mat) ? 10 : (material_is_leaves(mat) ? 13 : 0);
+    return 1.0f - (float)bm / 255.0f;
+}
+
+void push_stud(PackedFloat32Array &buf, float px, float py, float pz, const Color &c, int mat) {
     Color k = c;
-    k.a = 1.0f;
+    k.a = stud_alpha(mat);
     push_instance(buf, px, py, pz, 0.0f, k);
     if (stud_stride() == 20) {
         buf.push_back(1.0f); buf.push_back(0.0f); buf.push_back(0.0f); buf.push_back(0.0f);
@@ -7959,7 +7969,7 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
         for (int lz = 0; lz < TILE; ++lz) {
             for (int lx = 0; lx < TILE; ++lx) {
                 const int i = TileSample::idx(lx, lz);
-                if (!s.smooth[i] || s.mat[i] == MAT_ROAD) {
+                if (!s.smooth[i] || s.mat[i] == MAT_ROAD || material_is_farmland(s.mat[i])) {
                     continue;
                 }
                 const int gx = gx0 + lx;
@@ -8045,7 +8055,7 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                 continue;
             }
             const int i = TileSample::idx(lx, lz);
-            if (s.plate[i] == 0 || s.mat[i] == MAT_ROAD) {
+            if (s.plate[i] == 0 || s.mat[i] == MAT_ROAD || material_is_farmland(s.mat[i])) {
                 continue;
             }
             const int gx = gx0 + lx;
@@ -8167,7 +8177,7 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
             Color c = piece_colour(s, pieces[o].ox, pieces[o].oz, pieces[o].mat, true);
             c.a = 1.0f;
             push_stud(studs, ((float)lx + 0.5f) * STUD_M, y,
-                ((float)lz + 0.5f) * STUD_M, c);
+                ((float)lz + 0.5f) * STUD_M, c, pieces[o].mat);
             ++stud_count;
         }
     }
@@ -8892,6 +8902,8 @@ void BrickTerrain::_bind_methods() {
     ClassDB::bind_integer_constant("BrickTerrain", "Material", "MAT_STONE", MAT_STONE);
     ClassDB::bind_integer_constant("BrickTerrain", "Material", "MAT_DARK_STONE", MAT_DARK_STONE);
     ClassDB::bind_integer_constant("BrickTerrain", "Material", "MAT_ROAD", MAT_ROAD);
+    ClassDB::bind_integer_constant("BrickTerrain", "Material", "MAT_FARMLAND", MAT_FARMLAND);
+    ClassDB::bind_integer_constant("BrickTerrain", "Material", "MAT_WET_FARMLAND", MAT_WET_FARMLAND);
     ClassDB::bind_integer_constant("BrickTerrain", "PieceKind", "PIECE_BRICK", PIECE_BRICK);
     ClassDB::bind_integer_constant("BrickTerrain", "PieceKind", "PIECE_TILE", PIECE_TILE);
     ClassDB::bind_integer_constant("BrickTerrain", "PieceKind", "PIECE_RAMP", PIECE_RAMP);

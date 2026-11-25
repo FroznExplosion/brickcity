@@ -15,6 +15,7 @@
 		{ "name": "Bucket", "inputs": { "iron_ore": 24 }, "station": "furnace", "output": "bucket" },
 		{ "name": "Source bucket", "inputs": { "bucket": 1, "gold_ore": 12 }, "station": "furnace", "output": "source_bucket" },
 		{ "name": "Mega Pickaxe", "inputs": { "pickaxe": 1, "diamond_ore": 36 }, "station": "furnace", "output": "mega_pickaxe" },
+		{ "name": "Grenades", "inputs": { "coal_ore": 12, "iron_ore": 6 }, "station": "furnace", "output": "grenade", "count": 4 },
 		{ "name": "Obsidian", "inputs": { "lava_source": 1, "water_source": 1 }, "output": "obsidian", "count": 12 }
 	]
 }

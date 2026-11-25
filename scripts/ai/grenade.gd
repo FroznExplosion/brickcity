@@ -110,7 +110,7 @@ static func blast(services: AIServices, at: Vector3, by: Pawn, damage: float, ra
 			continue
 		done[p] = true
 		var d := p.chest().distance_to(from)
-		if d >= radius or not services.ai_world.line_clear(from, p.chest()):
+		if d >= radius or not _clear(services, from, p):
 			continue
 		var dmg := damage * (1.0 - d / radius)
 		# A mech takes a blast by its own rules: an explosive's half, on the hull.
@@ -124,6 +124,19 @@ static func blast(services: AIServices, at: Vector3, by: Pawn, damage: float, ra
 		services.on_structure_hit.call(at, Gravity.down_at(at), StructuralDamage.for_shot(WeaponClass.builtin(&"grenade")))
 	services.noise(at, HEARD, by)
 	return out
+
+
+## Nothing solid between the blast and the pawn's chest. A scene with no AI
+## world (the mine world: terrain, no nav grid) asks the physics instead --
+## the AI world was dereferenced here and an explosion there crashed.
+static func _clear(services: AIServices, from: Vector3, p: Pawn) -> bool:
+	if services.ai_world != null:
+		return services.ai_world.line_clear(from, p.chest())
+	if services.world3d == null:
+		return true
+	var q := PhysicsRayQueryParameters3D.create(from, p.chest(), Layers.WORLD | Layers.STRUCTURE,
+			[p.body.get_rid()] if p.body != null else [])
+	return services.world3d.direct_space_state.intersect_ray(q).is_empty()
 
 
 func _exit_tree() -> void:

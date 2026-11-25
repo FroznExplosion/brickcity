@@ -96,6 +96,17 @@ var _inv_walker_frozen := false
 ## Chests and the items lying in the world (Docs/Inventory.md 4, stage 5).
 var chests: MineChests = null
 var drops: DroppedItems = null
+## Farming (Docs/MineFarming.md): tilled plots, crops on the world clock.
+var farming: MineFarming = null
+## THE WORLD CLOCK (Docs/MineFarming.md 4): seconds played in this world,
+## saved with it (the world file's "time"). The sky's hour is its day part;
+## crops grow by it. Runs only while the world is open.
+var world_time := 0.30 * DAY_SECONDS
+var _time_saved := 0.0
+## The look line over the hotbar: the plot or crop looked at.
+var _farm_label: Label = null
+## --gate=farm's runner, held while it runs (a RefCounted).
+var _farm_gate: RefCounted = null
 ## What is in the hands: the selected slot, a gun or not (Docs/Inventory.md 10).
 var hands: MineHands = null
 ## Sky light on collapse pieces, drops and chests (Docs/MineWorld.md 19);
@@ -257,6 +268,10 @@ func _ready() -> void:
 	add_child(chests)
 	chests.setup(self, builder.inv, drops)
 	chests.sky = sky_lit
+	farming = MineFarming.new()
+	farming.name = "Farming"
+	add_child(farming)
+	farming.setup(self)
 	_build_item_icons()
 	debris = Debris.new()
 	debris.name = "Debris"
@@ -290,8 +305,14 @@ func _ready() -> void:
 			_run_gen_gate()
 		elif "--gate=menu" in OS.get_cmdline_user_args():
 			_run_menu_gate()
+		elif "--gate=farm" in OS.get_cmdline_user_args():
+			# Farming (Docs/MineFarming.md): scripts/farming/farm_gate.gd.
+			_farm_gate = preload("res://scripts/farming/farm_gate.gd").new()
+			_farm_gate.run(self)
 		elif "--gate=inventory" in OS.get_cmdline_user_args():
 			_run_inventory_gate()
+		elif "--gate=pbrwood" in OS.get_cmdline_user_args():
+			_run_pbrwood_gate()
 		elif "--gate=look" in OS.get_cmdline_user_args():
 			_run_look_gate()
 		elif "--gate=cave" in OS.get_cmdline_user_args():
@@ -388,9 +409,12 @@ func generate(s: Dictionary) -> void:
 	_load_pieces()
 	_load_placed()
 	_load_inventory()
+	var plots := farming.load_world(_regions_dir(path_for_regions())) if farming != null else 0
 	# A one-file save to move to regions: the first save writes them all.
 	_edits_dirty = _migrate_old
 	_save_status = "%d changes loaded" % loaded if loaded > 0 else "new world"
+	if plots > 0:
+		_save_status += ", %d farm plots" % plots
 	var sea := float(settings.gen.get("sea_m", 20.0))
 	# The sea line is where trees stop; the water snaps it to a course below.
 	BrickWave.set_sea_level(sea)
@@ -616,11 +640,17 @@ func _place_player(feet: Vector3) -> void:
 		cam = parts.cam
 		pawn = parts.pawn
 		player = parts.player
+		# A fall onto a field tramples it (Docs/MineFarming.md).
+		pawn.landed.connect(func() -> void:
+				if farming != null and on_foot:
+					farming.landed(pawn.last_fall, player_feet_local()))
 		gun = parts.gun
 		view = parts.view
-		gun.on_structure_hit = _mine
+		gun.on_structure_hit = _world_hit
 		var s := AIServices.new()
 		s.world3d = get_world_3d()
+		# A grenade's blast reaches the ground through the services (Grenade.blast).
+		s.on_structure_hit = _world_hit
 		# No arsenal: the mine world's guns are hotbar items (MineHands,
 		# Docs/Inventory.md 10); the city and planets keep theirs.
 		kit = PlayerKit.attach(self, player, cam, gun, s, {"scripted": _gate, "arsenal": false})
@@ -722,6 +752,83 @@ func _origin_step() -> void:
 	origin_shift += d
 	shifts += 1
 	print("[mine] origin shift %d: %s m, the global origin is now terrain %s" % [shifts, -d, origin_shift])
+
+
+## Something hit the world: a blast (a grenade, ordnance: StructuralDamage's
+## `blast`) breaks the bricks round it; anything else is a shot (`_mine`).
+func _world_hit(point: Vector3, dir: Vector3, info) -> void:
+	if info is Dictionary and bool(info.get("blast", false)):
+		blast(point, clampf(float(info.get("radius", 1.2)), 0.8, 1.6))
+	else:
+		_mine(point, dir, info)
+
+
+## A BLAST at `point` (global): every whole brick in the box `radius` round it
+## goes, as the Mega Pickaxe's face does (BrickTerrain.find_bricks on a
+## worker, cleared by `_land_breaks`), and the chests in reach break.
+## The grenade itself (scripts/ai/grenade.gd) hurts the bodies near it.
+func blast(point: Vector3, radius: float) -> void:
+	var c := to_local(point)
+	if chests != null:
+		for key in chests.chests.keys():
+			if chests.box_of(chests.chests[key].block).get_center().distance_to(c) <= radius + 0.3:
+				chests.break_chest(key, builder != null and not builder.inv.creative)
+	if _break_jobs.size() >= MAX_BREAK_JOBS:
+		return
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var lo := Vector3i(floori((c.x - radius) / stud), floori((c.y - radius) / plate), floori((c.z - radius) / stud))
+	var hi := Vector3i(floori((c.x + radius) / stud), floori((c.y + radius) / plate), floori((c.z + radius) / stud))
+	var holder := [{}]
+	var task := WorkerThreadPool.add_task(func() -> void: holder[0] = BrickTerrain.find_bricks(lo, hi),
+			false, "grenade blast")
+	# The shots' job shape: [task, holder, origin, when, hole] (no pre-hole: -1).
+	_break_jobs.append([task, holder, c, Time.get_ticks_usec(), -1])
+	blasts += 1
+
+
+## Blasts set off (the gate's count).
+var blasts := 0
+
+
+## G, or LMB with grenades in the hand: one thrown where the crosshair is
+## (the arsenal's throw, without the arsenal: Docs/Inventory.md 10). From the
+## hand's stack if it holds grenades, else the first carried; creative never
+## runs out. False with none.
+func throw_grenade() -> bool:
+	var inv: Inventory = builder.inv
+	var from_at := {}
+	if inv.hand() != null and inv.hand().id == &"grenade":
+		from_at = inv.hand_addr()
+	else:
+		for a in inv.all_addrs():
+			var s := inv.get_slot(a)
+			if s != null and s.id == &"grenade" and a.area != &"chest":
+				from_at = a
+				break
+	if from_at.is_empty() or kit == null or pawn == null:
+		return false
+	if not inv.creative:
+		inv.take_from(from_at, false)
+	var c := _eye_camera()
+	var eye := c.global_position
+	var fwd := -c.global_transform.basis.z
+	var space := get_world_3d().direct_space_state
+	var ex: Array[RID] = [pawn.body.get_rid()]
+	var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(eye, eye + fwd * 25.0, Layers.GUN_MASK, ex))
+	var to: Vector3 = hit.position if not hit.is_empty() else eye + fwd * 25.0
+	if hit.is_empty():
+		var down := space.intersect_ray(PhysicsRayQueryParameters3D.create(to, to + Vector3.DOWN * 60.0,
+				Layers.PAWN_MASK, ex))
+		if not down.is_empty():
+			to = down.position
+	var g := Grenade.throw(kit.services, pawn, eye + fwd * 0.6, to, self)
+	g.damage = CombatScale.melee(1) * 2.5
+	grenades_thrown += 1
+	return true
+
+
+var grenades_thrown := 0
 
 
 ## The gun hit the ground: it breaks WHOLE BRICKS there -- the surface piece
@@ -1174,11 +1281,14 @@ func _process(delta: float) -> void:
 	if on_foot and pawn.feet().y < -500.0:
 		set_on_foot(true, Vector3(eye.x, 0.0, eye.z) + Vector3.UP * 300.0)
 	_day_night(delta, eye)
+	if farming != null:
+		farming.step(delta, eye)
 	_autosave(delta)
 	_hud_in -= delta
 	if _hud_in <= 0.0:
 		_hud_in = 0.2
 		_update_hud()
+		_update_farm_label()
 	# After the tiers (day and night, autosave, HUD), and this whole _process:
 	# a slow frame's process time past it is other nodes' (--gate=stop).
 	var q1 := Time.get_ticks_usec()
@@ -1234,10 +1344,13 @@ func _follow_far(eye: Vector3) -> void:
 ## (_eye_lights); `--no-sky-light`: the old single factor from the eye's
 ## depth.
 func _day_night(delta: float, eye: Vector3) -> void:
+	# The world clock runs whatever the sky does; a gate sets it itself.
+	if not _gate:
+		world_time += delta
 	if sky_hold:
 		return
 	if not _gate:
-		_time = fposmod(_time + delta / DAY_SECONDS, 1.0)
+		_time = fposmod(world_time / DAY_SECONDS, 1.0)
 	var a := (_time - 0.25) * TAU
 	var to_sun := Vector3(cos(a), sin(a), 0.35).normalized()
 	var height := sin(a)
@@ -1445,7 +1558,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			_show_readout = not _show_readout
 			_update_hud()
 		KEY_T:
-			_time = fposmod(_time + 1.0 / 24.0, 1.0)
+			# An hour on: the crops get it too (the clock moves, not just the sky).
+			world_time += DAY_SECONDS / 24.0
+			_time = fposmod(world_time / DAY_SECONDS, 1.0)
 
 
 ## The world generation menu, opened the way the pause menu opens
@@ -1570,8 +1685,29 @@ func open_chest(key: String) -> void:
 		if _inv_screen != null:
 			_inv_screen.show_page("craft")
 		return
-	builder.inv.open_chest(key, chests.slots_of(key))
+	builder.inv.open_chest(key, chests.slots_of(key),
+			str(ItemCatalog.get_def(chests.item_of(key)).get("name", "Chest")))
 	toggle_inventory()
+
+
+## Shift + RMB on a backpack put down (zylanntest's): it is worn. If one was
+## worn already they swap -- yours stands where the other stood, its contents
+## in it. Its contents come along either way (they are the backpack's).
+func take_backpack(key: String) -> void:
+	if chests == null or not chests.chests.has(key):
+		return
+	var id := chests.item_of(key)
+	var block: Vector3i = chests.chests[key].block
+	var picked := ItemStack.make(id, 1)
+	picked.contents = chests.slots_of(key)
+	chests.remove(key)
+	var inv: Inventory = builder.inv
+	var old := inv.backpack
+	inv.set_slot(Inventory.addr(&"backpack"), picked)
+	if old != null:
+		chests.place(block, old.contents, true, old.id)
+	inv.changed.emit()
+	world_items_changed()
 
 
 ## The stations in reach of the player (the crafting list's).
@@ -1847,6 +1983,12 @@ func _load_inventory() -> void:
 	survival = bool(world.get("survival", not bool(world.get("creative", true))))
 	var fl = world.get("felled", [])
 	_felled_load = fl if fl is Array else []
+	# The world clock (Docs/MineFarming.md 4); a world from before starts at
+	# the old morning hour.
+	world_time = maxf(float(world.get("time", 0.30 * DAY_SECONDS)), 0.0)
+	_time_saved = world_time
+	if not _gate:
+		_time = fposmod(world_time / DAY_SECONDS, 1.0)
 	inv.creative = not survival
 	if first and how_kit_added(inv):
 		_inv_dirty = true
@@ -1875,9 +2017,14 @@ func how_kit_added(inv: Inventory) -> bool:
 	if inv.ensure_item(&"chest", &"mega_pickaxe"):
 		print("[mine] chests added to the inventory")
 		added = true
-	for st in [&"workbench", &"furnace"]:
+	for st in [&"workbench", &"furnace", &"grenade"]:
 		if inv.ensure_item(st):
 			print("[mine] %s added to the inventory" % st)
+			added = true
+	# Farming (Docs/MineFarming.md): a hoe and every crop's seed.
+	for it in [&"hoe", &"wheat_seeds", &"carrot", &"potato", &"beans", &"pumpkin_seeds", &"berries"]:
+		if ItemCatalog.has(it) and inv.ensure_item(it):
+			print("[mine] %s added to the inventory" % it)
 			added = true
 	return added
 
@@ -1925,8 +2072,9 @@ func save_edits(wait := false) -> void:
 		WorkerThreadPool.wait_for_task_completion(_save_task)
 		_save_task = -1
 	var fluid_at := BrickFluid.change_count()
-	if (not _edits_dirty and not _inv_dirty and not _world_dirty and fluid_at == _fluid_saved_at) \
-			or settings.is_empty():
+	var farm_dirty := farming != null and farming.store.has_dirty()
+	if (not _edits_dirty and not _inv_dirty and not _world_dirty and fluid_at == _fluid_saved_at
+			and not farm_dirty) or settings.is_empty():
 		return
 	_edits_dirty = false
 	_world_dirty = false
@@ -1937,7 +2085,9 @@ func save_edits(wait := false) -> void:
 		save_character()
 	# The world file: only what is the world's (stage 6).
 	var inv_save := {"format": 3, "survival": survival,
-			"felled": _trees.felled_list() if _trees != null else _felled_load}
+			"felled": _trees.felled_list() if _trees != null else _felled_load, "time": world_time}
+	_time_saved = world_time
+	var farm_regions: Array = farming.store.take_dirty() if farming != null else []
 	if chests != null:
 		inv_save["chests"] = chests.to_save()
 	if drops != null:
@@ -1985,6 +2135,7 @@ func save_edits(wait := false) -> void:
 			DirAccess.rename_absolute(rp + ".tmp", rp)
 		if migrate and all_written and FileAccess.file_exists(path):
 			DirAccess.remove_absolute(path)
+		FarmStore.write_regions(rdir, farm_regions)
 		var ip := _inventory_path(path)
 		var iv := FileAccess.open(ip + ".tmp", FileAccess.WRITE)
 		if iv != null:
@@ -2036,6 +2187,10 @@ func _autosave(delta: float) -> void:
 	_save_in -= delta
 	if _save_in <= 0.0:
 		_save_in = AUTOSAVE_SECONDS
+		# Time passing is a change: crops are settled against this clock, so a
+		# reload must not wind it back.
+		if absf(world_time - _time_saved) > 5.0:
+			_world_dirty = true
 		save_edits(false)
 
 
@@ -2078,6 +2233,25 @@ func _build_hud() -> void:
 	_hud.add_theme_constant_override("outline_size", 4)
 	_hud.add_theme_font_size_override("font_size", 14)
 	_hud_layer.add_child(_hud)
+	_farm_label = Label.new()
+	_farm_label.name = "FarmLook"
+	_farm_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_farm_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM)
+	_farm_label.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_farm_label.offset_top = -150
+	_farm_label.offset_bottom = -104
+	_farm_label.add_theme_color_override("font_color", Color(0.96, 0.97, 0.99))
+	_farm_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	_farm_label.add_theme_constant_override("outline_size", 4)
+	_farm_label.add_theme_font_size_override("font_size", 15)
+	_hud_layer.add_child(_farm_label)
+
+
+## The plot or crop looked at, over the hotbar (Docs/MineFarming.md 3).
+func _update_farm_label() -> void:
+	if _farm_label == null or farming == null or builder == null:
+		return
+	_farm_label.text = farming.look_text(builder.target) if builder.active else ""
 
 
 func _update_hud() -> void:
@@ -2708,6 +2882,74 @@ func _run_inventory_gate() -> void:
 	check.call("... and the felled tree still gone (%s)" % felled_cell, felled_cell != Vector2i.MAX
 			and _trees.felled.has(felled_cell))
 	set_survival(false)
+	inv = builder.inv
+	# Grenades (the user, 2026-11-25): G throws one; its blast breaks the
+	# bricks round it (it crashed: no AI world here, Grenade._clear).
+	set_on_foot(false)
+	var ge := _eye()
+	var gc := Vector2i(floori(ge.x / stud), floori(ge.z / stud))
+	_fly_to(Vector3(ge.x, _ground_m(gc.x, gc.y) + 3.0, ge.z), Vector3(0, 0, -1))
+	walker.pitch = -0.7
+	await _frames(10)
+	var edits0 := BrickTerrain.get_edit_count()
+	var blasts0 := blasts
+	var thrown0 := grenades_thrown
+	await _key(KEY_G)
+	await _frames(150)
+	check.call("G throws a grenade (creative: from the storage's stack)", grenades_thrown == thrown0 + 1)
+	check.call("it went off: a blast in the bricks (%d -> %d edits), no crash" % [edits0, BrickTerrain.get_edit_count()],
+			blasts > blasts0 and BrickTerrain.get_edit_count() > edits0)
+	await _shot(UserPaths.DEV + "inv_grenade.png")
+	# A backpack put down (the user): opened, picked up -- swapped for the one
+	# worn -- and broken.
+	walker.pitch = -1.45
+	_fly_to(_eye() - Vector3(0, 1.6, 0) + Vector3(-2.0, 0, 0), Vector3(0, 0, -1))
+	await _frames(10)
+	var bag := Inventory.make_backpack(&"small_backpack")
+	bag.contents[0] = ItemStack.make(&"coal_ore", 7)
+	var held_b := inv.hand()
+	inv.hotbars[inv.active_hotbar][inv.active_slot] = bag
+	inv.changed.emit()
+	await _frames(3)
+	builder.update_target()
+	builder.place_target()
+	await _frames(5)
+	var bkey := ""
+	for k in chests.chests:
+		if chests.item_of(k) == &"small_backpack":
+			bkey = k
+	check.call("RMB with a backpack puts it down, out of the hand (creative too)", bkey != "" and inv.hand() == null)
+	builder.update_target()
+	builder.place_target()
+	await _frames(5)
+	check.call("RMB on it opens it: 9 slots, 'Small Backpack', its coal", inventory_open() and inv.area_size(&"chest") == 9
+			and inv.chest_title == "Small Backpack" and inv.chest_slots[0] != null and inv.chest_slots[0].count == 7)
+	await _shot(UserPaths.DEV + "inv_bag_open.png")
+	await _key(KEY_E)
+	var worn0 := inv.backpack
+	if bkey != "":
+		var bblock: Vector3i = chests.chests[bkey].block
+		take_backpack(bkey)
+		await _frames(3)
+		var lkey := MineChests.key_of(bblock)
+		check.call("picked up: the small one worn (its coal is the storage), the large one stands there with its things",
+				inv.backpack != null and inv.backpack.id == &"small_backpack" and inv.main[0] != null
+				and inv.main[0].id == &"coal_ore" and chests.item_of(lkey) == &"large_backpack"
+				and chests.slots_of(lkey) == worn0.contents)
+		take_backpack(lkey)
+		await _frames(3)
+		check.call("swapped back: the large one worn (27 slots), the small one down again",
+				inv.backpack != null and inv.backpack.id == &"large_backpack" and inv.backpack.contents == worn0.contents
+				and inv.area_size(&"main") == 27 and chests.item_of(lkey) == &"small_backpack")
+		var d0 := drops.count()
+		chests.break_chest(lkey, false)
+		await _frames(3)
+		var fell: ItemStack = drops.drops[-1].stack if drops.count() > d0 else null
+		check.call("broken: it falls as the small backpack, the coal still in it",
+				fell != null and fell.id == &"small_backpack" and fell.contents[0] != null and fell.contents[0].count == 7)
+		drops.clear()
+	inv.hotbars[inv.active_hotbar][inv.active_slot] = held_b
+	inv.changed.emit()
 	builder.set_active(false)
 	builder.gate_keys = false
 	print("[inv-gate] INV-GATE %s (%d failed)%s" % ["PASS" if fails.is_empty() else "FAIL",
@@ -2888,6 +3130,129 @@ func _gate_drag(pts: Array[Vector2]) -> void:
 ## -- --gate=look: the same close view of the ground four ways -- FXAA on and
 ## off, the printed lines on and off -- at render scale 1 and MSAA 2x (the
 ## user's saved video settings), to see what makes the bricks look soft.
+## -- --gate=pbrwood (Docs/PbrWood.md 8): the ground's wood and leaves in
+## the PBR sets. The tree nearest the spawn felled; beside its site a wall of
+## every wood and leaf colour, a column of three 2x2 bricks each, laid as the
+## builder lays them; shot near, mid and far (user://dev/pbr_terrain_*.png),
+## and near again with the sets off (pbr_far_range 0): the sets must change
+## the wall's pixels. Prints PBRWOOD-GATE PASS/FAIL.
+func _run_pbrwood_gate() -> void:
+	var fails: Array[String] = []
+	var check := func(what: String, ok: bool) -> void:
+		print("[pbr-gate] %s %s" % ["ok  " if ok else "FAIL", what])
+		if not ok:
+			fails.append(what)
+	var vp := get_viewport()
+	vp.scaling_3d_scale = 1.0
+	vp.use_taa = false
+	_time = 0.42
+	set_on_foot(false)
+	await _frames(40)
+	var here := _eye()
+	var best: Dictionary = {}
+	var best_d := INF
+	for c in _trees._cells:
+		for row in _trees._cells[c]:
+			var d: float = ((row.xf as Transform3D).origin - here).length()
+			if d < best_d:
+				best_d = d
+				best = row
+	check.call("a tree near the spawn (%.0f m)" % best_d, not best.is_empty())
+	if best.is_empty():
+		print("[pbr-gate] PBRWOOD-GATE FAIL (no tree)")
+		get_tree().quit(1)
+		return
+	var cell := Vector2i(best.x, best.z)
+	check.call("it is felled", not fell_tree(cell).is_empty())
+	var names := Array(BrickTerrain.material_names())
+	var cols := ["wood", "pale wood", "birch wood", "leaves", "light leaves", "autumn leaves", "red leaves"]
+	var x0 := cell.x + 4
+	var laid := 0
+	for i in cols.size():
+		var m: int = names.find(cols[i])
+		var x := x0 + i * 2
+		var base := maxi(maxi(BrickTerrain.surface_plate(x, cell.y), BrickTerrain.surface_plate(x + 1, cell.y)),
+				maxi(BrickTerrain.surface_plate(x, cell.y + 1), BrickTerrain.surface_plate(x + 1, cell.y + 1))) + 1
+		for k in 3:
+			var lo := Vector3i(x, base + k * 3, cell.y)
+			var hi := lo + Vector3i(1, 2, 1)
+			var res: Dictionary = BrickTerrain.fill_box(lo, hi, m, true)
+			BrickTerrain.mark_placed(lo, hi, m)
+			terrain_edited(res)
+		if BrickTerrain.solid_at(x, base + 8, cell.y) == m:
+			laid += 1
+	check.call("a column of each colour laid (%d of %d)" % [laid, cols.size()], laid == cols.size())
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	# The wall's near face (-z), terrain frame: what every shot looks at.
+	var y_lo := _ground_m(x0 + cols.size(), cell.y)
+	var face_lo := Vector3(x0 * stud, y_lo, cell.y * stud)
+	var face_hi := Vector3((x0 + cols.size() * 2) * stud, y_lo + 9.0 * plate, cell.y * stud)
+	var aim := (face_lo + face_hi) * 0.5
+	if _hud_layer != null:
+		_hud_layer.visible = false
+	var look := func(dist: float) -> void:
+		var eye: Vector3 = aim + Vector3(dist * 0.25, dist * 0.3, -dist)
+		_fly_to(eye - Vector3(0, 1.6, 0), Vector3(0, 0, 1))
+		await _frames(3)
+		# A little right of the wall's middle (screen right is -x looking
+		# +z): the held item covers the bottom right.
+		var dir: Vector3 = (aim - Vector3(dist * 0.12, 0, 0) - _eye()).normalized()
+		_fly_to(eye - Vector3(0, 1.6, 0), Vector3(dir.x, 0, dir.z))
+		walker.pitch = asin(clampf(dir.y, -1.0, 1.0))
+	await look.call(3.0)
+	await _frames(90)
+	await _shot(UserPaths.DEV + "pbr_terrain_near.png")
+	var near_on := vp.get_texture().get_image()
+	# Where the wall's face is in that picture.
+	var cam := _eye_camera()
+	var rect := Rect2(cam.unproject_position(to_global(face_lo)), Vector2.ZERO)
+	for corner in [Vector3(face_hi.x, face_lo.y, face_lo.z), Vector3(face_lo.x, face_hi.y, face_lo.z), face_hi]:
+		rect = rect.expand(cam.unproject_position(to_global(corner)))
+	# The same view with the sets off (the overlay copies the ground's
+	# parameters once a second); the camera has not moved.
+	_mat.set_shader_parameter("pbr_far_range", 0.0)
+	await _frames(90)
+	await _shot(UserPaths.DEV + "pbr_terrain_near_off.png")
+	var near_off := vp.get_texture().get_image()
+	_mat.set_shader_parameter("pbr_far_range", 60.0)
+	for sh in [["mid", 10.0], ["far", 40.0]]:
+		await look.call(float(sh[1]))
+		await _frames(90)
+		await _shot(UserPaths.DEV + "pbr_terrain_%s.png" % sh[0])
+	if _hud_layer != null:
+		_hud_layer.visible = true
+	# Texture detail (neighbouring pixels' difference) over the wall's part
+	# of the picture, sets on against off: the photo's figure is detail the
+	# flat colour lacks (the sea and clouds move between the two, so a plain
+	# difference is noise). Down to the picture's foot: the wall's lower
+	# courses run off it.
+	var sz := near_on.get_size()
+	rect = rect.intersection(Rect2(Vector2.ZERO, Vector2(sz)))
+	rect.end.y = sz.y
+	var detail := func(img: Image) -> float:
+		var sum := 0.0
+		var n := 0
+		for y in range(int(rect.position.y), int(rect.end.y) - 1, 2):
+			for x in range(int(rect.position.x), int(rect.end.x) - 1, 2):
+				var a := img.get_pixel(x, y)
+				var b := img.get_pixel(x + 1, y)
+				var c := img.get_pixel(x, y + 1)
+				sum += absf(a.r - b.r) + absf(a.g - b.g) + absf(a.b - b.b) 						+ absf(a.r - c.r) + absf(a.g - c.g) + absf(a.b - c.b)
+				n += 6
+		return sum / maxf(float(n), 1.0)
+	var on_d: float = detail.call(near_on)
+	var off_d: float = detail.call(near_off)
+	print("[pbr-gate] the wall on screen: %s" % rect)
+	check.call("the wall fills a good part of the near picture (%.0f px)" % rect.get_area(),
+			rect.get_area() > 40000.0)
+	check.call("the sets give the wall its figure up close (detail %.4f on, %.4f off)" % [on_d, off_d],
+			on_d > off_d * 1.5)
+	print("[pbr-gate] PBRWOOD-GATE %s (%d failed)%s" % ["PASS" if fails.is_empty() else "FAIL",
+			fails.size(), "" if fails.is_empty() else ": " + ", ".join(fails)])
+	get_tree().quit(0 if fails.is_empty() else 1)
+
+
 func _run_look_gate() -> void:
 	var vp := get_viewport()
 	vp.scaling_3d_scale = 1.0
@@ -5143,6 +5508,21 @@ func _run_water_gate() -> void:
 		waited += 1
 	print("[water-gate] unload: platform tile water gone far away %s, drawn on bare ground %d (want 0), %d parked; back again %s" % [
 			gone, bare, water.parked_count(), water.has_tile_drawn(pt)])
+	# Rain (R10, mine_rain.gd): a storm over the platform -- drawn round the
+	# player, its drops landing as still water that pools in the pond.
+	var rn: MineRain = water.rain
+	var landed0 := BrickFluid.rain_landed()
+	var pond0 := _platform_fluid(o, w)
+	rn.add_storm(Vector2((o.x + 8) * stud, (o.y + 8) * stud), 45.0, 1.0, 600.0, 200.0)
+	var rw := 0.0
+	for f in 360:
+		var f0 := Time.get_ticks_usec()
+		await get_tree().process_frame
+		rw = maxf(rw, float(Time.get_ticks_usec() - f0) / 1000.0)
+	await _shot(dev + "mine_rain.png")
+	print("[water-gate] rain: %s; %d drops landed (want > 0), platform water %s -> %s, worst frame %.1f ms" % [
+			rn.report(), BrickFluid.rain_landed() - landed0, pond0, _platform_fluid(o, w), rw])
+	rn.storms.clear()
 	# Saving (stage 7): the water written beside the edits, the world made
 	# again from its settings, the same water back.
 	water.manual = true

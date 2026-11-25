@@ -159,7 +159,15 @@ static func _cyl(top: float, bottom: float, h: float, seg := 20) -> CylinderMesh
 static func _model(d: Dictionary) -> Node3D:
 	var inner := Node3D.new()
 	var col: Color = d.get("colour", Color(0.8, 0.8, 0.8))
-	match str(d.get("kind", "")):
+	var kind := str(d.get("kind", ""))
+	# Produce (a carrot, a pumpkin): a round brick with a leafy top.
+	if str(d.get("model", "")) == "produce":
+		kind = "produce"
+	match kind:
+		"produce":
+			_part(inner, _cyl(0.45, 0.45, 0.6, 18), _mat(col, 0.4), Vector3(0, 0.3, 0))
+			_part(inner, _cyl(0.16, 0.16, 0.12), _mat(col, 0.4), Vector3(0, 0.66, 0))
+			_part(inner, _box(Vector3(0.1, 0.3, 0.1)), _mat(Color(0.3, 0.6, 0.25), 0.6), Vector3(0, 0.85, 0))
 		"block":
 			var m := _mat(col, 0.35)
 			_part(inner, _box(Vector3(1.0, 0.6, 1.0)), m, Vector3(0, 0.3, 0))
@@ -201,6 +209,10 @@ static func _model(d: Dictionary) -> Node3D:
 			_part(inner, _box(Vector3(0.46, 0.32, 0.12)), dark, Vector3(0, 0.3, 0.26))
 			for x in [-0.2, 0.2]:
 				_part(inner, _box(Vector3(0.08, 0.8, 0.06)), dark, Vector3(x, 0.45, -0.24))
+		"grenade":
+			_part(inner, _cyl(0.36, 0.36, 0.62), _mat(col, 0.5), Vector3(0, 0.31, 0))
+			_part(inner, _cyl(0.16, 0.16, 0.16), _mat(Color(0.75, 0.75, 0.78), 0.3), Vector3(0, 0.7, 0))
+			_part(inner, _box(Vector3(0.08, 0.45, 0.12)), _mat(Color(0.75, 0.75, 0.78), 0.3), Vector3(0.24, 0.55, 0))
 		"station":
 			if str(d.get("model", "")) == "furnace":
 				# A stone box, a dark mouth with a glow in it, a chimney.
@@ -216,6 +228,19 @@ static func _model(d: Dictionary) -> Node3D:
 					for z in [-0.27, 0.27]:
 						_part(inner, _box(Vector3(0.1, 0.64, 0.1)), m, Vector3(x, 0.32, z))
 				_part(inner, _box(Vector3(0.4, 0.06, 0.12)), _mat(Color(0.7, 0.72, 0.76), 0.3), Vector3(0.1, 0.83, 0))
+		"hoe":
+			# A handle and a flat blade at right angles to it (Docs/MineFarming.md).
+			var wood := _mat(Color(0.45, 0.3, 0.16), 0.7)
+			var tilt := Basis(Vector3.BACK, deg_to_rad(-35.0))
+			_part(inner, _box(Vector3(0.1, 1.2, 0.1)), wood, Vector3.ZERO, tilt)
+			_part(inner, _box(Vector3(0.42, 0.08, 0.3)), _mat(col, 0.25), tilt * Vector3(-0.17, 0.58, 0), tilt)
+		"seed":
+			# A little heap of seeds.
+			var m := _mat(col, 0.5)
+			for i in 7:
+				var a := TAU * float(i) / 7.0
+				var r := 0.0 if i == 0 else 0.3
+				_part(inner, _cyl(0.12, 0.12, 0.16, 10), m, Vector3(cos(a) * r, 0.08 + (0.14 if i == 0 else 0.0), sin(a) * r))
 		"chest":
 			_part(inner, _box(Vector3(1.0, 0.6, 0.72)), _mat(col, 0.6), Vector3(0, 0.3, 0))
 			_part(inner, _box(Vector3(1.04, 0.24, 0.76)), _mat(col.darkened(0.25), 0.6), Vector3(0, 0.72, 0))

@@ -303,7 +303,7 @@ bool g_simulate = true;
 int g_mask_version = 0;
 
 struct Cmd {
-    int type = 0;     // 0 terrain, 1 place, 2 remove, 3 raw, 4 mesh request, 5 reset frozen
+    int type = 0;     // 0 terrain, 1 place, 2 remove, 3 raw, 4 mesh request, 5 reset frozen, 12 rain
     Vector3i a, b;
     int fluid = 0, kind = 0, amount = 0;
     uint8_t st = 0, amt = 0, aux = 0;
@@ -1183,7 +1183,105 @@ bool box_near_water(int x0, int x1, int b0, int b1, int z0, int z1) {
     return false;
 }
 
+/// RAIN (R10, Docs/MineWaterNext.md 8): a drop is a tile of still water on
+/// a column's top solid plate -- the ground, a roof, whatever is open to the
+/// sky (brick::packed_tops, the tiles the player sees: edits and buildings
+/// in). On still water it adds to it; on the sea, a lake, a river or lava it
+/// is nothing (infinite or burning). It pools as poured water does: runs off
+/// a rim into the hollow, and a lone tile on flat ground dries (4.2.3).
+///
+/// SOAKING IN: a drop on dry ground with nothing higher beside it -- the
+/// open flat, a hilltop -- soaks in (the ground is drawn wet, WeatherFx);
+/// only water that would run somewhere lands: at the foot of anything
+/// higher (a step, a wall, a hollow's side), where it runs down to the
+/// hollows, or on water already there. Every drop landed meshes its tile
+/// again: a storm landing everywhere kept ~50 tiles meshing every tick
+/// (23 ms a tick, 16 ms a frame drawing them, the water gate 2026-11-25),
+/// and those lone tiles only dried again.
+int64_t g_rain_landed = 0;
+int64_t g_rain_soaked = 0;
+uint32_t g_rain_seq = 0;
+
+/// A column's top solid plate (packed_tops), or INT_MIN.
+int rain_top(int x, int z) {
+    const int tx = fdiv(x, SX), tz = fdiv(z, SX);
+    const std::shared_ptr<const TilePack> pk = packed_tops(tx, tz);
+    if (!pk || pk->top.size() < (size_t)(SX * SX)) return INT_MIN;
+    return pk->top[(size_t)(x - tx * SX) + (size_t)SX * (size_t)(z - tz * SX)];
+}
+
+void rain_drop(int x, int z) {
+    const int tp = rain_top(x, z);
+    if (tp == INT_MIN) return;
+    int b = fdiv(tp + 1, 3);
+    {
+        const Cell q = wcell(x, b, z);
+        if (!c_wet(q)) {
+            static const int DX[4] = { 1, -1, 0, 0 }, DZ[4] = { 0, 0, 1, -1 };
+            bool foot = false;
+            for (int i = 0; i < 4 && !foot; ++i) foot = rain_top(x + DX[i], z + DZ[i]) > tp;
+            if (!foot) { ++g_rain_soaked; return; }
+        }
+    }
+    for (int up = 0; up < 24; ++up, ++b) {
+        const Cell q = wcell(x, b, z);
+        const int cap = c_cap(q);
+        if (cap <= 0) return;
+        if (c_wet(q)) {
+            if (c_fluid(q) != F_WATER || c_kind(q) != K_STILL) return;
+            if ((int)q.amt >= cap) continue;          // a full cell: on top of it
+        }
+        std::lock_guard<std::recursive_mutex> lk(g_state);
+        const int have = c_wet(q) ? (int)q.amt : 0;
+        Cell n = q;
+        n.st = mk_st(F_WATER, K_STILL, false);
+        n.amt = (uint8_t)std::min(cap, have + U);
+        n.aux = c_wet(q) ? (uint8_t)c_edge(q) : E_NONE;
+        write_cell(x, b, z, n);
+        wake_around(x, b, z);
+        ++g_rain_landed;
+        return;
+    }
+}
+
+/// A shower over the disc (a.x, a.z) studs, b.x studs across (radius), of
+/// `amount` drops: only the part inside the sim radius is rained on, so a
+/// storm far wider than it samples the sim disc at its own density.
+void rain_cmd(const Cmd &c) {
+    const double r_st = std::max(1, c.b.x);
+    const double sim_st = g_sim_r / STUD_M;
+    const double cx_st = g_cx / STUD_M - 0.5, cz_st = g_cz / STUD_M - 0.5;
+    double ox = c.a.x, oz = c.a.z, rr = r_st, n = (double)c.amount;
+    const double gap = std::hypot(ox - cx_st, oz - cz_st);
+    if (gap > r_st + sim_st) return;
+    if (sim_st < r_st) {
+        // Sample the sim disc, at the storm's density.
+        n *= (sim_st * sim_st) / (r_st * r_st);
+        ox = cx_st;
+        oz = cz_st;
+        rr = sim_st;
+    }
+    int drops = (int)n;
+    if ((double)(hmix(++g_rain_seq * 0x9E3779B1U) % 1000) < (n - drops) * 1000.0) ++drops;
+    drops = std::min(drops, 4000);
+    for (int i = 0; i < drops; ++i) {
+        const uint32_t h1 = hmix(++g_rain_seq * 0x85EBCA77U ^ g_tick);
+        const uint32_t h2 = hmix(h1 ^ 0xC2B2AE3DU);
+        const double a = (double)(h1 & 0xFFFF) / 65536.0 * Math_TAU;
+        const double d = std::sqrt((double)(h2 & 0xFFFF) / 65536.0) * rr;
+        const int x = (int)std::floor(ox + std::cos(a) * d + 0.5);
+        const int z = (int)std::floor(oz + std::sin(a) * d + 0.5);
+        if (std::hypot(x - (double)c.a.x, z - (double)c.a.z) > r_st) continue;   // outside the storm
+        if (dist2_centre(x, z) > g_sim_r * g_sim_r) continue;
+        rain_drop(x, z);
+    }
+}
+
 void apply_cmd(const Cmd &c) {
+    if (c.type == 12) {
+        rain_cmd(c);
+        return;
+    }
     if (c.type == 0) {
         const int b0 = fdiv(c.a.y, 3), b1 = fdiv(c.b.y, 3);
         if (!box_near_water(c.a.x - 1, c.b.x + 1, b0 - 1, b1 + 1, c.a.z - 1, c.b.z + 1)) return;
@@ -1394,22 +1492,32 @@ struct MeshBuf {
         idx.push_back(base); idx.push_back(base + 1); idx.push_back(base + 2);
         idx.push_back(base); idx.push_back(base + 2); idx.push_back(base + 3);
     }
-    /// A lake piece's face (S3): CUSTOM0 y = 2, z its wave amplitude, x, w
-    /// the way to its stud's middle as sea_quad's.
-    void lake_quad(const Vector3 &a, const Vector3 &b, const Vector3 &c, const Vector3 &d,
-            const Vector3 &nrm, const Color &cc, const Vector2 &mid, float amp) {
+    /// A brick piece's face (W4): CUSTOM0 x, w the way from the vertex to
+    /// the piece's middle, studs (the shader finds its joints and, on a lake,
+    /// the wave there); y 2 a lake piece (z its wave amplitude) or 3 a still
+    /// one (z how far it moved, the easing as CUSTOM0.x elsewhere).
+    void piece_quad(const Vector3 &a, const Vector3 &b, const Vector3 &c, const Vector3 &d,
+            const Vector3 &nrm, const Color *cs, const Vector2 &mid, float kind, float z) {
         const int base = (int)v.size();
-        for (const Vector3 &p : { a, b, c, d }) {
+        const Vector3 ps[4] = { a, b, c, d };
+        for (int k = 0; k < 4; ++k) {
+            const Vector3 &p = ps[k];
             v.push_back(p);
             n.push_back(nrm);
-            col.push_back(cc);
-            cus.push_back(mid.x > p.x ? 1.0f : -1.0f);
-            cus.push_back(2.0f);
-            cus.push_back(amp);
-            cus.push_back(mid.y > p.z ? 1.0f : -1.0f);
+            col.push_back(cs[k]);
+            cus.push_back((mid.x - p.x) / STUD_M);
+            cus.push_back(kind);
+            cus.push_back(z);
+            cus.push_back((mid.y - p.z) / STUD_M);
         }
         idx.push_back(base); idx.push_back(base + 1); idx.push_back(base + 2);
         idx.push_back(base); idx.push_back(base + 2); idx.push_back(base + 3);
+    }
+    /// A lake piece's face (S3, W4): one colour, riding the wave at `mid`.
+    void lake_quad(const Vector3 &a, const Vector3 &b, const Vector3 &c, const Vector3 &d,
+            const Vector3 &nrm, const Color &cc, const Vector2 &mid, float amp) {
+        const Color cs[4] = { cc, cc, cc, cc };
+        piece_quad(a, b, c, d, nrm, cs, mid, 2.0f, amp);
     }
     /// The mesh arrays; `sky`: each vertex's sky light into COLOR.b first
     /// (brick::sky_levels_into, the mine world's water_fluid reads it).
@@ -1518,6 +1626,54 @@ inline float lake_amp(Get get, int x, int b, int z) {
         }
     }
     return LAKE_AMP * std::min(1.0f, (float)(d - 1) / LAKE_RAMP);
+}
+
+/// PACKED BRICK TOPS (W4, Docs/MineWaterNext.md 9): a calm water top -- a
+/// pond, a puddle, a source, a lake -- is drawn as flat brick tiles, the
+/// biggest that fit, with joints between them; running water stays smooth.
+/// The layout is fixed by world position, so a piece changes only when its
+/// own cells do: a 4 x 4 block of studs is one tile when its whole top is
+/// alike, else it splits in two (4 x 2 or 2 x 4, by the block's parity), each
+/// half into 2 x 2, each of those in two (2 x 1 or 1 x 2), then 1 x 1. A
+/// cell's piece is the first rect of its chain that is alike (piece_rect):
+/// the chain is nested, so every cell of a piece finds the same piece. The
+/// mesher and the lake queries (surface_at, ray_cell: a lake piece rides the
+/// wave at ITS middle) ask the same rule.
+constexpr int PIECE = 4;
+struct PRect { int x0, z0, w, h; };
+inline PRect piece_child(const PRect &r, int x, int z) {
+    bool by_x;
+    if (r.w == r.h) by_x = ((fdiv(r.x0, r.w) + fdiv(r.z0, r.h)) & 1) != 0;
+    else by_x = r.w > r.h;
+    if (by_x) {
+        const int hw = r.w / 2;
+        return x < r.x0 + hw ? PRect{ r.x0, r.z0, hw, r.h } : PRect{ r.x0 + hw, r.z0, hw, r.h };
+    }
+    const int hh = r.h / 2;
+    return z < r.z0 + hh ? PRect{ r.x0, r.z0, r.w, hh } : PRect{ r.x0, r.z0 + hh, r.w, hh };
+}
+template <class Alike>
+inline PRect piece_rect(int x, int z, Alike alike) {
+    PRect r{ fdiv(x, PIECE) * PIECE, fdiv(z, PIECE) * PIECE, PIECE, PIECE };
+    while (r.w * r.h > 1 && !alike(r)) r = piece_child(r, x, z);
+    return r;
+}
+/// The lake piece over (x, b, z): its wave amplitude (at its middle cell)
+/// and its middle, metres. False when (x, b, z) is no lake top.
+template <class Get>
+inline bool lake_piece(Get get, int x, int b, int z, float &amp, Vector2 &mid) {
+    if (!lake_top(get, x, b, z)) return false;
+    const PRect r = piece_rect(x, z, [&](const PRect &q) {
+        for (int cz = q.z0; cz < q.z0 + q.h; ++cz) {
+            for (int cx = q.x0; cx < q.x0 + q.w; ++cx) {
+                if (!lake_top(get, cx, b, cz)) return false;
+            }
+        }
+        return true;
+    });
+    amp = lake_amp(get, r.x0 + r.w / 2, b, r.z0 + r.h / 2);
+    mid = Vector2(((float)r.x0 + 0.5f * (float)r.w) * STUD_M, ((float)r.z0 + 0.5f * (float)r.h) * STUD_M);
+    return true;
 }
 
 /// Each tile's top corners as last meshed, keyed by corner, course and
@@ -1732,6 +1888,11 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
                 Top flat[SX * SX];
                 for (int i = 0; i < SX * SX; ++i) flat[i].on = false;
                 bool any_flat = false;
+                // Brick pieces (W4): 1 a still or source top, 2 a lake's.
+                struct PTop { uint8_t cls; float h; Color c; float mv; };
+                PTop pt[SX * SX];
+                for (int i = 0; i < SX * SX; ++i) pt[i].cls = 0;
+                bool any_piece = false;
                 // Neighbours read from this section directly where they are in
                 // it (a wcell a read was most of a mesh, 2026-11-25).
                 auto cell = [&](int cx, int cb, int cz) -> const Cell & {
@@ -1793,26 +1954,17 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
                         // Only an open top sinks under the course; a side under
                         // more water meets the course above (no seam in a fall).
                         const float sink = top_open ? TOP_SINK : 0.0f;
-                        float lake_a = 0.0f;
                         if (real && top_open && f == F_WATER && b == g_sea_b - 1 && own == g_sea_b * CU) {
                             // At the sea's level: the band's (waves with the sea).
                             sea_top[lx + SX * lz] = true;
                             sea_ocean[lx + SX * lz] = c_ocean(c);
                             any_sea = true;
                         } else if (top_open && f == F_WATER && c_kind(c) == K_SOURCE && !c_ocean(c)
-                                && (lake_a = lake_amp(cell, x, b, z)) > 0.0f) {
-                            // A lake or river piece (S3): a flat top riding the
-                            // wave at its middle (the shader), sides deep enough
-                            // for the piece beside it at the other end of it.
-                            const float y = (float)own * P - TOP_SINK;
-                            const Vector2 mid(((float)x + 0.5f) * STUD_M, ((float)z + 0.5f) * STUD_M);
-                            const Vector3 a(x0, y, z0), bq(x0, y, z1), cq(x1, y, z1), dq(x1, y, z0);
-                            const Vector3 dn(0.0f, 2.5f * LAKE_AMP, 0.0f);
-                            m.lake_quad(a, bq, cq, dq, Vector3(0, 1, 0), cc, mid, lake_a);
-                            m.lake_quad(dq, cq, cq - dn, dq - dn, Vector3(1, 0, 0), cc, mid, lake_a);
-                            m.lake_quad(bq, a, a - dn, bq - dn, Vector3(-1, 0, 0), cc, mid, lake_a);
-                            m.lake_quad(cq, bq, bq - dn, cq - dn, Vector3(0, 0, 1), cc, mid, lake_a);
-                            m.lake_quad(a, dq, dq - dn, a - dn, Vector3(0, 0, -1), cc, mid, lake_a);
+                                && lake_top(cell, x, b, z)) {
+                            // A lake, river or source top (S3, W4): a brick
+                            // piece riding the wave at the piece's middle.
+                            pt[lx + SX * lz] = { 2, (float)own, cc, 0.0f };
+                            any_piece = true;
                         } else if (top_open && !(c_ocean(c) && own == g_sea_b * CU)
                                 && h00 == h10 && h10 == h11 && h11 == h01) {
                             // One easing for the whole top (a rect merges only
@@ -1822,8 +1974,14 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
                             moved(x, b, z, 1, 0, f, y);
                             moved(x, b, z, 0, 1, f, y);
                             moved(x, b, z, 1, 1, f, y);
-                            flat[lx + SX * lz] = { true, h00, cc, f, mv };
-                            any_flat = true;
+                            if (f == F_WATER && (c_kind(c) == K_STILL || c_kind(c) == K_SOURCE)) {
+                                // Calm water: a brick piece (W4).
+                                pt[lx + SX * lz] = { 1, h00, cc, mv };
+                                any_piece = true;
+                            } else {
+                                flat[lx + SX * lz] = { true, h00, cc, f, mv };
+                                any_flat = true;
+                            }
                         } else if (top_open && !(c_ocean(c) && own == g_sea_b * CU)) {
                             const Vector3 a(x0, h00 * P - TOP_SINK, z0), bb(x1, h10 * P - TOP_SINK, z0);
                             const Vector3 cq(x1, h11 * P - TOP_SINK, z1), d(x0, h01 * P - TOP_SINK, z1);
@@ -1876,6 +2034,54 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
                                 const float y = (float)(b * CU) * P;
                                 m.quad(Vector3(x0, y, z0), Vector3(x1, y, z0), Vector3(x1, y, z1),
                                         Vector3(x0, y, z1), Vector3(0, -1, 0), cc);
+                            }
+                        }
+                    }
+                }
+                if (any_piece) {
+                    const int b = sb * SB + lb;
+                    bool done[SX * SX] = {};
+                    for (int lz = 0; lz < SX; ++lz) {
+                        for (int lx = 0; lx < SX; ++lx) {
+                            const int i0 = lx + SX * lz;
+                            if (pt[i0].cls == 0 || done[i0]) continue;
+                            const PTop t = pt[i0];
+                            // Alike: every cell a piece of its kind, its height,
+                            // moving alike (a still one's easing).
+                            const PRect r = piece_rect(lx, lz, [&](const PRect &q) {
+                                for (int cz = q.z0; cz < q.z0 + q.h; ++cz) {
+                                    for (int cx = q.x0; cx < q.x0 + q.w; ++cx) {
+                                        const PTop &o = pt[cx + SX * cz];
+                                        if (o.cls != t.cls || o.h != t.h || (t.cls == 1 && o.mv != t.mv)) return false;
+                                    }
+                                }
+                                return true;
+                            });
+                            for (int cz = r.z0; cz < r.z0 + r.h; ++cz) {
+                                for (int cx = r.x0; cx < r.x0 + r.w; ++cx) done[cx + SX * cz] = true;
+                            }
+                            const int wx0 = tx * SX + r.x0, wz0 = tz * SX + r.z0;
+                            const float x0 = (float)wx0 * STUD_M, x1 = (float)(wx0 + r.w) * STUD_M;
+                            const float z0 = (float)wz0 * STUD_M, z1 = (float)(wz0 + r.h) * STUD_M;
+                            const float y = t.h * UNIT_M - TOP_SINK;
+                            const Vector2 mid((x0 + x1) * 0.5f, (z0 + z1) * 0.5f);
+                            const Vector3 a(x0, y, z0), bq(x0, y, z1), cq(x1, y, z1), dq(x1, y, z0);
+                            if (t.cls == 1) {
+                                const Color cs[4] = { pt[r.x0 + SX * r.z0].c, pt[r.x0 + SX * (r.z0 + r.h - 1)].c,
+                                    pt[r.x0 + r.w - 1 + SX * (r.z0 + r.h - 1)].c, pt[r.x0 + r.w - 1 + SX * r.z0].c };
+                                buf[F_WATER].piece_quad(a, bq, cq, dq, Vector3(0, 1, 0), cs, mid, 3.0f, t.mv);
+                            } else {
+                                // Sides deep enough for the piece beside it at
+                                // the other end of its wave.
+                                const float amp = lake_amp(cell, wx0 + r.w / 2, b, wz0 + r.h / 2);
+                                const Color cc = pt[r.x0 + r.w / 2 + SX * (r.z0 + r.h / 2)].c;
+                                const Vector3 dn(0.0f, 2.5f * LAKE_AMP, 0.0f);
+                                MeshBuf &m = buf[F_WATER];
+                                m.lake_quad(a, bq, cq, dq, Vector3(0, 1, 0), cc, mid, amp);
+                                m.lake_quad(dq, cq, cq - dn, dq - dn, Vector3(1, 0, 0), cc, mid, amp);
+                                m.lake_quad(bq, a, a - dn, bq - dn, Vector3(-1, 0, 0), cc, mid, amp);
+                                m.lake_quad(cq, bq, bq - dn, cq - dn, Vector3(0, 0, 1), cc, mid, amp);
+                                m.lake_quad(a, dq, dq - dn, a - dn, Vector3(0, 0, -1), cc, mid, amp);
                             }
                         }
                     }
@@ -2638,6 +2844,20 @@ void BrickFluid::set_centre(Vector3 at, double sim_radius_m) {
 
 void BrickFluid::set_wave_clock(double t) { g_wave_t = t; }
 
+void BrickFluid::rain(Vector3 centre, double radius_m, double drops) {
+    if (drops <= 0.0 || radius_m <= 0.0) return;
+    Cmd c;
+    c.type = 12;
+    c.a = Vector3i((int)std::floor(centre.x / STUD_M), 0, (int)std::floor(centre.z / STUD_M));
+    c.b = Vector3i((int)std::ceil(radius_m / STUD_M), 0, 0);
+    c.amount = (int)std::min(drops, 1.0e9);
+    push_cmd(c);
+}
+
+int64_t BrickFluid::rain_landed() { return g_rain_landed; }
+
+int64_t BrickFluid::rain_soaked() { return g_rain_soaked; }
+
 void BrickFluid::set_keep_inland(double metres) {
     g_keep_inland_m = std::max(0.0, metres);
 }
@@ -2964,11 +3184,12 @@ double BrickFluid::surface_at(Vector3 p) {
     // A lake's wave (S3): its top plus the wave at the stud's middle, from
     // the top's own cell or the air over it (a crest).
     for (int bb = k.y; bb >= k.y - 1; --bb) {
-        const float amp = lake_amp(rcell, k.x, bb, k.z);
-        if (amp <= 0.0f) continue;
+        float amp = 0.0f;
+        Vector2 mid;
+        if (!lake_piece(rcell, k.x, bb, k.z, amp, mid) || amp <= 0.0f) continue;
         const Cell t = rcell(k.x, bb, k.z);
         const double top = (double)(bb * CU + floor_u(t.solid) + t.amt) * UNIT_M;
-        return top + amp * lake_wave((k.x + 0.5) * STUD_M, (k.z + 0.5) * STUD_M, g_wave_t);
+        return top + amp * lake_wave(mid.x, mid.y, g_wave_t);
     }
     if (!c_wet(c)) {
         // Just above a shallow cell: its top is still the surface here.
@@ -3036,11 +3257,12 @@ Dictionary BrickFluid::ray_cell(Vector3 from, Vector3 dir, double max_metres) {
         // A lake's crest drawn up into this air cell (S3, R2): the source
         // under it is what the bucket takes.
         if (!hit_fluid && cl.solid == 0) {
-            const float amp = lake_amp(rcell, c[0], c[1] - 1, c[2]);
-            if (amp > 0.0f) {
+            float amp = 0.0f;
+            Vector2 mid;
+            if (lake_piece(rcell, c[0], c[1] - 1, c[2], amp, mid) && amp > 0.0f) {
                 const Cell lc = rcell(c[0], c[1] - 1, c[2]);
                 const double crest = (double)((c[1] - 1) * CU + floor_u(lc.solid) + lc.amt) * UNIT_M
-                        + amp * lake_wave((c[0] + 0.5) * STUD_M, (c[2] + 0.5) * STUD_M, g_wave_t);
+                        + amp * lake_wave(mid.x, mid.y, g_wave_t);
                 const double y_in = from.y + d.y * t;
                 const double y_out = from.y + d.y * std::min(std::min(tmax[0], tmax[1]), tmax[2]);
                 if (std::min(y_in, y_out) <= crest) {
@@ -3355,6 +3577,9 @@ void BrickFluid::_bind_methods() {
     ClassDB::bind_static_method("BrickFluid", D_METHOD("ease_seconds"), &BrickFluid::ease_seconds);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("set_keep_inland", "metres"), &BrickFluid::set_keep_inland);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("set_wave_clock", "t"), &BrickFluid::set_wave_clock);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("rain", "centre", "radius_m", "drops"), &BrickFluid::rain);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("rain_landed"), &BrickFluid::rain_landed);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("rain_soaked"), &BrickFluid::rain_soaked);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("request_mesh", "tx", "tz"), &BrickFluid::request_mesh);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("drawn_tiles"), &BrickFluid::drawn_tiles);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("cell_info", "cell"), &BrickFluid::cell_info);

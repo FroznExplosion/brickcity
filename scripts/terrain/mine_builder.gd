@@ -10,6 +10,9 @@ extends Node3D
 ##   RMB      use the item in hand: place its block on the face looked at
 ##            (held: repeats), pour a fluid
 ##   MMB      pick the block looked at into the hand
+##   farming (Docs/MineFarming.md, MineFarming): a hoe's RMB tills soil, a
+##            seed's RMB plants on tilled soil, RMB on a ripe crop harvests,
+##            LMB on a crop harvests or pulls it
 ##   1-9, wheel   a slot of the active hotbar
 ##   X        tap: the other hotbar; held: the other off-hand slot
 ##   Z        block size: 2x2, 1x1 or 4x4 studs, one brick tall
@@ -217,6 +220,9 @@ func _input(event: InputEvent) -> void:
 					inv.toggle_hotbar()
 				_x_down = -1
 			get_viewport().set_input_as_handled()
+		elif event.pressed and k == KEY_G:
+			host.throw_grenade()          # whatever is in the hand (Docs/Inventory.md 10)
+			get_viewport().set_input_as_handled()
 		elif event.pressed and (k == KEY_E or k == KEY_TAB):
 			host.toggle_inventory()
 			get_viewport().set_input_as_handled()
@@ -252,6 +258,10 @@ func _input(event: InputEvent) -> void:
 		return
 	if not active:
 		return            # a gun: the clicks are the gun's
+	if mb.button_index == MOUSE_BUTTON_LEFT and hand_kind() == "grenade":
+		host.throw_grenade()
+		get_viewport().set_input_as_handled()
+		return
 	match mb.button_index:
 		MOUSE_BUTTON_LEFT:
 			break_target()
@@ -453,6 +463,12 @@ func break_target() -> bool:
 		return true
 	if target.has("tree"):
 		return _fell(target.tree, target.position)
+	# A crop on tilled soil: harvested if ripe, else pulled (MineFarming).
+	if host.farming != null and host.farming.break_target(target):
+		broken += 1
+		log_blocks.append("crop %s" % target.cell)
+		target = {}
+		return true
 	var material := int(target.get("material", 0))
 	if hand_kind() == "tool":
 		return _pick(material)
@@ -464,6 +480,8 @@ func break_target() -> bool:
 	log_blocks.append("break %s" % _block_of(target.cell))
 	var at := _cell_lo(_block_of(target.cell)) + _block_size_m() * 0.5
 	host.terrain_edited(res)
+	if host.farming != null:
+		host.farming.cells_changed(c[0], c[1])
 	target = {}
 	# Survival: the broken bricks into the inventory; what does not fit drops
 	# where the block was.
@@ -472,7 +490,22 @@ func break_target() -> bool:
 		var left := inv.add_item(ItemStack.make(id, int(res.changed)))
 		if left != null:
 			host.drops.spawn(left, at)
+		_find_seeds(material, at)
 	return true
+
+
+## Survival: grass and the like broken by hand may give a crop's seed
+## (FarmCrops.found_in, the crops' "found").
+func _find_seeds(material: int, at: Vector3) -> void:
+	var names: PackedStringArray = BrickTerrain.material_names()
+	if material <= 0 or material >= names.size():
+		return
+	for f in FarmCrops.found_in(names[material]):
+		if randf() < float(f[1]) and ItemCatalog.has(f[0]):
+			var left := inv.add_item(ItemStack.make(f[0], 1))
+			if left != null:
+				host.drops.spawn(left, at)
+			log_blocks.append("found %s" % f[0])
 
 
 ## LMB on a tree, by hand or with a tool (Docs/Inventory.md 13): the whole
@@ -560,14 +593,40 @@ func place_target() -> bool:
 	if target.has("tree"):
 		return false           # nothing is built onto a tree
 	if target.has("chest"):
-		# RMB on a chest opens it, whatever is in the hand (Minecraft's).
-		host.open_chest(target.chest)
+		# Shift + RMB on a backpack put down: picked up and worn (swapped for
+		# the one worn); else RMB opens it, whatever is in the hand.
+		if Input.is_key_pressed(KEY_SHIFT) and ItemCatalog.kind(host.chests.item_of(target.chest)) == "backpack":
+			host.take_backpack(target.chest)
+		else:
+			host.open_chest(target.chest)
 		target = {}
 		return true
 	var d := hand_def()
 	var k := str(d.get("kind", ""))
-	if k == "chest" or k == "station":
-		return _place_chest()          # a workbench or furnace stands like a chest
+	# Farming (MineFarming): a ripe crop is picked whatever is in the hand;
+	# a hoe tills, a seed plants.
+	if host.farming != null:
+		if host.farming.harvest_target(target):
+			log_blocks.append("harvest %s" % target.cell)
+			target = {}
+			return true
+		if k == "hoe":
+			var ok: bool = host.farming.till(target)
+			if ok:
+				placed += 1
+				log_blocks.append("till %s" % target.cell)
+			target = {}
+			return ok
+		if k == "seed":
+			var ok2: bool = host.farming.plant(target, d.id)
+			if ok2:
+				inv.consume_hand(1)
+				placed += 1
+				log_blocks.append("plant %s %s" % [d.id, target.cell])
+			target = {}
+			return ok2
+	if k == "chest" or k == "station" or k == "backpack":
+		return _place_chest()          # a workbench, furnace or backpack stands like a chest
 	var b := _block_of(target.cell)
 	var n: Vector3i = target.normal
 	var to := b + n
@@ -712,9 +771,18 @@ func pick_target() -> void:
 func _place_chest() -> bool:
 	var cell: Vector3i = target.cell + Vector3i(target.normal)
 	var blk := MineChests.block_of(cell)
-	if _box_hits_player(host.chests.box_of(blk)) or not host.chests.place(blk, [], false, inv.hand().id):
+	var h := inv.hand()
+	var bag := ItemCatalog.kind(h.id) == "backpack"
+	if _box_hits_player(host.chests.box_of(blk)) \
+			or not host.chests.place(blk, h.contents if bag else [], false, h.id):
 		return false
-	inv.consume_hand(1)
+	if bag:
+		# The backpack itself goes down, with its contents: out of the hand
+		# even in creative (or the same things would be in two places).
+		inv.set_slot(inv.hand_addr(), null)
+		inv.changed.emit()
+	else:
+		inv.consume_hand(1)
 	placed += 1
 	log_blocks.append("place chest %s" % MineChests.key_of(blk))
 	target = {}

@@ -143,6 +143,11 @@ enum Material {
     MAT_LIGHT_LEAVES,
     MAT_AUTUMN_LEAVES,
     MAT_RED_LEAVES,
+    /// Tilled soil (Docs/MineFarming.md): a hoe turns a soil brick into one.
+    /// Smooth (no studs), furrowed by the terrain shader; the wet one is the
+    /// same brick with water near it, drawn darker.
+    MAT_FARMLAND,
+    MAT_WET_FARMLAND,
     MATERIAL_COUNT
 };
 
@@ -224,13 +229,17 @@ inline int material_filament(int m) {
         case MAT_LIGHT_LEAVES: return 36;  // lime
         case MAT_AUTUMN_LEAVES: return FIL_ORANGE;
         case MAT_RED_LEAVES: return FIL_RED;
+        case MAT_FARMLAND: return FIL_BROWN;      // dirt's; the shader furrows it
+        case MAT_WET_FARMLAND: return FIL_BROWN;  // and darkens the wet one
         default: return FIL_GREY;
     }
 }
 
-/// Road is paved: no studs. Everything natural takes them.
+inline bool material_is_farmland(int m) { return m == MAT_FARMLAND || m == MAT_WET_FARMLAND; }
+
+/// Road is paved and farmland tilled: no studs. Everything natural takes them.
 inline bool material_studded(int m) {
-    return m != MAT_ROAD && m != MAT_AIR;
+    return m != MAT_ROAD && m != MAT_AIR && !material_is_farmland(m);
 }
 
 // --- hashing ---------------------------------------------------------------
