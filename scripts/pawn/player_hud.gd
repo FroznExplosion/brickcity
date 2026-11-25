@@ -27,6 +27,8 @@ var gun: GunController
 var view: PlayerView
 var _hud: Overlay
 var _age := 0.0
+## The key help lines (a scene with other keys sets its own: the mine world).
+var hint_lines: PackedStringArray = [HINT, HINT_2]
 
 
 func setup(p: Pawn, g: GunController, v: PlayerView) -> void:
@@ -77,8 +79,8 @@ class Overlay extends Control:
 		_reload(font, c)
 		if hud._age < HINT_SECONDS:
 			var a := clampf((HINT_SECONDS - hud._age) / 2.0, 0.0, 1.0)
-			_text(font, HINT, Vector2(c.x, 34.0), 15, Color(1, 1, 1, 0.8 * a), true)
-			_text(font, HINT_2, Vector2(c.x, 54.0), 15, Color(1, 1, 1, 0.8 * a), true)
+			for i in hud.hint_lines.size():
+				_text(font, hud.hint_lines[i], Vector2(c.x, 34.0 + 20.0 * i), 15, Color(1, 1, 1, 0.8 * a), true)
 
 	## Four ticks round a gap as wide as the cone, dimmed while the gun is down
 	## for a sprint, and a dot at the sights.

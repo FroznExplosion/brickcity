@@ -4,7 +4,7 @@ extends Node3D
 ## 8): break and place blocks, pour and scoop, Minecraft's way, in brick --
 ## with whatever the inventory puts in the hand.
 ##
-##   B        guns <-> items (on foot or flying)
+##   (the selected slot is in the hands: a gun fires, anything else builds)
 ##   LMB      break the block looked at (held: keeps breaking); a bucket
 ##            scoops, a test fluid takes the fluid looked at
 ##   RMB      use the item in hand: place its block on the face looked at
@@ -141,9 +141,11 @@ func bucket_tiles() -> int:
 	return int(h.data.get("tiles", 0)) if h != null and hand_kind() == "bucket" else 0
 
 
+## The hand holds a block, tool or item (true) or a gun (false): MineHands
+## says which (Docs/Inventory.md 10). The hotbars show either way.
 func set_active(on: bool) -> void:
 	active = on
-	_hud.visible = on
+	_hud.visible = true
 	if not on:
 		_outline.visible = false
 		target = {}
@@ -176,12 +178,8 @@ func _input(event: InputEvent) -> void:
 		return
 	if event is InputEventKey and not event.echo:
 		var k := (event as InputEventKey).keycode
-		if event.pressed and k == KEY_B:
-			set_active(not active)
-			get_viewport().set_input_as_handled()
-			return
-		if not active:
-			return
+		# No B any more: what is in the selected slot is in the hands, a gun
+		# or anything else (MineHands). The hotbar keys work either way.
 		if k == KEY_X:
 			if event.pressed:
 				_x_down = Time.get_ticks_msec()
@@ -202,13 +200,21 @@ func _input(event: InputEvent) -> void:
 			inv.select_slot(BAR_KEYS.find(k))
 			get_viewport().set_input_as_handled()
 		return
-	if not active or not (event is InputEventMouseButton):
+	if not (event is InputEventMouseButton):
 		return
 	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED and not PlayerCamera.hands_off:
 		return            # a click that captures the mouse is the camera's
 	var mb := event as InputEventMouseButton
 	if not mb.pressed:
 		return
+	# The wheel walks the hotbar whatever is in the hand (Shift + wheel: left
+	# to the flight's speed).
+	if mb.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN] and not mb.shift_pressed:
+		inv.scroll(-1 if mb.button_index == MOUSE_BUTTON_WHEEL_UP else 1)
+		get_viewport().set_input_as_handled()
+		return
+	if not active:
+		return            # a gun: the clicks are the gun's
 	match mb.button_index:
 		MOUSE_BUTTON_LEFT:
 			break_target()
@@ -218,10 +224,6 @@ func _input(event: InputEvent) -> void:
 			_hold_place = REPEAT * 1.5
 		MOUSE_BUTTON_MIDDLE:
 			pick_target()
-		MOUSE_BUTTON_WHEEL_UP:
-			inv.scroll(-1)
-		MOUSE_BUTTON_WHEEL_DOWN:
-			inv.scroll(1)
 		_:
 			return
 	get_viewport().set_input_as_handled()
@@ -229,11 +231,13 @@ func _input(event: InputEvent) -> void:
 
 func _process(delta: float) -> void:
 	_land_picks()
-	if not active or host == null:
+	if host == null:
 		return
 	if _x_down >= 0 and not _x_held_used and Time.get_ticks_msec() - _x_down >= Inventory.HOLD_MS:
 		_x_held_used = true
 		inv.toggle_offhand()
+	if not active:
+		return
 	update_target()
 	var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
 	if captured and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
@@ -659,7 +663,7 @@ func _refresh_bar() -> void:
 	var what := ItemCatalog.label(inv.hand())
 	if hand_kind() == "block":
 		what += "  -  block %dx%d studs, 1 brick" % [s, s]
-	_hud.caption = "%s%s   (B guns  X bar, hold: off-hand  Z size  MMB pick)" % [
+	_hud.caption = "%s%s   (1-9 / wheel hand  X bar, hold: off-hand  Z size  E items)" % [
 			what, "" if inv.creative else "  [survival]"]
 	_hud.redraw()
 

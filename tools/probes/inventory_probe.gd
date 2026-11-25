@@ -48,6 +48,7 @@ func _init() -> void:
 	_character()
 	_backpacks()
 	_crafting()
+	_guns()
 	print("inventory probe: %d ok, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -443,3 +444,33 @@ func _crafting() -> void:
 	inv.craft[1] = ItemStack.make(&"snow", 4)
 	back.from_dict(JSON.parse_string(JSON.stringify(inv.to_dict())))
 	_ok("the craft grid is saved", back.craft[1] != null and back.craft[1].count == 4)
+
+
+## Stage 10: a gun is an item -- the stack's data makes the same gun again.
+func _guns() -> void:
+	print("guns")
+	_ok("a gun item a weapon class", ItemCatalog.has(&"gun_rifle") and ItemCatalog.kind(&"gun_pistol") == "gun")
+	var lib := GunPlaceholderParts.build_library()
+	var res := GunGenerator.generate(lib, 4242, WeaponClass.rolled(&"rifle", 4242), 2)
+	var g := GunInstance.from_result(res)
+	var s := MineHands.stack_of(g, 17)
+	_ok("a rifle's stack: gun_rifle, its name, its rounds", s.id == &"gun_rifle" and s.data.get("name") == g.gun_name
+			and int(s.data.get("ammo")) == 17)
+	var back := ItemStack.from_dict(JSON.parse_string(JSON.stringify(s.to_dict())))
+	var again := CharacterSave.make_gun(back.data, lib)
+	_ok("saved and made again: the same gun (seed, name, tier)", again != null and again.gun_seed == g.gun_seed
+			and again.gun_name == g.gun_name and again.tier == g.tier)
+	_ok("guns never stack", not s.same_kind(MineHands.stack_of(g)) or ItemCatalog.max_stack(&"gun_rifle") == 1)
+	var inv := Inventory.new()
+	var hands := MineHands.new()
+	hands.library = lib
+	_ok("no guns carried: a rifle and a pistol are given", hands.ensure_guns(inv, {}))
+	var n := 0
+	for a in inv.all_addrs():
+		if MineHands.is_gun(inv.get_slot(a)):
+			n += 1
+	_ok("... two of them", n == 2)
+	_ok("... and not again once there are some", not hands.ensure_guns(inv, {}))
+	g.free()
+	again.free()
+	hands.free()

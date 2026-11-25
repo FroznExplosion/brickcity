@@ -4,7 +4,7 @@ Ported from zylanntest's `game/inventory/` (its README is the design this
 follows), shaped to brickcity: content packs, MenuScreen, no renderer
 read-backs, and the arsenal left alone.
 
-Status: stages 1-9 built (round two, 2026-11-20: character inventory, survival switch, backpacks, crafting).
+Status: stages 1-9 built; round three (10-12: guns as items, materials and shapes, Terraria crafting) in progress.
 
 ## 1. Two systems, one pair of hands
 
@@ -238,8 +238,59 @@ The inventory is saved in the mine world's save folder beside the edits
    Recipes tab (each recipe's shape as icons, what it makes, what it takes).
    Closing the screen puts the grid's items back (what does not fit drops).
 
-Later: a crafting table (3 x 3), placing a backpack as a container
-(zylanntest), a gun item in a hotbar slot, multiplayer authority.
+### Round three (2026-11-24, decided with the user): stages 10-12
+
+Why: bricks are small, so a crafting GRID is trivial to fill; and two hand
+systems (guns / items, switched with B) are more to learn than one. The
+model is Rust's and Terraria's: one hotbar, everything an item; Terraria's
+crafting list; Fortnite / Valheim building (material x shape, cost by size).
+
+**Separate from the other scenes.** All of this is the mine world's. The
+city and the planets keep the arsenal (PlayerArsenal, Loadout) exactly as
+it is; the mine world asks PlayerKit for no arsenal (`"arsenal": false`)
+and runs its own hands. Nothing here changes how a gun fires
+(GunController) or is drawn (PlayerView).
+
+10. **Guns are items.** A gun is a stack of one (`kind: gun`, one catalog
+    item a weapon class, `gun_rifle`, `gun_pistol` ...) whose `data` is the
+    gun entry CharacterSave already keeps (class, seed, tier, rarity, parts)
+    plus its name and the rounds in it. `MineHands` (scripts/inventory/
+    mine_hands.gd): the selected hotbar slot is what is in your hands -- a
+    gun goes into the GunController and the view (made once from its entry,
+    kept while you carry it; its ammo written back to the stack when put
+    away and before a save); anything else puts the gun away and the builder
+    acts. No B, no modes: 1-9 and the wheel choose, always. Starting kit: the
+    character's kit guns if it has some (CharacterSave.loadout), else a
+    rolled rifle and pistol. Not in the mine world (yet): grenades, the
+    skill tree's shield, picking up floor guns with R, the workbench's
+    infusion -- the arsenal's, still in the city and on planets.
+    **Built** (2026-11-24): `scripts/inventory/mine_hands.gd`, gun items a
+    class from `WeaponClass.gun_ids()` (ItemCatalog), a gun icon model,
+    PlayerKit `"arsenal": false` (the level still loads), PlayerHud
+    `hint_lines` (the mine world shows its own keys). The builder acts when
+    the hand is not a gun; the wheel always walks the hotbar (Shift + wheel:
+    the flight's speed). `--gate=inventory`: the kit's guns, 7 draws one,
+    LMB fires it (31 -> 26 rounds), 1 puts it away, its rounds in its stack
+    and kept through a save. A gun held right in front of a wall is pulled
+    back by the view (PlayerView), as everywhere.
+11. **Materials, shapes, cost by size.** Building blocks become MATERIALS
+    (stone, soil, sand, clay, snow, ice, ores ...; what breaking gives), each
+    able to place a few terrain colours (stone: stone, dark stone, granite,
+    diorite). The material in hand is laid with the chosen SHAPE: Z cycles
+    plate 1x1, brick 1x1, 1x2, 2x2, 2x4, 4x4 (R turns it); V cycles the
+    colour. Cost = the plate cells it fills (a 1x1 plate 1, a 2x4 brick 24);
+    breaking gives them back. Wood and leaves need terrain materials of
+    their own (the terrain's C++ table) and trees that break into them: a
+    Terrain-area change, asked for separately.
+12. **Terraria crafting.** Recipes are ingredient lists with a station:
+    `{"inputs": {"stone": 12, "#ore": 2}, "station": "workbench",
+    "output": ..., "count": ...}`. Stations (workbench, furnace) are placed
+    like chests. The screen's Craft tab lists every recipe you can make with
+    what you carry and the stations within 4 m (click: one, shift: as many
+    as you can), then the ones you nearly can, greyed, with what is missing.
+    It replaces the 2 x 2 grid and the Recipes tab.
+
+Later: placing a backpack as a container (zylanntest), multiplayer authority.
 
 ## 5. Tests
 

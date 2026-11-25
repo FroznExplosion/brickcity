@@ -22,7 +22,8 @@ extends Node3D
 ##       · F3 readout · T skip an hour. NOT F9: in the editor's embedded game
 ##       view F9 is the editor's "Suspend/Resume Embedded Project", and a
 ##       suspended tree takes no clicks at all.
-##       B guns <-> items (mine_builder.gd: break, place, pick; Inventory, Docs/Inventory.md)
+##       1-9 / wheel: the hotbar slot in the hands -- a gun fires, anything else
+##       builds (MineHands, mine_builder.gd; Docs/Inventory.md 10). No arsenal here.
 ##       left mouse (on foot, not building): shoot -- the ground breaks where hit
 
 const Presets := preload("res://scripts/terrain/worldgen_presets.gd")
@@ -95,6 +96,8 @@ var _inv_walker_frozen := false
 ## Chests and the items lying in the world (Docs/Inventory.md 4, stage 5).
 var chests: MineChests = null
 var drops: DroppedItems = null
+## What is in the hands: the selected slot, a gun or not (Docs/Inventory.md 10).
+var hands: MineHands = null
 ## Sky light on collapse pieces, drops and chests (Docs/MineWorld.md 19);
 ## null with --no-sky-light.
 var sky_lit: MineSkyLit = null
@@ -608,8 +611,22 @@ func _place_player(feet: Vector3) -> void:
 		gun.on_structure_hit = _mine
 		var s := AIServices.new()
 		s.world3d = get_world_3d()
-		kit = PlayerKit.attach(self, player, cam, gun, s, {"scripted": _gate})
+		# No arsenal: the mine world's guns are hotbar items (MineHands,
+		# Docs/Inventory.md 10); the city and planets keep theirs.
+		kit = PlayerKit.attach(self, player, cam, gun, s, {"scripted": _gate, "arsenal": false})
 		kit.enter(pawn, view)
+		hands = MineHands.new()
+		hands.name = "Hands"
+		add_child(hands)
+		hands.setup(self, gun, view, kit.library, builder)
+		var loadout: Dictionary = {} if _gate else CharacterSave.load_from(character_path()).loadout
+		if hands.ensure_guns(builder.inv, loadout):
+			_inv_dirty = true
+		hands.set_inventory(builder.inv)
+		if kit.hud != null:
+			kit.hud.hint_lines = PackedStringArray([
+				"WASD move · SHIFT sprint · SPACE jump · F fly · LMB fire / break · RMB aim / place · R reload",
+				"1-9 / wheel: the hand (a gun, a block, a tool) · X other hotbar · Z block size · E items · M world"])
 		FpsRig.face(cam, pawn, Vector3.FORWARD)
 	walker.camera.far = far
 	cam.far = far
@@ -1774,6 +1791,8 @@ func _load_inventory() -> void:
 			builder.inv.changed.disconnect(_on_inventory_changed)
 		builder.set_inventory(inv)
 		inv.changed.connect(_on_inventory_changed)
+		if hands != null:
+			hands.set_inventory(inv)
 		_inv_loaded = true
 	# The world's game mode (stage 7). A file from before kept the inventory's
 	# own "creative" flag.
@@ -1854,6 +1873,8 @@ func save_edits(wait := false) -> void:
 		return
 	_edits_dirty = false
 	_world_dirty = false
+	if hands != null:
+		hands.sync_ammo()
 	if _inv_dirty:
 		_inv_dirty = false
 		save_character()
@@ -2030,7 +2051,7 @@ func _update_hud() -> void:
 		"blocks placed %d  broken %d   %s" % [builder.placed, builder.broken, _save_status],
 		"water %s" % water.report(),
 		collapse.readout(),
-		"%s   F fly/walk  B guns/items  M world generation  F3 readout  T +1 hour" % ("ON FOOT" if on_foot
+		"%s   F fly/walk  1-9 hand  E items  M world generation  F3 readout  T +1 hour" % ("ON FOOT" if on_foot
 				else "FLYING %.0f m/s (wheel), moving %.0f m/s%s" % [walker.fly_speed, _speed,
 				"  DETAIL HELD" if fast_hold else ""]),
 	])
@@ -2174,6 +2195,18 @@ func _run_inventory_gate() -> void:
 		waited += 1
 	check.call("item icons rendered at load (stage 4)", ItemIcons.ready and ItemIcons.has_icon(&"granite")
 			and ItemIcons.has_icon(&"bucket"))
+	# Stage 10: the kit's guns (MineHands.ensure_guns) -- moved to the end of
+	# the storage here so the checks below find the hotbars as they were.
+	var kit_guns: Array = []
+	for a in inv.all_addrs():
+		if MineHands.is_gun(inv.get_slot(a)):
+			kit_guns.append(inv.get_slot(a))
+			inv.set_slot(a, null)
+	check.call("the kit has guns as items (%d)" % kit_guns.size(), kit_guns.size() >= 2)
+	for i in kit_guns.size():
+		inv.main[26 - i] = kit_guns[i]
+	inv.changed.emit()
+	await _frames(2)
 	# The sheet, for a look (a read-back: a gate's).
 	if ItemIcons.ready and ItemIcons.texture != null:
 		DirAccess.make_dir_recursive_absolute(UserPaths.DEV)
@@ -2322,6 +2355,44 @@ func _run_inventory_gate() -> void:
 	await _frames(10)
 	await _key(KEY_E)
 	check.call("E closes the screen", not inventory_open())
+	# Stage 10: a gun in a hotbar slot is in the hands; LMB fires it; another
+	# slot puts it away (on foot, as a player shoots).
+	var gun_stack: ItemStack = inv.main[26]
+	inv.swap_with_hotbar(Inventory.addr(&"main", 26), 6)
+	set_on_foot(true)
+	# Away from the tree beside the spawn: a gun against a wall is held back.
+	FpsRig.face(cam, pawn, Vector3.RIGHT)
+	await _frames(30)
+	await _key(KEY_7)
+	await _frames(20)
+	check.call("7: the gun in that slot is in the hands (%s), the builder rests" % [gun.gun.gun_name if gun.gun != null else "none"],
+			gun.gun != null and not builder.active and hands.held == gun_stack)
+	var rounds0 := gun.ammo
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.pressed = true
+	press.button_mask = MOUSE_BUTTON_MASK_LEFT
+	Input.parse_input_event(press)
+	await _frames(25)
+	var up := press.duplicate()
+	up.pressed = false
+	up.button_mask = 0
+	Input.parse_input_event(up)
+	await _frames(5)
+	var rounds1 := gun.ammo
+	check.call("LMB fires it: %d -> %d rounds" % [rounds0, rounds1], rounds1 < rounds0)
+	await _shot(UserPaths.DEV + "inv_gun.png")
+	await _key(KEY_1)
+	await _frames(20)
+	check.call("1: a block in the hand -- the gun put away, the builder acts", gun.gun == null and builder.active
+			and hands.held == null)
+	check.call("... its rounds went back into its stack (%s)" % str(gun_stack.data.get("ammo", "?")),
+			int(gun_stack.data.get("ammo", -1)) == rounds1)
+	inv.swap_with_hotbar(Inventory.addr(&"main", 26), 6)
+	set_on_foot(false)
+	_fly_to(_eye() + Vector3(0, 0.8, 0), Vector3(0, 0, -1))
+	walker.pitch = -0.75
+	await _frames(20)
 	# Hotbar 2 into the hand, its third slot, and place it.
 	var bar0 := inv.active_hotbar
 	await _key(KEY_X)
@@ -2399,6 +2470,9 @@ func _run_inventory_gate() -> void:
 			and inv.hotbars[0][8] != null and inv.hotbars[0][8].id == &"sand"
 			and inv.main[5] != null and inv.main[5].id == &"terracotta")
 	var back: Array = chests.slots_of(ckey)
+	var gun_back: ItemStack = inv.main[26]
+	check.call("after generating again: the rifle in storage, its rounds kept",
+			MineHands.is_gun(gun_back) and int(gun_back.data.get("ammo", -1)) == rounds1)
 	check.call("after generating again: the chest is there, the grass in it", chests.count() == 1
 			and back.size() > 0 and back[0] != null and (back[0] as ItemStack).id == &"grass")
 	if chests.count() == 1:
