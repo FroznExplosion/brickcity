@@ -29,6 +29,14 @@ const BUILDING_MATERIAL_BASE := 64
 
 static var _mat_ids := {}
 
+## TIPPING (Docs/TerrainBuildings.md 4b): every stamped building, so an edit
+## under one can ask whether it still balances. Each {lo, hi, base, weight
+## (Vector2i column -> cells stamped there), fallen}.
+static var registry: Array = []
+## Balance checks made and buildings let go to tip, for the gate.
+static var checks := 0
+static var toppled := 0
+
 
 ## The terrain material ids (BrickTerrain's enum, by name).
 static func _terrain_ids() -> Dictionary:
@@ -159,5 +167,108 @@ static func stamp(host: Node, corner: Vector2i, p: Dictionary) -> Dictionary:
 		if bool(cbox[3]):
 			placed += BrickTerrain.mark_placed(blo, bhi, int(cbox[2]))
 		host.terrain_edited(res)
+	# Its weight by column, for the balance (after_edit).
+	var weight := {}
+	for cbox: Array in cells:
+		var a: Vector3i = cbox[0]
+		var b: Vector3i = cbox[1]
+		var h := b.y - a.y + 1
+		for z in range(a.z, b.z + 1):
+			for x in range(a.x, b.x + 1):
+				var k := Vector2i(corner.x + x, corner.y + z)
+				weight[k] = int(weight.get(k, 0)) + h
+	registry.append({"lo": lo, "hi": hi, "base": base, "weight": weight, "fallen": false})
 	return {"base": base, "lo": lo, "hi": hi, "bricks": cells.size(), "cells": n, "ground": t_min,
 			"placed": placed}
+
+
+# ---------------------------------------------------------------------------
+# Tipping.
+
+## The ground changed (`res`, an edit's result): any building whose base the
+## edit reached is asked whether it still balances. Its weight's middle (the
+## columns' stamped cells) must lie inside what holds it -- the columns whose
+## bottom brick still stands on solid ground. If it does not, the whole
+## building is let go as ONE piece (ground_collapse's falling pieces): resting
+## on what is left of its support, it leans over the edge and falls, as a
+## building does that is undermined on one side. Tension alone (the survey)
+## never tips anything: whole bricks bridge the gap and it hangs.
+static func after_edit(host: Node, res: Dictionary) -> void:
+	if registry.is_empty() or not res.has("box_lo"):
+		return
+	var elo: Vector3i = res.box_lo
+	var ehi: Vector3i = res.box_hi
+	for b: Dictionary in registry:
+		if bool(b.fallen):
+			continue
+		var lo: Vector3i = b.lo
+		var hi: Vector3i = b.hi
+		# Under or round its base: two studs out, below its ground floor.
+		if ehi.x < lo.x - 2 or elo.x > hi.x + 2 or ehi.z < lo.z - 2 or elo.z > hi.z + 2 \
+				or elo.y > int(b.base) + 3:
+			continue
+		checks += 1
+		if not balances(b):
+			_topple(host, b)
+
+
+## Does it still stand on its own support?
+static func balances(b: Dictionary) -> bool:
+	var base := int(b.base)
+	var sum := Vector2.ZERO
+	var mass := 0.0
+	var support := PackedVector2Array()
+	for k: Vector2i in b.weight:
+		var w := float(b.weight[k])
+		sum += (Vector2(k) + Vector2(0.5, 0.5)) * w
+		mass += w
+		# Its bottom brick there, on solid ground.
+		if BrickTerrain.solid_at(k.x, base, k.y) != 0 and BrickTerrain.solid_at(k.x, base - 1, k.y) != 0:
+			for c in [Vector2(0, 0), Vector2(1, 0), Vector2(0, 1), Vector2(1, 1)]:
+				support.append(Vector2(k) + c)
+	if mass <= 0.0 or support.is_empty():
+		return true   # nothing under it: the survey drops it whole
+	var middle := sum / mass
+	var hull := Geometry2D.convex_hull(support)
+	if hull.size() < 3:
+		return false
+	# Inside, and not on the edge (a weight over the edge falls).
+	return Geometry2D.is_point_in_polygon(middle, hull) and _inside_by(middle, hull, 0.25)
+
+
+## At least `margin` studs inside every edge of the (closed) hull.
+static func _inside_by(p: Vector2, hull: PackedVector2Array, margin: float) -> bool:
+	for i in hull.size() - 1:
+		var a := hull[i]
+		var c := hull[i + 1]
+		if Geometry2D.get_closest_point_to_segment(p, a, c).distance_to(p) < margin:
+			return false
+	return true
+
+
+## Let the whole building go as one piece: every whole course cell of its
+## materials in its box (ground_collapse lets a group go a course tall).
+static func _topple(host: Node, b: Dictionary) -> void:
+	var collapse = host.get("collapse")
+	if collapse == null:
+		return
+	b.fallen = true
+	var lo: Vector3i = b.lo
+	var hi: Vector3i = b.hi
+	var g := PackedInt32Array()
+	var c0 := floori(float(lo.y) / 3.0)
+	var c1 := floori(float(hi.y) / 3.0)
+	for c in range(c0, c1 + 1):
+		var y := c * 3
+		for z in range(lo.z, hi.z + 1):
+			for x in range(lo.x, hi.x + 1):
+				var m := BrickTerrain.solid_at(x, y, z)
+				if m < BUILDING_MATERIAL_BASE:
+					continue
+				if BrickTerrain.solid_at(x, y + 1, z) != m or BrickTerrain.solid_at(x, y + 2, z) != m:
+					continue
+				g.append_array([x, y, z, 1, 1, m])
+	if g.is_empty():
+		return
+	toppled += 1
+	collapse.call("_let_group_go", g)
