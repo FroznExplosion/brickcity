@@ -39,7 +39,13 @@ extends SceneTree
 ##   turn (R9); lakes over the sea; cave
 ##   pools with no water beside cave air; a mirror rebuilds an authority's
 ##   water from its change log (multiplayer groundwork); a source on the open
-##   sea runs out 2 studs and its water goes back to the sea once it is gone.
+##   sea runs out 2 studs and its water goes back to the sea once it is gone;
+## - W3: a written section far away is parked (its changed cells only),
+##   reads and saves the same, and is whole again when the player is back;
+## - S3: a lake's open top rides a wave (rim flat, a lone source flat), the
+##   surface asked for is that wave, a ray through a crest hits the lake; a
+##   brick laid in it and broken heals, in the middle and at its shore (R4);
+## - P: water poured down one arm of a U-bend levels in both, every unit kept.
 
 const FLOOR := 1000          ## floor course: plates 3000-3002
 const W := FLOOR + 1         ## the course water stands in
@@ -110,6 +116,13 @@ func _ease_run(ticks: int) -> Dictionary:
 					r.tilted += 1
 					break
 	return r
+
+
+## brick_fluid.cpp's lake_wave (S3), -1..1.
+func _lake_wave(x: float, z: float, t: float) -> float:
+	var a := (0.8 * x + 0.6 * z) * (TAU / 5.0) - t * 1.6
+	var b := (-0.5 * x + 0.866 * z) * (TAU / 3.2) - t * 2.1 + 1.7
+	return 0.55 * sin(a) + 0.45 * sin(b)
 
 
 func _region_units(x0: int, x1: int, z0: int, z1: int, b: int) -> int:
@@ -805,6 +818,151 @@ func _run() -> void:
 
 	BrickTerrain.set_generator(0)
 	BrickTerrain.reset_gen_params()
+	BrickFluid.reset(20.0, false)
+	BrickTerrain.clear_terrain_edits()
+
+	# 13. Water far away is parked (W3, Docs/MineWaterNext.md 6): a written
+	# section past twice the sim radius keeps only its changed cells; it
+	# still reads and saves the same, and comes back whole when the player
+	# does. (Memory grew for good with distance travelled: 122 MB after a
+	# 480 m flight over sea, the terrain chat, 2026-11-24.)
+	_sec("13")
+	BrickFluid.set_centre(Vector3(0, 0, 0), 100000.0)
+	_floor(6000, -10, 6020, 10)
+	for wall in [[6008, -2, 6012, -2], [6008, 2, 6012, 2], [6008, -2, 6008, 2], [6012, -2, 6012, 2]]:
+		BrickTerrain.fill_box(Vector3i(wall[0], W * 3, wall[1]), Vector3i(wall[2], W * 3 + 2, wall[3]), 4, false)
+	BrickFluid.terrain_changed(Vector3i(6008, W * 3, -2), Vector3i(6012, W * 3 + 2, 2))
+	for x in range(6009, 6012):
+		for z in range(-1, 2):
+			BrickFluid.place(Vector3i(x, W, z), 1, BrickFluid.STILL, 3)
+	_settle(50)
+	var pond_near := _region_units(6009, 6011, -1, 1, W)
+	var save_near := BrickFluid.get_save().size()
+	var mem0: Dictionary = BrickFluid.memory_stats()
+	# The player 2 km away, a small sim radius: past it, the pond parks.
+	BrickFluid.set_centre(Vector3(-2000, 0, 0), 60.0)
+	BrickFluid.tick_now(60)
+	var mem1: Dictionary = BrickFluid.memory_stats()
+	_ok("a written section far away is parked", int(mem1.parked) >= 1 and int(mem1.sections) < int(mem0.sections),
+			"sections %d -> %d, parked %d (%d bytes)" % [int(mem0.sections), int(mem1.sections), int(mem1.parked), int(mem1.parked_bytes)])
+	_ok("parked, it reads and saves the same", _region_units(6009, 6011, -1, 1, W) == pond_near
+			and BrickFluid.get_save().size() == save_near,
+			"%d units (want %d), save %d bytes (want %d)" % [_region_units(6009, 6011, -1, 1, W), pond_near,
+			BrickFluid.get_save().size(), save_near])
+	BrickFluid.set_centre(Vector3(0, 0, 0), 100000.0)
+	BrickFluid.place(Vector3i(6010, W, 0), 1, BrickFluid.STILL, 0)
+	BrickFluid.tick_now(5)
+	var mem2: Dictionary = BrickFluid.memory_stats()
+	_ok("back, it is whole again", _region_units(6009, 6011, -1, 1, W) == pond_near and int(mem2.parked) < int(mem1.parked)
+			and BrickFluid.active_count() == 0,
+			"%d units (want %d), parked %d, %d awake" % [_region_units(6009, 6011, -1, 1, W), pond_near, int(mem2.parked),
+			BrickFluid.active_count()])
+	BrickFluid.reset(20.0, false)
+	BrickTerrain.clear_terrain_edits()
+
+	# 14. Waves on lakes (S3, Docs/MineWaterNext.md R1, R2): an infinite
+	# body's open top rides a small wave piece by piece, bigger away from its
+	# rim (a lone source stays flat); the surface the swimmers and floaters
+	# ask for is that wave; a bucket's ray through a crest hits the lake.
+	_sec("14")
+	BrickFluid.set_centre(Vector3(0, 0, 0), 100000.0)
+	_floor(6980, -20, 7040, 20)
+	var lx0 := 7000
+	for wall in [[lx0 - 1, -8, lx0 + 15, -8], [lx0 - 1, 8, lx0 + 15, 8], [lx0 - 1, -8, lx0 - 1, 8], [lx0 + 15, -8, lx0 + 15, 8]]:
+		BrickTerrain.fill_box(Vector3i(wall[0], W * 3, wall[1]), Vector3i(wall[2], W * 3 + 2, wall[3]), 4, false)
+	BrickFluid.terrain_changed(Vector3i(lx0 - 1, W * 3, -8), Vector3i(lx0 + 15, W * 3 + 2, 8))
+	for x in range(lx0, lx0 + 15):
+		for z in range(-7, 8):
+			BrickFluid.place(Vector3i(x, W, z), 1, BrickFluid.SOURCE, 3)
+	BrickFluid.place(Vector3i(6990, W, 15), 1, BrickFluid.SOURCE, 3)
+	_settle(100)
+	var lm: Dictionary = BrickFluid.build_tile_mesh(floori(lx0 / 32.0), 0)
+	var lcus: PackedFloat32Array = lm.water[Mesh.ARRAY_CUSTOM0]
+	var lverts: PackedVector3Array = lm.water[Mesh.ARRAY_VERTEX]
+	var pieces := 0
+	var amp_max := 0.0
+	var rim_piece := false
+	for i in range(0, lcus.size(), 16):
+		if lcus[i + 1] > 1.5:
+			pieces += 1
+			amp_max = maxf(amp_max, lcus[i + 2])
+			var vx := floori(lverts[i / 4].x / 0.35 + 0.01)
+			if vx == lx0:
+				rim_piece = true
+	_ok("a lake's open top rides a wave, its rim flat", pieces > 50 and absf(amp_max - 0.09) < 0.001 and not rim_piece,
+			"%d piece faces, amplitude %.3f m, rim piece %s" % [pieces, amp_max, rim_piece])
+	var stud := 0.35
+	var mx := lx0 + 7
+	var top := float((W + 1) * 3) * 0.14
+	var ask := Vector3((mx + 0.5) * stud, top - 0.05, 0.5 * stud)
+	var tw := 0.0
+	while _lake_wave((mx + 0.5) * stud, 0.5 * stud, tw) < 0.6:
+		tw += 0.05
+	BrickFluid.set_wave_clock(tw)
+	var want := top + 0.09 * _lake_wave((mx + 0.5) * stud, 0.5 * stud, tw)
+	var got := BrickFluid.surface_at(ask)
+	var got_air := BrickFluid.surface_at(ask + Vector3(0, 0.1, 0))
+	_ok("the lake's surface is its wave, from the water or the crest over it", absf(got - want) < 0.001 and absf(got_air - want) < 0.001,
+			"%.3f and %.3f, want %.3f (top %.3f)" % [got, got_air, want, top])
+	# Level through the crest, a little over the flat top: it hits the lake.
+	var ray: Dictionary = BrickFluid.ray_cell(Vector3((mx - 3 + 0.5) * stud, top + 0.03, 0.5 * stud), Vector3(1, 0, 0), 3.0)
+	_ok("a ray through a crest hits the lake under it", int(ray.get("fluid", 0)) == 1 and int(ray.get("kind", -1)) == BrickFluid.SOURCE,
+			str(ray))
+	var lone: Dictionary = BrickFluid.build_tile_mesh(floori(6990 / 32.0), 0)
+	var lone_pieces := 0
+	var lc2: PackedFloat32Array = lone.water[Mesh.ARRAY_CUSTOM0] if not (lone.water as Array).is_empty() else PackedFloat32Array()
+	var lv2: PackedVector3Array = lone.water[Mesh.ARRAY_VERTEX] if not (lone.water as Array).is_empty() else PackedVector3Array()
+	for i in range(0, lc2.size(), 16):
+		if lc2[i + 1] > 1.5 and floori(lv2[i / 4].z / 0.35) >= 10:
+			lone_pieces += 1
+	_ok("a lone source stays flat", lone_pieces == 0, "%d piece faces" % lone_pieces)
+	# A brick laid in the lake and broken again: the body heals (R4), in the
+	# middle and against its shore.
+	for hx in [lx0 + 7, lx0]:
+		var hlo := Vector3i(hx, W * 3, 0)
+		var hhi := Vector3i(hx, W * 3 + 2, 0)
+		BrickTerrain.fill_box(hlo, hhi, 4, false)
+		BrickFluid.terrain_changed(hlo, hhi)
+		_settle(20)
+		BrickTerrain.fill_box(hlo, hhi, 0, false)
+		BrickFluid.terrain_changed(hlo, hhi)
+		_settle(20)
+	_ok("a brick taken out of the lake heals, middle and shore", int(_info(lx0 + 7, W, 0).kind) == BrickFluid.SOURCE
+			and int(_info(lx0, W, 0).kind) == BrickFluid.SOURCE and _amt(lx0, W, 0) == 6,
+			"%s %s" % [_info(lx0 + 7, W, 0), _info(lx0, W, 0)])
+	BrickFluid.set_wave_clock(0.0)
+	BrickFluid.reset(20.0, false)
+	BrickTerrain.clear_terrain_edits()
+
+	# 15. Water fills its shape (stage P, Docs/MineWaterNext.md 4): poured
+	# down one arm of a U-bend it used to stand there; once calm, the body is
+	# levelled -- both arms at one level, every unit kept.
+	_sec("15")
+	BrickFluid.set_centre(Vector3(0, 0, 0), 100000.0)
+	_floor(7990, -10, 8020, 10)
+	BrickTerrain.fill_box(Vector3i(8000, W * 3, -1), Vector3i(8006, (W + 4) * 3 + 2, 1), 4, false)
+	BrickTerrain.fill_box(Vector3i(8001, W * 3, 0), Vector3i(8005, W * 3 + 2, 0), 0, false)
+	BrickTerrain.fill_box(Vector3i(8001, W * 3, 0), Vector3i(8001, (W + 4) * 3 + 2, 0), 0, false)
+	BrickTerrain.fill_box(Vector3i(8005, W * 3, 0), Vector3i(8005, (W + 4) * 3 + 2, 0), 0, false)
+	BrickFluid.terrain_changed(Vector3i(8000, W * 3, -1), Vector3i(8006, (W + 4) * 3 + 2, 1))
+	# (Each brick poured once the last has left the top cell: a place sets a
+	# cell, it does not add to it.)
+	for i in 8:
+		BrickFluid.place(Vector3i(8001, W + 4, 0), 1, BrickFluid.STILL, 3)
+		for pt in 60:
+			BrickFluid.tick_now(1)
+			if pt > 2 and _amt(8001, W + 4, 0) == 0:
+				break
+	_settle(400)
+	var u_total := 0
+	for b in range(W, W + 5):
+		for x in range(8001, 8006):
+			u_total += _amt(x, b, 0)
+	_ok("a U-bend fills both arms to one level", _amt(8005, W + 1, 0) == 6 and _amt(8001, W + 1, 0) == 6
+			and _amt(8001, W + 2, 0) + _amt(8005, W + 2, 0) == 6 and absi(_amt(8001, W + 2, 0) - _amt(8005, W + 2, 0)) <= 1
+			and _amt(8001, W + 3, 0) == 0 and u_total == 48,
+			"arm A %d %d %d, arm B %d %d %d, %d units (want 48)" % [_amt(8001, W + 1, 0), _amt(8001, W + 2, 0),
+			_amt(8001, W + 3, 0), _amt(8005, W + 1, 0), _amt(8005, W + 2, 0), _amt(8005, W + 3, 0), u_total])
 	BrickFluid.reset(20.0, false)
 	BrickTerrain.clear_terrain_edits()
 

@@ -138,10 +138,35 @@ enum Material {
     MATERIAL_COUNT
 };
 
+/// BUILDING MATERIALS (Docs/TerrainBuildings.md, stage 2): one a filament
+/// colour, MAT_FIL_BASE + the filament's index, so a building stamped into
+/// the ground keeps the city's colours (a cell holds a material, not a
+/// colour). Plastic bricks: studded, strong-bonded, and in the collapse
+/// survey as strong as the city's bricks, not the ground's x4.
+constexpr int MAT_FIL_BASE = 64;
+constexpr int MATERIAL_LIMIT = MAT_FIL_BASE + FILAMENT_PALETTE_SIZE;
+static_assert(MATERIAL_LIMIT <= 256, "terrain materials are a byte");
+static_assert(MATERIAL_COUNT <= MAT_FIL_BASE, "the ground's materials stay under the building range");
+
+inline bool is_building_material(int m) {
+    return m >= MAT_FIL_BASE && m < MATERIAL_LIMIT;
+}
+
+/// A material byte as stored: a ground material, or a building one.
+inline int clamp_material(int m) {
+    if (is_building_material(m)) {
+        return m;
+    }
+    return std::min(std::max(m, 0), (int)MATERIAL_COUNT - 1);
+}
+
 /// Filament index per material. Terrain does not get a colour table of its
 /// own: a terrain brick and a building brick printed in the same filament have
 /// to be the same colour, or the world stops reading as one set of parts.
 inline int material_filament(int m) {
+    if (is_building_material(m)) {
+        return m - MAT_FIL_BASE;
+    }
     switch (m) {
         case MAT_GRASS: return FIL_GREEN;
         case MAT_DIRT: return FIL_BROWN;
@@ -593,13 +618,6 @@ public:
     static int get_tile_studs();
     static int get_max_piece_length();
     static int get_period();
-    /// Real 45-degree chamfer cut off every emitted face edge, in metres.
-    /// 0 disables it. Costs 7x the triangles -- see the note in the .cpp.
-    static void set_face_bevel(double metres);
-    static double get_face_bevel();
-    /// `build_tile` with the chamfer at `metres` for this call only, safe on
-    /// a worker thread beside unchamfered bakes (the near tier, streamed).
-    static Dictionary build_tile_chamfered(int tx, int tz, double metres);
     static int get_piece_stride();
 
     static int height_at(int x, int z);
@@ -956,6 +974,13 @@ public:
     /// (bricks shot and hidden till their tile is rebuilt, TerrainBricks).
     static Dictionary overlay_pick(const Array &lists, Vector3 eye, Vector3 forward, double range_m,
             double cos_half, int max_bricks, const PackedVector3Array &hidden);
+    /// The listed brick (overlay_bricks' 17 floats) whose box holds `point`,
+    /// from any of `lists` -- at any range, not only what overlay_pick laid
+    /// (a far shot). {brick: its floats, lo, hi: its box with any brick
+    /// stacked on or under it on the same footprint (a piece's plate or
+    /// tile), each face's light from the list that drew more of it}; empty
+    /// when none holds it.
+    static Dictionary overlay_find(const Array &lists, Vector3 point);
     /// FOR PROBES (Docs/MineWorld.md 20): the flat mesh and colliders of a
     /// tile (sy = INT32_MIN) or deep section, checked against the field.
     ///   exposed, undrawn   faces of owned solid cells against OPEN air, and

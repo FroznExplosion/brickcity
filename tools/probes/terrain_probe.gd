@@ -32,7 +32,6 @@ func _initialize() -> void:
 	_check_studs()
 	_check_tile_build()
 	_check_winding()
-	_check_bevel_width()
 	_check_chamfer_mesh()
 	_check_flat_mode()
 	_check_smooth_terrain()
@@ -431,12 +430,7 @@ func _check_winding() -> void:
 	var worst := {}
 	var bad := 0
 	var total := 0
-	# BOTH meshes. The gate was written before the chamfer existed and only
-	# ever ran with the bevel off, so every facet it added went unchecked —
-	# and they were all wound backwards. A gate that does not cover the
-	# geometry added after it is not a gate.
-	for bevel in [0.0, 0.013]:
-		BrickTerrain.set_face_bevel(bevel)
+	for bevel in [0.0]:
 		for tz in range(-1, 2):
 			for tx in range(-1, 2):
 				var d: Dictionary = BrickTerrain.build_tile(tx, tz)
@@ -461,7 +455,6 @@ func _check_winding() -> void:
 						var key := "%.1f bevel  normal %.0f,%.0f,%.0f" % [
 							bevel, nrm.x, nrm.y, nrm.z]
 						worst[key] = int(worst.get(key, 0)) + 1
-	BrickTerrain.set_face_bevel(0.0)
 	if bad > 0:
 		var parts: Array[String] = []
 		for k in worst:
@@ -539,71 +532,6 @@ func _check_chamfer_mesh() -> void:
 	_ok("a plate-thin brick does not turn inside out",
 		tb.size.y > 0.0 and tb.size.y <= BrickWorld.get_plate_metres() + 1e-4,
 		"%.3f m tall" % tb.size.y)
-
-
-## How WIDE is the chamfer, actually?
-##
-## "The chamfers extend too far" is a claim about a distance, and the mesh
-## knows the distance. A facet is a triangle whose normal is not axis
-## aligned; its short edge is the cut, which should be the bevel times root
-## two — 18 mm at a 13 mm setting. Anything much larger means the inset is
-## wrong; anything much larger AND rare means it is the piece SIZE clamp
-## biting on a tiny face.
-func _check_bevel_width() -> void:
-	print("chamfer width")
-	const BEVEL := 0.013
-	BrickTerrain.set_face_bevel(BEVEL)
-	var d: Dictionary = BrickTerrain.build_tile(0, 0)
-	BrickTerrain.set_face_bevel(0.0)
-	var arrays: Array = d["mesh"]
-	var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-	var n: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
-	var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
-
-	var widths: Array[float] = []
-	var over := 0
-	var ramps := 0
-	for i in range(0, idx.size(), 3):
-		var nrm := n[idx[i]]
-		# Axis aligned means a plain face; a facet is diagonal.
-		var m := maxf(absf(nrm.x), maxf(absf(nrm.y), absf(nrm.z)))
-		if m > 0.97:
-			continue
-		var a := v[idx[i]]
-		var b := v[idx[i + 1]]
-		var c := v[idx[i + 2]]
-		var shortest: float = minf(a.distance_to(b),
-			minf(b.distance_to(c), c.distance_to(a)))
-		# A RAMP's tilted top also has a diagonal normal, and it is a whole
-		# 1x1 face — 0.35 m, twenty times a chamfer. Counting those as facets
-		# is what reported a "0.324 m chamfer" and sent me looking for a bug
-		# in geometry that was correct.
-		if shortest > 0.1:
-			ramps += 1
-			continue
-		widths.append(shortest)
-		if shortest > BEVEL * 3.0:
-			over += 1
-
-	_ok("there are chamfer facets at all", widths.size() > 0,
-		"%d facet triangles, plus %d ramp tops" % [widths.size(), ramps])
-	if widths.is_empty():
-		return
-	widths.sort()
-	var median: float = widths[widths.size() / 2]
-	var biggest: float = widths[widths.size() - 1]
-	# cut*sqrt(3), not sqrt(2): the strip runs from a corner inset along BOTH
-	# in-plane edge axes to the rim pushed back along the normal, so all three
-	# axes contribute.
-	print("        median %.4f m, largest %.4f m, expected %.4f m"
-		% [median, biggest, BEVEL * sqrt(3.0)])
-	# The tolerance allows for ramps' own chamfers: a slope's corners are not
-	# 90 degrees, so |e1 + e2| is larger than root two and its facet comes out
-	# a few millimetres wider. That is correct, not drift.
-	_ok("the facet is the width it was asked for",
-		absf(median - BEVEL * sqrt(3.0)) < 0.003, "%.4f m" % median)
-	_ok("and none of them run away",
-		over == 0, "%d facets wider than 3x the bevel" % over)
 
 
 ## Heightfield mode: the same terrain with nothing carved out of it.
@@ -1094,8 +1022,7 @@ func _check_thin_roof() -> void:
 				tops += 1
 	var foot := float(b) * plate
 	var areas: Array[float] = []
-	for bevel in [0.0, 0.013]:
-		BrickTerrain.set_face_bevel(bevel)
+	for bevel in [0.0]:
 		var d: Dictionary = BrickTerrain.build_tile(0, 0)
 		var arrays: Array = d["mesh"]
 		var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
@@ -1114,14 +1041,12 @@ func _check_thin_roof() -> void:
 				continue
 			a_bevel += 0.5 * (p1 - p0).cross(p2 - p0).length()
 		areas.append(a_bevel)
-	BrickTerrain.set_face_bevel(0.0)
 	var want := float((hi.x - lo.x + 1) * (hi.y - lo.y + 1)) * stud * stud
 	_ok("a one-course slab over air is the columns' top course", tops == 64,
 		"%d of 64 columns" % tops)
-	# Square, the whole footprint; bevelled, less its edge strips (facets).
-	_ok("and its underside is drawn, facing down",
-		absf(areas[0] - want) < want * 0.005 and areas[1] > want * 0.95 and areas[1] <= areas[0],
-		"%.3f m2 square, %.3f bevelled, of %.3f" % [areas[0], areas[1], want])
+	# The whole footprint.
+	_ok("and its underside is drawn, facing down", absf(areas[0] - want) < want * 0.005,
+		"%.3f m2 of %.3f" % [areas[0], want])
 	BrickTerrain.clear_terrain_edits()
 
 

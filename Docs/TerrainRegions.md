@@ -537,3 +537,52 @@ blocking edit is the terrain area's, small, and can go any time.
   on the side-stud grid only, gated), and custom bricks such as a 2x4 with
   7 studs. Studs are already drawn one instance a stud, so drawing from a
   mask is natural; joints read the mask's overlap.
+- **Slopes and curves as dress-up (question, not decided).** The old try
+  (Terrain.md 17.15, 19.22) baked them into the tile mesh: 1x1 ramps read
+  as melted, terrace slopes cost 381k -> 660k triangles, specks at tile
+  seams. Now: a slope is a fitted brick kind (fills its cells, studs only
+  on its flat strip by the stud mask), placed by hash at open edges (tops,
+  cliff lips, inverted under overhangs and cave roofs), never 1x1 ramps.
+  Drawn as overlay instances within the overlay's 12 m (one draw call a
+  kind, nothing stored); 12-45 m either plain baked faces or the step as
+  now -- pictures decide; far rings never. Stage B5, after the fit.
+- **The fill (chosen 2026-11-24): a quota fit, not largest-first.** Each
+  world (its worldgen preset) names target shares BY COUNT, e.g. 20 % 2x4,
+  20 % 2x2, a few % of every other size, filled with 1x2 and 1x1. Inside a
+  region the fit visits cells in a hashed order and picks, among the shapes
+  that fit, by how far each is under its share (deficit-weighted), both
+  directions by hash; 1x2/1x1 fill last. Same mix at walls and inside them
+  (walls-first was dropped: bland caves, odd filler when digging). Loose:
+  regions are small samples, the world hits the shares on average.
+- **Stagger: option (c), scored, never refused.** The score's weight is a
+  per-world (or per-depth) knob: lower in caves means more seams over seams,
+  weaker roofs, the instability wanted there.
+- **Bricks cross every chunk seam**, tile edges and section boundaries alike
+  (tall bricks too: up to 8 chunks, rarely). Measure the extra rebuilds.
+- **Bricks jut into caves**: a wall brick may run 1-2 studs out into cave
+  air (hashed, strong ground, most of the brick in the wall). A pure part of
+  the fit, so the ground "as generated" is the generator plus the juts; it
+  waits until every reader takes the store (find_brick, light, collision,
+  water W1); the far tiers never see juts.
+- **Big groups float.** A loose group over N cells (per world, ~500) does not
+  fall: it is held as if grounded; groups under N fall as now. No 1,000-brick
+  breaks from one hit, and the survey can stop counting at N (cheaper than
+  today's 1.2 M-cell limit). Groups under N hanging by a neck are the
+  instability. Stage D, or earlier on its own (it is the survey only).
+- **Shares are loose: target +-5 points** (20 % means 15-25 % by count).
+  The shapes a world may use and their shares are SETTINGS (the worldgen
+  preset and its menu); sand, red sand and gravel are always 1x1 whatever
+  the settings say.
+- **Crossing chunk seams is a knob too**: a chance a brick may cross a tile
+  edge or section boundary (where it fits). Lower = fewer 2-4 chunk
+  rebuilds per break; higher = fewer crack planes on tile edges (crossing
+  cut seams over seams there 40-44 %). region_fit_probe reports both so the
+  default is picked from numbers.
+- **Stage A, done by the terrain-audit chat** (2970aa35, MineWorld.md 21
+  item 1): tiles and deep sections keep their GENERATED cells (`GenStore`,
+  the sample's raw `vox`, ~180 KB a surface tile, 64 kept each, LRU by use),
+  edits laid over on each sample; find_brick 5.1 -> 0.2 ms, a rebuild 10 ->
+  5 ms. Not the run form of section 2 and not every near tile (64, not
+  ~240): enough for breaks; the fit's 8-stud reach and the water (W1) may
+  want more kept, to be measured. W3 (far water let go or parked) merged by
+  the water chat (f546587b).

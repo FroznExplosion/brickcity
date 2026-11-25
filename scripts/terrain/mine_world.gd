@@ -22,7 +22,8 @@ extends Node3D
 ##       · F3 readout · T skip an hour. NOT F9: in the editor's embedded game
 ##       view F9 is the editor's "Suspend/Resume Embedded Project", and a
 ##       suspended tree takes no clicks at all.
-##       B guns <-> items (mine_builder.gd: break, place, pick; Inventory, Docs/Inventory.md)
+##       1-9 / wheel: the hotbar slot in the hands -- a gun fires, anything else
+##       builds (MineHands, mine_builder.gd; Docs/Inventory.md 10). No arsenal here.
 ##       left mouse (on foot, not building): shoot -- the ground breaks where hit
 
 const Presets := preload("res://scripts/terrain/worldgen_presets.gd")
@@ -95,13 +96,14 @@ var _inv_walker_frozen := false
 ## Chests and the items lying in the world (Docs/Inventory.md 4, stage 5).
 var chests: MineChests = null
 var drops: DroppedItems = null
+## What is in the hands: the selected slot, a gun or not (Docs/Inventory.md 10).
+var hands: MineHands = null
 ## Sky light on collapse pieces, drops and chests (Docs/MineWorld.md 19);
 ## null with --no-sky-light.
 var sky_lit: MineSkyLit = null
 ## THE BRICK OVERLAY (Docs/BrickOverlay.md): real bevelled bricks over the
-## flat ground near the eye, in place of the old chamfered near tiles. On
-## with the world setting Chamfered brick edges; `-- --old-chamfer` draws the
-## old near tier instead (the A/B).
+## flat ground near the eye. On with the world setting Chamfered brick edges
+## (off: the flat ground alone).
 var bricks: TerrainBricks = null
 var _overlay_on := false
 
@@ -326,6 +328,8 @@ func _ready() -> void:
 			_run_slits_gate()
 		elif "--gate=bricks" in OS.get_cmdline_user_args():
 			_run_bricks_gate()
+		elif "--gate=buildings" in OS.get_cmdline_user_args():
+			_run_buildings_gate()
 		elif "--gate=mem" in OS.get_cmdline_user_args():
 			# Where the memory goes (Docs/TerrainRegions.md 2, A0).
 			set_meta(&"mem_probe", load("res://tools/probes/terrain_mem_probe.gd").new())
@@ -408,16 +412,12 @@ func generate(s: Dictionary) -> void:
 	var feet := Vector3(spawn_xz.x, _ground_m(cell.x, cell.y) + 0.05, spawn_xz.y)
 
 	var near := clampi(int(settings.get("detail_tiles", 4)), 2, 8)
-	# The geometry chamfer near the camera (Chamfered brick edges): off, the
-	# near tiles are drawn flat, as the deep sections are.
-	TerrainTile.bevel_enabled = bool(settings.get("chamfer", true))
-	_overlay_on = TerrainTile.bevel_enabled and not ("--old-chamfer" in OS.get_cmdline_user_args())
+	# Real bevels near the camera (Chamfered brick edges): the brick overlay.
+	_overlay_on = bool(settings.get("chamfer", true))
 	# The solid behind the overlay's bricks, baked inside the ground, so a
 	# shot brick's hole shows real bricks the frame it is hit
 	# (Docs/BrickOverlay.md 6b); `-- --no-behind` = the stand-in box instead.
 	BrickTerrain.set_behind_faces(_overlay_on and not ("--no-behind" in OS.get_cmdline_user_args()))
-	if _overlay_on:
-		TerrainTile.bevel_enabled = false
 	if bricks == null:
 		bricks = TerrainBricks.new()
 		bricks.name = "Bricks"
@@ -611,8 +611,22 @@ func _place_player(feet: Vector3) -> void:
 		gun.on_structure_hit = _mine
 		var s := AIServices.new()
 		s.world3d = get_world_3d()
-		kit = PlayerKit.attach(self, player, cam, gun, s, {"scripted": _gate})
+		# No arsenal: the mine world's guns are hotbar items (MineHands,
+		# Docs/Inventory.md 10); the city and planets keep theirs.
+		kit = PlayerKit.attach(self, player, cam, gun, s, {"scripted": _gate, "arsenal": false})
 		kit.enter(pawn, view)
+		hands = MineHands.new()
+		hands.name = "Hands"
+		add_child(hands)
+		hands.setup(self, gun, view, kit.library, builder)
+		var loadout: Dictionary = {} if _gate else CharacterSave.load_from(character_path()).loadout
+		if hands.ensure_guns(builder.inv, loadout):
+			_inv_dirty = true
+		hands.set_inventory(builder.inv)
+		if kit.hud != null:
+			kit.hud.hint_lines = PackedStringArray([
+				"WASD move · SHIFT sprint · SPACE jump · F fly · LMB fire / break · RMB aim / place · R reload",
+				"1-9 / wheel: the hand (a gun, a block, a tool) · X other hotbar · Z block size · E items · M world"])
 		FpsRig.face(cam, pawn, Vector3.FORWARD)
 	walker.camera.far = far
 	cam.far = far
@@ -1538,8 +1552,22 @@ func open_chest(key: String) -> void:
 		return
 	if _inv_screen != null:
 		_inv_screen.close_screen()
+	if not MineChests.is_container(chests.item_of(key)):
+		# A station: the screen opens on what can be made (Docs/Inventory.md 12).
+		toggle_inventory()
+		if _inv_screen != null:
+			_inv_screen.show_page("craft")
+		return
 	builder.inv.open_chest(key, chests.slots_of(key))
 	toggle_inventory()
+
+
+## The stations in reach of the player (the crafting list's).
+func stations_near() -> Array:
+	var feet := player_feet_local()
+	if chests == null or feet == Vector3.INF:
+		return []
+	return chests.stations_near(feet + Vector3(0, 0.8, 0))
 
 
 ## Where the player stands, in the terrain frame (dropped items, chests).
@@ -1777,6 +1805,8 @@ func _load_inventory() -> void:
 			builder.inv.changed.disconnect(_on_inventory_changed)
 		builder.set_inventory(inv)
 		inv.changed.connect(_on_inventory_changed)
+		if hands != null:
+			hands.set_inventory(inv)
 		_inv_loaded = true
 	# The world's game mode (stage 7). A file from before kept the inventory's
 	# own "creative" flag.
@@ -1784,12 +1814,15 @@ func _load_inventory() -> void:
 	inv.creative = not survival
 	if first and how_kit_added(inv):
 		_inv_dirty = true
+	# A world file from before stage 11 (format < 3) counted blocks in bricks.
+	Inventory.units_in_bricks = int(world.get("format", 3)) < 3 and not world.is_empty()
 	if chests != null:
 		chests.inv = inv
 		chests.restore(world.get("chests", {}))
 	if drops != null:
 		drops.inv = inv
 		drops.restore(world.get("drops", []))
+	Inventory.units_in_bricks = false
 	_world_dirty = false
 	builder._refresh_bar()
 
@@ -1806,6 +1839,10 @@ func how_kit_added(inv: Inventory) -> bool:
 	if inv.ensure_item(&"chest", &"mega_pickaxe"):
 		print("[mine] chests added to the inventory")
 		added = true
+	for st in [&"workbench", &"furnace"]:
+		if inv.ensure_item(st):
+			print("[mine] %s added to the inventory" % st)
+			added = true
 	return added
 
 
@@ -1857,11 +1894,13 @@ func save_edits(wait := false) -> void:
 		return
 	_edits_dirty = false
 	_world_dirty = false
+	if hands != null:
+		hands.sync_ammo()
 	if _inv_dirty:
 		_inv_dirty = false
 		save_character()
 	# The world file: only what is the world's (stage 6).
-	var inv_save := {"format": 2, "survival": survival}
+	var inv_save := {"format": 3, "survival": survival}
 	if chests != null:
 		inv_save["chests"] = chests.to_save()
 	if drops != null:
@@ -2033,7 +2072,7 @@ func _update_hud() -> void:
 		"blocks placed %d  broken %d   %s" % [builder.placed, builder.broken, _save_status],
 		"water %s" % water.report(),
 		collapse.readout(),
-		"%s   F fly/walk  B guns/items  M world generation  F3 readout  T +1 hour" % ("ON FOOT" if on_foot
+		"%s   F fly/walk  1-9 hand  E items  M world generation  F3 readout  T +1 hour" % ("ON FOOT" if on_foot
 				else "FLYING %.0f m/s (wheel), moving %.0f m/s%s" % [walker.fly_speed, _speed,
 				"  DETAIL HELD" if fast_hold else ""]),
 	])
@@ -2175,8 +2214,20 @@ func _run_inventory_gate() -> void:
 	while not ItemIcons.ready and waited < 120:
 		await _frames(1)
 		waited += 1
-	check.call("item icons rendered at load (stage 4)", ItemIcons.ready and ItemIcons.has_icon(&"granite")
+	check.call("item icons rendered at load (stage 4)", ItemIcons.ready and ItemIcons.has_icon(&"coal_ore")
 			and ItemIcons.has_icon(&"bucket"))
+	# Stage 10: the kit's guns (MineHands.ensure_guns) -- moved to the end of
+	# the storage here so the checks below find the hotbars as they were.
+	var kit_guns: Array = []
+	for a in inv.all_addrs():
+		if MineHands.is_gun(inv.get_slot(a)):
+			kit_guns.append(inv.get_slot(a))
+			inv.set_slot(a, null)
+	check.call("the kit has guns as items (%d)" % kit_guns.size(), kit_guns.size() >= 2)
+	for i in kit_guns.size():
+		inv.main[26 - i] = kit_guns[i]
+	inv.changed.emit()
+	await _frames(2)
 	# The sheet, for a look (a read-back: a gate's).
 	if ItemIcons.ready and ItemIcons.texture != null:
 		DirAccess.make_dir_recursive_absolute(UserPaths.DEV)
@@ -2190,12 +2241,12 @@ func _run_inventory_gate() -> void:
 	var tab: Button = scr.get("_tab_creative")
 	await _click(tab.get_global_rect().get_center())
 	check.call("the Creative tab shows the catalog", scr.page == "creative")
-	await _click(_inv_slot(scr, {}, &"granite").get_global_rect().get_center())
+	await _click(_inv_slot(scr, {}, &"coal_ore").get_global_rect().get_center())
 	check.call("a catalog item comes onto the cursor, a full stack",
-			inv.cursor != null and inv.cursor.id == &"granite" and inv.cursor.count == 64)
+			inv.cursor != null and inv.cursor.id == &"coal_ore" and inv.cursor.count == 999)
 	await _click(_inv_slot(scr, Inventory.addr(&"hotbar_1", 2)).get_global_rect().get_center())
 	check.call("... and swaps with what hotbar 2 slot 3 held (water source now held)",
-			inv.hotbars[1][2] != null and inv.hotbars[1][2].id == &"granite"
+			inv.hotbars[1][2] != null and inv.hotbars[1][2].id == &"coal_ore"
 			and inv.cursor != null and inv.cursor.id == &"water_source")
 	await _shot(UserPaths.DEV + "inv_creative.png")
 	# The slot under the mouse spins (zylanntest's hover): a moment later it
@@ -2206,11 +2257,11 @@ func _run_inventory_gate() -> void:
 	var a1: float = spun.get("_angle")
 	check.call("the hovered slot spins (%.2f -> %.2f rad)" % [a0, a1], absf(wrapf(a1 - a0, -PI, PI)) > 0.2)
 	await _shot(UserPaths.DEV + "inv_spin.png")
-	await _click(_inv_slot(scr, {}, &"dirt").get_global_rect().get_center())
+	await _click(_inv_slot(scr, {}, &"gravel").get_global_rect().get_center())
 	check.call("a held stack clicked on the catalog is thrown away", inv.cursor == null)
-	# A left drag spreads a stack: sand over the first three storage slots
+	# A left drag spreads a stack: chests (64 to a stack) over the first three storage slots
 	# (storage starts empty; the hotbars are the kit's).
-	await _click(_inv_slot(scr, {}, &"sand").get_global_rect().get_center())
+	await _click(_inv_slot(scr, {}, &"chest").get_global_rect().get_center())
 	await _shot(UserPaths.DEV + "inv_held.png")
 	var tab_s: Button = scr.get("_tab_storage")
 	await _click(tab_s.get_global_rect().get_center())
@@ -2220,8 +2271,8 @@ func _run_inventory_gate() -> void:
 		pts.append(_inv_slot(scr, Inventory.addr(&"main", i)).get_global_rect().get_center())
 	await _gate_drag(pts)
 	var spread := [inv.main[0], inv.main[1], inv.main[2]]
-	check.call("a left drag spreads 64 sand over 3 slots (21 each, 1 held)",
-			spread.all(func(s): return s != null and s.id == &"sand" and s.count == 21)
+	check.call("a left drag spreads 64 chests over 3 slots (21 each, 1 held)",
+			spread.all(func(s): return s != null and s.id == &"chest" and s.count == 21)
 			and inv.cursor != null and inv.cursor.count == 1)
 	var held_before := inv.cursor != null
 	await _key(KEY_ESCAPE)
@@ -2236,7 +2287,7 @@ func _run_inventory_gate() -> void:
 	# Left click picks a stack up, left click on an empty slot puts it down.
 	await _click(_inv_slot(scr, Inventory.addr(&"main", 2)).get_global_rect().get_center())
 	await _click(_inv_slot(scr, Inventory.addr(&"main", 5)).get_global_rect().get_center())
-	var moved: bool = inv.main[2] == null and inv.main[5] != null and inv.main[5].id == &"sand" and inv.cursor == null
+	var moved: bool = inv.main[2] == null and inv.main[5] != null and inv.main[5].id == &"chest" and inv.cursor == null
 	check.call("a stack picked up and put down in another slot", moved)
 	if moved:
 		var over := _inv_slot(scr, Inventory.addr(&"main", 5)).get_global_rect().get_center()
@@ -2246,9 +2297,9 @@ func _run_inventory_gate() -> void:
 		Input.parse_input_event(m)
 		await _frames(2)
 		await _key(KEY_9)
-		check.call("9 over a storage slot sends it to hotbar 1 slot 9 (its terracotta to storage)",
-				inv.hotbars[0][8] != null and inv.hotbars[0][8].id == &"sand"
-				and inv.main[5] != null and inv.main[5].id == &"terracotta")
+		check.call("9 over a storage slot sends it to hotbar 1 slot 9 (its obsidian to storage)",
+				inv.hotbars[0][8] != null and inv.hotbars[0][8].id == &"chest"
+				and inv.main[5] != null and inv.main[5].id == &"obsidian")
 	# Stage 8: backpacks, real clicks. Off: no storage; parked in a hotbar; a
 	# Small one from the catalog on: 9 slots; the Large one back: 27, its
 	# contents still in it.
@@ -2270,41 +2321,38 @@ func _run_inventory_gate() -> void:
 	await _click(_inv_slot(scr, Inventory.addr(&"backpack")).get_global_rect().get_center())
 	await _click(_inv_slot(scr, Inventory.addr(&"hotbar_1", 8)).get_global_rect().get_center())
 	await _frames(3)
-	check.call("the Large one swapped back on: 27 slots, its terracotta still in slot 6, the Small one in the hotbar",
+	check.call("the Large one swapped back on: 27 slots, its obsidian still in slot 6, the Small one in the hotbar",
 			inv.backpack != null and inv.backpack.id == &"large_backpack" and int(scr.get("_storage_n")) == 27
-			and inv.main[5] != null and inv.main[5].id == &"terracotta"
+			and inv.main[5] != null and inv.main[5].id == &"obsidian"
 			and inv.hotbars[1][8] != null and inv.hotbars[1][8].id == &"small_backpack" and inv.cursor == null)
-	# Stage 9: crafting, real clicks. The sand stack picked up, one put in each
-	# craft cell (right click), sandstone taken from the output, the rest put
-	# back; the Recipes tab.
-	var sand_at := Inventory.addr(&"hotbar_0", 4)
-	await _click(_inv_slot(scr, sand_at).get_global_rect().get_center())
-	for i in 4:
-		await _click_button(_inv_slot(scr, Inventory.addr(&"craft", i)).get_global_rect().get_center(),
-				MOUSE_BUTTON_RIGHT)
-	var made_out := inv.get_slot(Inventory.addr(&"craft_out"))
-	check.call("one sand right-clicked into each craft cell: the output is sandstone",
-			made_out != null and made_out.id == &"sandstone")
-	await _click(_inv_slot(scr, sand_at).get_global_rect().get_center())
-	await _shot(UserPaths.DEV + "inv_craft.png")
-	await _click(_inv_slot(scr, Inventory.addr(&"craft_out")).get_global_rect().get_center())
-	check.call("clicking the output: sandstone on the cursor, the grid used up",
-			inv.cursor != null and inv.cursor.id == &"sandstone" and inv.craft.all(func(s): return s == null))
-	await _click(_inv_slot(scr, Inventory.addr(&"main", 10)).get_global_rect().get_center())
-	check.call("... put into storage", inv.main[10] != null and inv.main[10].id == &"sandstone" and inv.cursor == null)
-	var tab_r: Button = scr.get("_tab_recipes")
-	await _click(tab_r.get_global_rect().get_center())
+	# Stage 12: crafting, Terraria's. The Craft tab; gravel made by hand with
+	# a real click on Make; sandstone greyed out until a workbench is near.
+	var tab_c: Button = scr.get("_tab_craft")
+	await _click(tab_c.get_global_rect().get_center())
 	await _frames(3)
-	check.call("the Recipes tab", scr.page == "recipes")
-	await _shot(UserPaths.DEV + "inv_recipes.png")
+	check.call("the Craft tab", scr.page == "craft")
+	var gravel0 := _carried_count(inv, &"gravel")
+	var stone0 := _carried_count(inv, &"stone")
+	var mk := _craft_button(scr, "Gravel", false)
+	check.call("Gravel can be made by hand: its Make is live", mk != null and not mk.disabled)
+	if mk != null:
+		scr.body.ensure_control_visible(mk)
+		await _frames(3)
+		await _click(mk.get_global_rect().get_center())
+		await _frames(3)
+	check.call("Make: 12 stone -> 12 gravel (gravel %d -> %d, stone %d -> %d)" % [gravel0,
+			_carried_count(inv, &"gravel"), stone0, _carried_count(inv, &"stone")],
+			_carried_count(inv, &"gravel") == gravel0 + 12 and _carried_count(inv, &"stone") == stone0 - 12)
+	var sb := _craft_button(scr, "Sandstone", false)
+	check.call("Sandstone needs a workbench: greyed out", sb != null and sb.disabled)
+	await _shot(UserPaths.DEV + "inv_craft.png")
 	var winr := get_window()
 	var sizer := winr.size
 	winr.size = Vector2i(640, 400)
 	await _frames(10)
 	var cutr: Array = MenuFit.audit(scr, get_viewport().get_visible_rect())
-	check.call("the Recipes tab at 640x400: nothing cut off (%d)%s" % [cutr.size(),
-			"" if cutr.is_empty() else "
-" + MenuFit.describe(cutr)], cutr.is_empty())
+	check.call("the Craft tab at 640x400: nothing cut off (%d)%s" % [cutr.size(),
+			"" if cutr.is_empty() else "\n" + MenuFit.describe(cutr)], cutr.is_empty())
 	winr.size = sizer
 	await _frames(10)
 	await _click(tab_s.get_global_rect().get_center())
@@ -2325,6 +2373,44 @@ func _run_inventory_gate() -> void:
 	await _frames(10)
 	await _key(KEY_E)
 	check.call("E closes the screen", not inventory_open())
+	# Stage 10: a gun in a hotbar slot is in the hands; LMB fires it; another
+	# slot puts it away (on foot, as a player shoots).
+	var gun_stack: ItemStack = inv.main[26]
+	inv.swap_with_hotbar(Inventory.addr(&"main", 26), 6)
+	set_on_foot(true)
+	# Away from the tree beside the spawn: a gun against a wall is held back.
+	FpsRig.face(cam, pawn, Vector3.RIGHT)
+	await _frames(30)
+	await _key(KEY_7)
+	await _frames(20)
+	check.call("7: the gun in that slot is in the hands (%s), the builder rests" % [gun.gun.gun_name if gun.gun != null else "none"],
+			gun.gun != null and not builder.active and hands.held == gun_stack)
+	var rounds0 := gun.ammo
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.pressed = true
+	press.button_mask = MOUSE_BUTTON_MASK_LEFT
+	Input.parse_input_event(press)
+	await _frames(25)
+	var up := press.duplicate()
+	up.pressed = false
+	up.button_mask = 0
+	Input.parse_input_event(up)
+	await _frames(5)
+	var rounds1 := gun.ammo
+	check.call("LMB fires it: %d -> %d rounds" % [rounds0, rounds1], rounds1 < rounds0)
+	await _shot(UserPaths.DEV + "inv_gun.png")
+	await _key(KEY_1)
+	await _frames(20)
+	check.call("1: a block in the hand -- the gun put away, the builder acts", gun.gun == null and builder.active
+			and hands.held == null)
+	check.call("... its rounds went back into its stack (%s)" % str(gun_stack.data.get("ammo", "?")),
+			int(gun_stack.data.get("ammo", -1)) == rounds1)
+	inv.swap_with_hotbar(Inventory.addr(&"main", 26), 6)
+	set_on_foot(false)
+	_fly_to(_eye() + Vector3(0, 0.8, 0), Vector3(0, 0, -1))
+	walker.pitch = -0.75
+	await _frames(20)
 	# Hotbar 2 into the hand, its third slot, and place it.
 	var bar0 := inv.active_hotbar
 	await _key(KEY_X)
@@ -2333,7 +2419,7 @@ func _run_inventory_gate() -> void:
 	if inv.active_hotbar != 1:
 		inv.toggle_hotbar()
 	await _key(KEY_3)
-	check.call("3: granite in the hand", inv.hand() != null and inv.hand().id == &"granite")
+	check.call("3: coal ore in the hand", inv.hand() != null and inv.hand().id == &"coal_ore")
 	builder.update_target()
 	var placed: bool = builder.place_target()
 	await _frames(10)
@@ -2341,7 +2427,7 @@ func _run_inventory_gate() -> void:
 	var names := BrickTerrain.material_names()
 	var m_id := int(builder.target.get("material", -1))
 	check.call("RMB placed it: the block looked at is %s" % (names[m_id] if m_id >= 0 else "nothing"),
-			placed and m_id >= 0 and names[m_id] == "granite")
+			placed and m_id >= 0 and names[m_id] == "coal ore")
 	await _shot(UserPaths.DEV + "inv_hotbar.png")
 	# Stage 5: a chest from the kit (hotbar 2 slot 8), put down on the ground
 	# looked straight down at, opened with RMB, filled with real clicks.
@@ -2375,8 +2461,8 @@ func _run_inventory_gate() -> void:
 		await _click(_inv_slot(scr, Inventory.addr(&"hotbar_0", 0)).get_global_rect().get_center())
 		await _click(_inv_slot(scr, Inventory.addr(&"chest", 0)).get_global_rect().get_center())
 		var cs: Array = chests.slots_of(ckey)
-		check.call("grass clicked from hotbar 1 into the chest", cs.size() > 0 and cs[0] != null
-				and (cs[0] as ItemStack).id == &"grass")
+		check.call("soil clicked from hotbar 1 into the chest", cs.size() > 0 and cs[0] != null
+				and (cs[0] as ItemStack).id == &"soil")
 		await _shot(UserPaths.DEV + "inv_chest.png")
 		win.size = Vector2i(640, 400)
 		await _frames(10)
@@ -2388,6 +2474,51 @@ func _run_inventory_gate() -> void:
 		await _frames(10)
 		await _key(KEY_E)
 	check.call("E closes the chest", not inventory_open() and inv.chest_key == "")
+	# Stage 12: a workbench from storage put down beside the chest; RMB on it
+	# opens the Craft tab, where sandstone can now be made.
+	var wb_at := -1
+	for i in inv.main.size():
+		if inv.main[i] != null and inv.main[i].id == &"workbench":
+			wb_at = i
+	check.call("the kit has a workbench in storage", wb_at >= 0)
+	if wb_at >= 0:
+		var held0 := inv.hand()
+		inv.hotbars[inv.active_hotbar][inv.active_slot] = inv.main[wb_at]
+		inv.main[wb_at] = held0
+		inv.changed.emit()
+		_fly_to(_eye() - Vector3(0, 1.6, 0) + Vector3(1.6, 0, 0), Vector3(0, 0, -1))
+		walker.pitch = -1.45
+		await _frames(10)
+		var n0 := chests.count()
+		builder.update_target()
+		builder.place_target()
+		await _frames(5)
+		check.call("RMB with a workbench puts one down (%s near)" % str(stations_near()),
+				chests.count() == n0 + 1 and stations_near().has(&"workbench"))
+		builder.update_target()
+		builder.place_target()
+		await _frames(5)
+		check.call("RMB on the workbench opens the Craft tab", inventory_open() and _inv_screen.page == "craft")
+		if inventory_open():
+			var sand0 := _carried_count(inv, &"sandstone")
+			var sb2 := _craft_button(_inv_screen, "Sandstone", false)
+			check.call("at the workbench Sandstone can be made", sb2 != null and not sb2.disabled)
+			if sb2 != null:
+				_inv_screen.body.ensure_control_visible(sb2)
+				await _frames(3)
+				await _click(sb2.get_global_rect().get_center())
+				await _frames(3)
+			check.call("Make: 12 sand -> 12 sandstone (%d -> %d)" % [sand0, _carried_count(inv, &"sandstone")],
+					_carried_count(inv, &"sandstone") == sand0 + 12)
+			await _shot(UserPaths.DEV + "inv_workbench.png")
+			await _key(KEY_E)
+		# The workbench back into storage (the checks after count the chests).
+		for key in chests.chests.keys():
+			if chests.item_of(key) == &"workbench":
+				chests.break_chest(key, false)
+		inv.main[wb_at] = ItemStack.make(&"workbench", 1)
+		inv.hotbars[inv.active_hotbar][inv.active_slot] = held0
+		inv.changed.emit()
 	await _shot(UserPaths.DEV + "inv_chest_world.png")
 	# Saved with the world, back after generating it again.
 	_edits_dirty = true
@@ -2397,15 +2528,18 @@ func _run_inventory_gate() -> void:
 	generate(again)
 	await _frames(20)
 	inv = builder.inv
-	check.call("after generating again: granite in hotbar 2 slot 3, sand in hotbar 1 slot 9, terracotta in storage",
-			inv.hotbars[1][2] != null and inv.hotbars[1][2].id == &"granite"
-			and inv.hotbars[0][8] != null and inv.hotbars[0][8].id == &"sand"
-			and inv.main[5] != null and inv.main[5].id == &"terracotta")
+	check.call("after generating again: coal ore in hotbar 2 slot 3, chests in hotbar 1 slot 9, obsidian in storage",
+			inv.hotbars[1][2] != null and inv.hotbars[1][2].id == &"coal_ore"
+			and inv.hotbars[0][8] != null and inv.hotbars[0][8].id == &"chest"
+			and inv.main[5] != null and inv.main[5].id == &"obsidian")
 	var back: Array = chests.slots_of(ckey)
-	check.call("after generating again: the chest is there, the grass in it", chests.count() == 1
-			and back.size() > 0 and back[0] != null and (back[0] as ItemStack).id == &"grass")
+	var gun_back: ItemStack = inv.main[26]
+	check.call("after generating again: the rifle in storage, its rounds kept",
+			MineHands.is_gun(gun_back) and int(gun_back.data.get("ammo", -1)) == rounds1)
+	check.call("after generating again: the chest is there, the soil in it", chests.count() == 1
+			and back.size() > 0 and back[0] != null and (back[0] as ItemStack).id == &"soil")
 	if chests.count() == 1:
-		# A shot breaks it; the grass falls out; flying over it picks it up.
+		# A shot breaks it; the soil falls out; flying over it picks it up.
 		# Generating again put the player on foot at the spawn, maybe beside
 		# the chest: fly 2.4 m over it, out of a drop's reach.
 		var box: AABB = chests.box_of(chests.chests[ckey].block)
@@ -2415,9 +2549,9 @@ func _run_inventory_gate() -> void:
 		await _frames(10)
 		_mine(to_global(box.get_center()), Vector3.DOWN, null)
 		await _frames(5)
-		check.call("a shot breaks the chest, its grass drops (creative: not the chest)",
+		check.call("a shot breaks the chest, its soil drops (creative: not the chest)",
 				chests.count() == 0 and drops.count() == 1
-				and (drops.drops[0].stack as ItemStack).id == &"grass")
+				and (drops.drops[0].stack as ItemStack).id == &"soil")
 		await _frames(60)
 		var drop_at: Vector3 = drops.drops[0].pos if drops.count() > 0 else box.get_center()
 		check.call("the drop came to rest on the ground (%.2f m over the chest's floor)"
@@ -2427,17 +2561,17 @@ func _run_inventory_gate() -> void:
 		var had := 0
 		for a in inv.all_addrs():
 			var s := inv.get_slot(a)
-			if s != null and s.id == &"grass":
+			if s != null and s.id == &"soil":
 				had += s.count
 		_fly_to(drop_at + Vector3(0, 0.1, 0), Vector3(0, 0, -1))
 		await _frames(30)
 		var now_has := 0
 		for a in inv.all_addrs():
 			var s := inv.get_slot(a)
-			if s != null and s.id == &"grass":
+			if s != null and s.id == &"soil":
 				now_has += s.count
-		check.call("walking over it picks it up (grass %d -> %d)" % [had, now_has],
-				drops.count() == 0 and now_has == had + 64)
+		check.call("walking over it picks it up (soil %d -> %d)" % [had, now_has],
+				drops.count() == 0 and now_has > had)
 		# The ground under a second chest goes: it breaks.
 		_fly_to(box.get_center() + Vector3(0, 2.4, 0), Vector3(0, 0, -1))
 		walker.pitch = -1.45
@@ -2464,8 +2598,8 @@ func _run_inventory_gate() -> void:
 	var cinv := Inventory.new()
 	var wtext := FileAccess.get_file_as_string(_inventory_path(save_path()))
 	var wsave = JSON.parse_string(wtext)
-	check.call("the inventory is in the character file (granite in hotbar 2 slot 3)",
-			cinv.from_dict(ch.items) and cinv.hotbars[1][2] != null and cinv.hotbars[1][2].id == &"granite")
+	check.call("the inventory is in the character file (coal ore in hotbar 2 slot 3)",
+			cinv.from_dict(ch.items) and cinv.hotbars[1][2] != null and cinv.hotbars[1][2].id == &"coal_ore")
 	check.call("the world file holds only the world's (no hotbars; chests, drops, mode)",
 			wsave is Dictionary and not wsave.has("hotbar_0") and wsave.has("chests") and wsave.has("survival"))
 	# Stage 7: the world menu's Survival box, clicked.
@@ -2479,7 +2613,7 @@ func _run_inventory_gate() -> void:
 		toggle_menu()
 		await _frames(5)
 	_fly_to(_eye() - Vector3(0, 1.6, 0), Vector3(0, 0, -1))
-	inv.select_item(&"granite")
+	inv.select_item(&"coal_ore")
 	var before := inv.hand().count if inv.hand() != null else -1
 	builder.size_i = 0
 	walker.pitch = -1.0
@@ -2489,14 +2623,37 @@ func _run_inventory_gate() -> void:
 	var after := inv.hand().count if inv.hand() != null else -1
 	# One brick a stud column it fills: 4 for a 2x2 block on flat ground, fewer
 	# where the ground already stood in a column (placing only fills air).
-	check.call("survival: a 2x2 block uses granite up (%d -> %d)" % [before, after],
-			put and after < before and after >= before - 4)
+	check.call("survival: a 2x2 block uses coal ore up (%d -> %d)" % [before, after],
+			put and after < before and after >= before - 12)
 	await _frames(5)
 	builder.update_target()
 	var took: bool = builder.break_target()
 	await _frames(5)
 	var after2 := inv.hand().count if inv.hand() != null else -1
-	check.call("survival: breaking it gives granite back (%d -> %d)" % [after, after2], took and after2 > after)
+	check.call("survival: breaking it gives coal ore back (%d -> %d)" % [after, after2], took and after2 > after)
+	# Stage 11: the material's colour (V), the shape (Z), turned (R); the cost
+	# is the plate cells laid.
+	inv.select_item(&"stone")
+	await _frames(3)
+	await _key(KEY_V)
+	var lay: int = builder.lay_material(ItemCatalog.get_def(&"stone"))
+	check.call("V: stone lays its next colour (%s)" % names[lay], names[lay] == "dark stone")
+	for i in 4:
+		await _key(KEY_Z)
+	await _key(KEY_R)
+	check.call("Z x4: a 2x4 brick; R: turned (%s)" % builder.dims(), builder.dims() == Vector3i(4, 3, 2))
+	var s0: int = inv.hand().count
+	builder.update_target()
+	var laid: bool = builder.place_target()
+	await _frames(10)
+	var used: int = s0 - inv.hand().count
+	builder.update_target()
+	var looked := int(builder.target.get("material", 0))
+	check.call("a turned 2x4 dark stone brick laid: %d plate cells used (24 at most), the brick looked at is %s"
+			% [used, names[looked]], laid and used > 0 and used <= 24 and names[looked] == "dark stone")
+	await _shot(UserPaths.DEV + "inv_shapes.png")
+	builder.size_i = 0
+	builder.turned = false
 	save_edits(true)
 	var again2 := settings.duplicate(true)
 	settings = {}
@@ -2521,6 +2678,21 @@ func _inv_slot(scr: InventoryScreen, a: Dictionary, item := &"") -> InvSlot:
 		if not a.is_empty() and not slot.addr.is_empty() and slot.addr.area == a.area \
 				and slot.addr.index == a.index:
 			return slot
+	return null
+
+
+## How many of item `id` the inventory carries (the gate's crafting checks).
+func _carried_count(inv: Inventory, id: StringName) -> int:
+	return inv.count_of({"id": id, "tag": "", "count": 1})
+
+
+## The Craft page's Make (or All) button of recipe `name`, or null.
+func _craft_button(scr: InventoryScreen, name: String, all: bool) -> Button:
+	for b in scr.find_children("*", "Button", true, false):
+		var btn := b as Button
+		if btn.has_meta("recipe") and str(btn.get_meta("recipe")) == name and bool(btn.get_meta("all")) == all \
+				and not btn.is_queued_for_deletion():
+			return btn
 	return null
 
 
@@ -2773,11 +2945,17 @@ func _run_breaklag_gate() -> void:
 		if streaming:
 			_streamer.invalidate(Rect2i(t_eye + Vector2i(-3 if k % 2 == 0 else 2, -4), Vector2i(2, 9)))
 		var t0 := Time.get_ticks_usec()
+		var hid0: int = bricks.hidden_total if bricks != null else 0
 		for j in n:
 			var p := e + Vector3(1.6 + float((k * 3 + j) % 6) * 0.7, 0.0, -2.4 - floorf(float(k * 3 + j) / 6.0) * 0.7)
 			var c := Vector2i(floori(p.x / stud), floori(p.z / stud))
 			p.y = _ground_m(c.x, c.y) - 0.2
 			_mine(p, Vector3.DOWN, null)
+		# What the player sees: bricks of the brick overlay go the frame they
+		# are shot (Docs/BrickOverlay.md 6), drawn in the next picture.
+		var hid: int = (bricks.hidden_total if bricks != null else 0) - hid0
+		await RenderingServer.frame_post_draw
+		var seen_ms := (Time.get_ticks_usec() - t0) / 1000.0
 		for f in 45:
 			await get_tree().process_frame
 		var found := 0
@@ -2795,13 +2973,16 @@ func _run_breaklag_gate() -> void:
 		if _streamer.latency_log.is_empty():
 			print("[breaklag] %d brick(s): no tile swapped (missed?)" % n)
 			return
-		var row := {"n": n, "tiles": _streamer.latency_log.size(), "find": found / 1000.0,
+		var row := {"n": n, "hid": hid, "seen": seen_ms if hid >= n else -1.0,
+				"tiles": _streamer.latency_log.size(), "find": found / 1000.0,
 				"mark": (first_dirty - t0 - found) / 1000.0, "wait": (first_bake - first_dirty) / 1000.0,
 				"bake": (last_land - first_bake) / 1000.0, "swap": (last_swap - last_land) / 1000.0,
 				"total": (last_swap - t0) / 1000.0}
 		rows.append(row)
-		print("[breaklag] %d brick(s), %d tile(s): found %.0f ms, marked +%.0f, bake started +%.0f, baked +%.0f, swapped +%.0f = %.0f ms" % [
-				n, row.tiles, row.find, row.mark, row.wait, row.bake, row.swap, row.total])
+		print("[breaklag] %d brick(s), %d tile(s): found %.0f ms, marked +%.0f, bake started +%.0f, baked +%.0f, swapped +%.0f = %.0f ms; %s" % [
+				n, row.tiles, row.find, row.mark, row.wait, row.bake, row.swap, row.total,
+				"SEEN GONE in %.0f ms (the overlay hid %d of %d)" % [seen_ms, hid, n] if hid >= n
+				else "seen with the tile (the overlay hid %d of %d)" % [hid, n]])
 	for k in 12:
 		await shoot.call(k, 1)
 	for k in 4:
@@ -2810,10 +2991,17 @@ func _run_breaklag_gate() -> void:
 		var sum := {}
 		var worst := 0.0
 		var cnt := 0
+		var seen_sum := 0.0
+		var seen_n := 0
+		var seen_worst := 0.0
 		for r in rows:
 			if int(r.n) != n:
 				continue
 			cnt += 1
+			if float(r.seen) >= 0.0:
+				seen_n += 1
+				seen_sum += float(r.seen)
+				seen_worst = maxf(seen_worst, float(r.seen))
 			worst = maxf(worst, float(r.total))
 			for k in ["find", "mark", "wait", "bake", "swap", "total"]:
 				sum[k] = float(sum.get(k, 0.0)) + float(r[k])
@@ -2821,6 +3009,8 @@ func _run_breaklag_gate() -> void:
 			continue
 		print("[breaklag] %d brick(s), mean of %d: found %.0f, marked +%.0f, bake started +%.0f, baked +%.0f, swapped +%.0f = %.0f ms (worst %.0f)" % [
 				n, cnt, sum.find / cnt, sum.mark / cnt, sum.wait / cnt, sum.bake / cnt, sum.swap / cnt, sum.total / cnt, worst])
+		print("[breaklag] %d brick(s): seen gone in %.0f ms mean (worst %.0f) in %d of %d, the brick overlay hiding them at the shot" % [
+				n, seen_sum / maxf(1.0, seen_n), seen_worst, seen_n, cnt])
 	_streamer.log_latency = false
 	print("[breaklag] done")
 	get_tree().quit()
@@ -2983,11 +3173,6 @@ func _gpu_tree_tier(tier: String) -> Array:
 	return out
 
 
-## The near tiles' chamfered surfaces (shown up close instead of the flat ones).
-func _gpu_chamfered() -> Array:
-	return _streamer.find_children("SurfaceChamfered", "MeshInstance3D", true, false)
-
-
 var _gpu_far_mats := {}
 
 func _gpu_far_plain(on: bool) -> void:
@@ -3037,7 +3222,6 @@ func _gpu_toggles() -> Array:
 	t.append(["near trees hidden", func(): _gpu_hide(_gpu_tree_tier("near")), _gpu_back])
 	t.append(["near tiles hidden", func(): _gpu_hide([_streamer]), _gpu_back])
 	t.append(["studs/tufts/pebbles hidden", func(): _gpu_hide(_gpu_instances()), _gpu_back])
-	t.append(["chamfered near mesh hidden", func(): _gpu_hide(_gpu_chamfered()), _gpu_back])
 	if bricks != null and _overlay_on:
 		# The brick overlay (Docs/BrickOverlay.md 5): its boxes and the sunken
 		# flat ground, against the flat ground alone.
@@ -3354,7 +3538,6 @@ func _run_stop_gate() -> void:
 	var w := {}
 	var tw := Time.get_ticks_msec()
 	var built0 := _streamer.built_count()
-	var bev0 := _streamer.bevels_added
 	var far0 := _far.applies
 	var deep0 := _deep.built
 	while Time.get_ticks_msec() - tw < 8000:
@@ -3385,13 +3568,11 @@ func _run_stop_gate() -> void:
 		var el := Time.get_ticks_msec() - tw
 		if el >= (windows.size() + 1) * 250:
 			w["built"] = _streamer.built_count() - built0
-			w["bev"] = _streamer.bevels_added - bev0
 			w["far_n"] = _far.applies - far0
 			w["deep_n"] = _deep.built - deep0
 			w["lava"] = water.lava_lights()
 			w["wtiles"] = water.drawn
 			built0 = _streamer.built_count()
-			bev0 = _streamer.bevels_added
 			far0 = _far.applies
 			deep0 = _deep.built
 			windows.append(w)
@@ -3400,10 +3581,10 @@ func _run_stop_gate() -> void:
 		var x: Dictionary = windows[i]
 		print("[mine-stop] %4.2f s  tris %.2fM sh %.2fM draws %.1fk lava %d wtiles %d" % [(i + 1) * 0.25,
 				x.tris, x.get("sh", 0.0), x.get("draws", 0.0), x.lava, x.wtiles])
-		print("[mine-stop] %4.2f s  worst %5.1f mean %4.1f gpu %4.1f | worst frame: process %4.1f scripts %4.1f step %4.1f draw %4.1f; near %4.1f deep %4.1f far %4.1f trees %4.1f water %4.1f collapse %4.1f | water max %4.1f | built %d bevel %d far %d deep %d"
+		print("[mine-stop] %4.2f s  worst %5.1f mean %4.1f gpu %4.1f | worst frame: process %4.1f scripts %4.1f step %4.1f draw %4.1f; near %4.1f deep %4.1f far %4.1f trees %4.1f water %4.1f collapse %4.1f | water max %4.1f | built %d far %d deep %d"
 				% [(i + 1) * 0.25, x.worst, x.sum / maxf(x.n, 1), x.gpu, x.process, x.scripts, x.step,
-				x.draw, x.near, x.deep, x.far, x.trees, x.water, x.coll, x.water_max, x.built, x.bev, x.far_n, x.deep_n])
-	print("[mine-stop] %s | bevel hand-over worst %.1f ms | water %s" % [_streamer.report(), _streamer.bevel_ms, water.report()])
+				x.draw, x.near, x.deep, x.far, x.trees, x.water, x.coll, x.water_max, x.built, x.far_n, x.deep_n])
+	print("[mine-stop] %s | water %s" % [_streamer.report(), water.report()])
 	get_tree().quit()
 
 
@@ -4604,6 +4785,22 @@ func _run_water_gate() -> void:
 	await _shot(dev + "water_lava.png")
 	print("[water-gate] pond holds %d tiles (128 poured), lava laid %d rock cells" % [
 			_pond_units(o, w), water.rock_laid])
+	# The pond made a lake (S3, Docs/MineWaterNext.md R1): sources in every
+	# cell, its open top rides a small wave, bigger away from its rim.
+	for x in range(5, 13):
+		for z in range(5, 13):
+			BrickFluid.place(Vector3i(o.x + x, w, o.y + z), 1, BrickFluid.SOURCE, 3)
+	water.step(5)
+	look.call(pm.call(16.0, w + 3.0, 16.0), pm.call(9.0, w, 9.0))
+	await _frames(40)
+	await _shot(dev + "water_lake.png")
+	await _frames(30)
+	await _shot(dev + "water_lake_later.png")
+	var lake_at := Vector3((o.x + 9.5) * stud, (w + 1) * course, (o.y + 9.5) * stud)
+	var lw0: float = water.surface_at(lake_at)
+	await _frames(20)
+	print("[water-gate] lake: surface at its middle %.3f then %.3f m (flat top %.3f)" % [
+			lw0, water.surface_at(lake_at), (w + 1) * course])
 
 	# The stream cut off: it drains to its hollows, then dries.
 	BrickFluid.remove(src_a, -1)
@@ -4773,6 +4970,26 @@ func _run_water_gate() -> void:
 	# never unloaded).
 	var pt := Vector2i(floori(float(o.x) / 32.0), floori(float(o.y) / 32.0))
 	var home := _eye()
+	# Water drops at the chosen terrain LOD (Options > Video > Water Drops
+	# At): 160 m off, the platform's ground is coarse (LOD 1): at the default
+	# (drop at LOD 2) its water still shows; set to drop at LOD 1, it goes.
+	var W := Water
+	_fly_to(home + Vector3(160, 0, 0), Vector3(1, 0, 0))
+	var lw := 0
+	while lw < 900 and _streamer.has_tile(pt):
+		await get_tree().process_frame
+		lw += 1
+	await _frames(60)
+	var shown_lod2: bool = water.has_tile_drawn(pt)
+	var bare2: int = water.drawn_on_bare()
+	W.drop_lod = 1
+	await _frames(60)
+	var shown_lod1: bool = water.has_tile_drawn(pt)
+	W.drop_lod = -1
+	await _frames(60)
+	print("[water-gate] water LOD: 160 m off (ground LOD %d), platform water drawn at drop LOD 2 %s (want true), at LOD 1 %s (want false), back %s; past the drop LOD %d (want 0)" % [
+			Water.tile_lod(pt, Vector2i(floori(_eye().x / (32.0 * stud)), floori(_eye().z / (32.0 * stud))), _streamer),
+			shown_lod2, shown_lod1, water.has_tile_drawn(pt), bare2])
 	_fly_to(home + Vector3(400, 0, 0), Vector3(1, 0, 0))
 	var waited := 0
 	while waited < 900 and (_streamer.has_tile(pt) or water.has_tile_drawn(pt)):
@@ -4950,6 +5167,19 @@ func _run_sea_gate() -> void:
 	await _frames(2)
 	await _shot(dev + "sea_pillar_big_tint.png")
 	water._water_mat.set_shader_parameter("debug_band", false)
+	# No bricks on water (R3, decision A): one laid sideways off the pillar
+	# over deep water is refused; one on the sea floor goes.
+	var size0: int = builder.size_i
+	builder.size_i = 1          # the 1x1 brick (MineBuilder.SHAPES)
+	var deep_to := Vector3i(pc.x + 2, sea_b - 1, pc.y)
+	var fx := pc.x + 5
+	var fp := BrickTerrain.surface_plate(fx, pc.y)
+	var floor_to := Vector3i(fx, floori(fp / 3.0) + (1 if posmod(fp, 3) == 2 else 0), pc.y)
+	var refused: bool = builder.floats_on_water(deep_to)
+	var allowed: bool = not builder.floats_on_water(floor_to)
+	builder.size_i = size0
+	print("[sea-gate] no bricks on water: sideways over deep water refused %s, on the sea floor allowed %s" % [
+			refused, allowed])
 	water.sea.wave_gain = gain0
 	water.sea.push_waves()
 	# A river mouth: a river column under the sea line near the coast.
@@ -5745,6 +5975,123 @@ func _build_gate_room() -> Array:
 	return [o, b, t_min]
 
 
+## -- --gate=buildings (Docs/TerrainBuildings.md, stage 1): a city tower
+## written INTO the ground (MineBuildings.stamp), then looked at near, from
+## 40 m and from 120 m (pictures mine_building_near/mid/far.png), shot (its
+## wall brick hidden the frame it is hit, as the ground's are), and dug out
+## from under half its footprint: what is cut loose falls (ground_collapse),
+## pictures mine_building_dug.png / _fallen.png. `--floors=N` (1-10, 6).
+func _run_buildings_gate() -> void:
+	await _frames(10)
+	var dev := UserPaths.DEV
+	DirAccess.make_dir_recursive_absolute(dev)
+	_time = 0.42
+	set_on_foot(false)
+	view.process_mode = Node.PROCESS_MODE_DISABLED
+	view.rig.visible = false
+	if view.arms != null:
+		view.arms.visible = false
+	_hud_layer.visible = false
+	if kit != null:
+		for layer: CanvasLayer in [kit.hud, kit._aggro_layer]:
+			if layer != null:
+				layer.visible = false
+	var fails := 0
+	var check := func(ok: bool, what: String) -> void:
+		print("[mine-buildings] %s  %s" % ["ok  " if ok else "FAIL", what])
+	var floors := 6
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--floors="):
+			floors = clampi(int(a.get_slice("=", 1)), 1, 10)
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var e := _eye()
+	var p := {"x": 20, "z": 20, "courses": floors * TowerRecipe.COURSES_PER_FLOOR, "rooms": true,
+			"windows": true, "stairs": true}
+	var corner := Vector2i(floori(e.x / stud) + 14, floori(e.z / stud) - 10)
+	var t0 := Time.get_ticks_usec()
+	var info: Dictionary = MineBuildings.stamp(self, corner, p)
+	var stamp_ms := (Time.get_ticks_usec() - t0) / 1000.0
+	_flush_edits()
+	var base: int = info.base
+	var lo: Vector3i = info.lo
+	var hi: Vector3i = info.hi
+	print("[mine-buildings] %d floors, 20 x 20 studs: %d bricks, %d cells (%d course cells kept as placed bricks), base plate %d (ground %d..), %.1f m tall; stamped in %.0f ms"
+			% [floors, info.bricks, info.cells, info.placed, base, info.ground, (hi.y - base + 1) * plate, stamp_ms])
+	var ok: bool = int(info.cells) > 1000
+	check.call(ok, "the tower is in the ground (%d cells)" % int(info.cells))
+	fails += 0 if ok else 1
+	# It is ground now: the field says so.
+	var mid_cell := Vector3i(lo.x, base + 6, lo.z + 10)
+	ok = BrickTerrain.solid_at(mid_cell.x, mid_cell.y, mid_cell.z) != 0
+	check.call(ok, "its wall is solid ground (BrickTerrain.solid_at)")
+	fails += 0 if ok else 1
+	var centre := Vector3((lo.x + 10) * stud, base * plate, (lo.z + 10) * stud)
+	var height := (hi.y - base + 1) * plate
+	var cam0 := get_viewport().get_camera_3d()
+	var cam := Camera3D.new()
+	add_child(cam)
+	cam.attributes = cam0.attributes
+	cam.near = 0.05
+	cam.fov = cam0.fov
+	cam.current = true
+	var shoot_pic := func(tag: String, from: Vector3, at: Vector3) -> void:
+		cam.global_transform = Transform3D(Basis(), to_global(from)).looking_at(to_global(at))
+		_streamer.settle(Vector2(from.x, from.z))
+		await _frames(30)
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png(dev + "mine_building_%s.png" % tag)
+	var look := centre + Vector3(0, height * 0.45, 0)
+	await shoot_pic.call("near", centre + Vector3(-12.0, 1.8, -9.0), centre + Vector3(0, 3.0, 0))
+	await shoot_pic.call("mid", centre + Vector3(-40.0, 6.0, -22.0), look)
+	await shoot_pic.call("far", centre + Vector3(-110.0, 25.0, -60.0), look)
+	# A shot at its west wall, 3 m up, from outside.
+	cam.global_transform = Transform3D(Basis(), to_global(centre + Vector3(-12.0, 3.0, 0))).looking_at(
+			to_global(Vector3(lo.x * stud, base * plate + 3.0, centre.z)))
+	_streamer.settle(Vector2(centre.x - 12.0, centre.z))
+	await _frames(20)
+	var hid0: int = bricks.hidden_total if bricks != null else 0
+	var wall_at := Vector3(lo.x * stud - 0.01, base * plate + 3.0, centre.z)
+	_mine(to_global(wall_at), Vector3(1, 0, 0), null)
+	ok = bricks != null and bricks.hidden_total == hid0 + 1
+	check.call(ok, "a shot at its wall hides the brick the frame it is hit")
+	fails += 0 if ok else 1
+	await _frames(20)
+	ok = BrickTerrain.solid_at(lo.x, roundi(3.0 / plate) + base, roundi(centre.z / stud)) == 0
+	check.call(ok, "and the field has the hole")
+	fails += 0 if ok else 1
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png(dev + "mine_building_shot.png")
+	# DIG out the ground under its west half: the foundation and the ground
+	# under it, down past the lowest ground, so the west half hangs.
+	var let0: int = collapse.groups_let_go
+	var bricks0: int = collapse.bricks_let_go
+	var g_lo := Vector3i(lo.x - 2, int(info.ground) - 12, lo.z - 2)
+	# `--dig-all`: the whole footprint, so nothing but its own bricks hold it.
+	var g_hi := Vector3i((hi.x + 2) if "--dig-all" in OS.get_cmdline_user_args() else (lo.x + 9), base - 1, hi.z + 2)
+	terrain_edited(BrickTerrain.fill_box(g_lo, g_hi, 0, false))
+	_flush_edits()
+	cam.global_transform = Transform3D(Basis(), to_global(centre + Vector3(-34.0, 8.0, -26.0))).looking_at(
+			to_global(centre + Vector3(0, height * 0.3, 0)))
+	_streamer.settle(Vector2(centre.x - 34.0, centre.z - 26.0))
+	await _frames(10)
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png(dev + "mine_building_dug.png")
+	for f in 360:
+		await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png(dev + "mine_building_fallen.png")
+	var let := collapse.groups_let_go - let0
+	var fell := collapse.bricks_let_go - bricks0
+	print("[mine-buildings] dug under %s: %d piece(s), %d brick(s) let go; %s" % ["all of it" if "--dig-all" in OS.get_cmdline_user_args()
+			else "its west half", let, fell, collapse.readout()])
+	ok = let > 0 and fell > 0
+	check.call(ok, "cut loose, it falls (%d pieces, %d bricks)" % [let, fell])
+	fails += 0 if ok else 1
+	print("[mine-buildings] %s" % ["PASS" if fails == 0 else "%d FAILED" % fails])
+	get_tree().quit()
+
+
 ## -- --gate=bricks: THE BRICK OVERLAY (Docs/BrickOverlay.md 4, stage 2). The
 ## stone room (_build_gate_room) roofed over, seen from inside (its corners,
 ## walls, floor and roof edges at the normal lens) and the open ground
@@ -5772,7 +6119,7 @@ func _run_bricks_gate() -> void:
 	var check := func(passed: bool, what: String) -> void:
 		print("[mine-bricks] %s  %s" % ["ok  " if passed else "FAIL", what])
 	if bricks == null or not _overlay_on:
-		print("[mine-bricks] FAIL  the overlay is off (Chamfered brick edges off, or --old-chamfer)")
+		print("[mine-bricks] FAIL  the overlay is off (Chamfered brick edges off)")
 		get_tree().quit()
 		return
 	var stud := BrickWorld.get_stud_metres()
@@ -5948,6 +6295,24 @@ func _run_bricks_gate() -> void:
 	await _frames(4)
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png(dev + "mine_bricks_shot_later.png")
+	# A FAR shot, past the laid bricks (~20 m): found in the tiles' own lists,
+	# hidden at once the same way (TerrainBricks._hide_far).
+	var far_at := to_local(cam.global_position) + Vector3(-cam.global_transform.basis.z.x, 0.0,
+			-cam.global_transform.basis.z.z).normalized() * 20.0
+	var fc := Vector2i(floori(far_at.x / stud), floori(far_at.z / stud))
+	var far_shot := Vector3((fc.x + 0.5) * stud, _ground_m(fc.x, fc.y) - 0.02, (fc.y + 0.5) * stud)
+	var far0 := bricks.far_hidden
+	_mine(to_global(far_shot), Vector3.DOWN, null)
+	ok = bricks.far_hidden == far0 + 1
+	check.call(ok, "a far brick (%.0f m) is hidden the frame it is hit" % to_local(cam.global_position).distance_to(far_shot))
+	fails += 0 if ok else 1
+	waited = 0
+	while not bricks.holes.is_empty() and waited < 300:
+		await get_tree().process_frame
+		waited += 1
+	ok = bricks.holes.is_empty()
+	check.call(ok, "its hole handed to the rebuilt tile (%d frames)" % waited)
+	fails += 0 if ok else 1
 	print("[mine-bricks] %s; %s" % ["PASS" if fails == 0 else "%d FAILED" % fails, bricks.readout()])
 	get_tree().quit()
 
@@ -6068,18 +6433,14 @@ func _run_seams_gate() -> void:
 		_streamer.invalidate(Rect2i(-(1 << 20), -(1 << 20), 1 << 21, 1 << 21))
 		_streamer.settle(Vector2(mid.x, mid.z))
 		await _frames(90)
-	# With the brick overlay (Docs/BrickOverlay.md) the chamfer is its real
-	# bricks over the sunken flat ground, and the old near tier stays off;
-	# without it (-- --old-chamfer), the old near tier.
-	TerrainTile.bevel_enabled = false
+	# The chamfer is the brick overlay's real bricks over the sunken flat
+	# ground (Docs/BrickOverlay.md): off, then on.
 	if _overlay_on:
 		bricks.set_enabled(false)
 	await settle.call()
 	var off: Array = await count.call("off")
 	if _overlay_on:
 		bricks.set_enabled(true)
-	else:
-		TerrainTile.bevel_enabled = true
 	await settle.call()
 	var on: Array = await count.call("on")
 	# Both tiers whole: the chamfer's slits and the flat tier's T-junction
@@ -6281,9 +6642,8 @@ func _run_seams_deep() -> void:
 	if "--at-top" in OS.get_cmdline_user_args():
 		b = floori(float(dtop - 9) / 3.0) * 3
 	print("[mine-seams] deep_top %d, ground %d..%d, hall floor %d" % [dtop, t_min, t_max, b])
-	if "--flat" in OS.get_cmdline_user_args():
-		TerrainTile.bevel_enabled = false
-		_streamer.invalidate(Rect2i(-(1 << 20), -(1 << 20), 1 << 21, 1 << 21))
+	if "--flat" in OS.get_cmdline_user_args() and bricks != null:
+		bricks.set_enabled(false)
 	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x - 1, b - 3, o.y - 1), Vector3i(o.x + 14, b + 20, o.y + 42), 4, true))
 	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x, b, o.y), Vector3i(o.x + 13, b + 17, o.y + 41), 0, false))
 	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x + 6, b + 18, o.y + 20), Vector3i(o.x + 6, t_max + 6, o.y + 20), 0, false))
@@ -6362,7 +6722,7 @@ func _run_seams_deep() -> void:
 		if n > worst:
 			worst = n
 			img.save_png(dev + "mine_seams_deep.png")
-	print("[mine-seams] deep hall: %d sections drawn, floor plate %d (%d under the ground), chamfer %s, overlay %s" % [_deep._secs.size(), b, t_min - b, TerrainTile.bevel_enabled,
+	print("[mine-seams] deep hall: %d sections drawn, floor plate %d (%d under the ground), overlay %s" % [_deep._secs.size(), b, t_min - b,
 			bricks.readout() if _overlay_on else "off"])
 	print("[mine-seams] %s  deep: magenta %d px over %d views (%d views with any, worst %d)"
 			% ["PASS" if total == 0 else "FAIL", total, views.size(), hit, worst])

@@ -27,7 +27,10 @@ var drops: DroppedItems = null
 var inv: Inventory = null
 ## The mine world's sky light on things (Docs/MineWorld.md 19), or null.
 var sky: MineSkyLit = null
-## key "x,y,z" (block) -> {"block": Vector3i, "slots": Array, "node": Node3D}
+## key "x,y,z" (block) -> {"block": Vector3i, "slots": Array, "node": Node3D,
+## "item": the item it is}. Not only chests: a crafting STATION (a workbench,
+## a furnace; Docs/Inventory.md 12) is placed, kept, saved and broken the same
+## way, with no slots; `stations_near` says which are in reach.
 var chests := {}
 var _stud := 0.35
 var _plate := 0.14
@@ -98,27 +101,49 @@ func can_place(block: Vector3i) -> bool:
 
 
 ## A chest at `block`, empty (or holding `slots`). False if it does not fit.
-func place(block: Vector3i, slots: Array = [], force := false) -> bool:
+func place(block: Vector3i, slots: Array = [], force := false, item: StringName = &"chest") -> bool:
 	if not force and not can_place(block):
 		return false
 	var key := key_of(block)
 	if chests.has(key):
 		return false
 	var s := slots
-	if s.size() != Inventory.CHEST_SIZE:
+	if not is_container(item):
+		s = []
+	elif s.size() != Inventory.CHEST_SIZE:
 		s = Inventory._empty(Inventory.CHEST_SIZE)
-	var node := _node(block)
+	var node := _node(block, item)
 	add_child(node)
 	if sky != null:
 		sky.sky_lit_model(node)
 		sky.track(node)
-	chests[key] = {"block": block, "slots": s, "node": node}
+	chests[key] = {"block": block, "slots": s, "node": node, "item": item}
 	_changed()
 	return true
 
 
 func slots_of(key: String) -> Array:
 	return chests[key].slots if chests.has(key) else []
+
+
+static func is_container(item: StringName) -> bool:
+	return ItemCatalog.kind(item) == "chest"
+
+
+func item_of(key: String) -> StringName:
+	return chests[key].get("item", &"chest") if chests.has(key) else &""
+
+
+## The stations (item ids) standing within `reach` metres of `p` (terrain
+## frame): what the crafting list may use (Docs/Inventory.md 12).
+func stations_near(p: Vector3, reach := 4.0) -> Array:
+	var out: Array = []
+	for key in chests:
+		var it: StringName = chests[key].get("item", &"chest")
+		if ItemCatalog.kind(it) == "station" and not out.has(it) \
+				and box_of(chests[key].block).get_center().distance_to(p) <= reach:
+			out.append(it)
+	return out
 
 
 ## The nearest chest along a ray (terrain frame) within `reach`:
@@ -171,7 +196,7 @@ func break_chest(key: String, drop_self: bool) -> void:
 	rng.seed = hash(key)
 	var all: Array = (c.slots as Array).filter(func(s): return s != null)
 	if drop_self:
-		all.append(ItemStack.make(&"chest", 1))
+		all.append(ItemStack.make(c.get("item", &"chest"), 1))
 	for s in all:
 		if drops != null:
 			var v := Vector3(rng.randf_range(-1.2, 1.2), rng.randf_range(2.0, 3.5), rng.randf_range(-1.2, 1.2))
@@ -204,7 +229,7 @@ func _changed() -> void:
 		host.world_items_changed()
 
 
-func _node(block: Vector3i) -> Node3D:
+func _node(block: Vector3i, item: StringName = &"chest") -> Node3D:
 	var box := box_of(block)
 	var root := StaticBody3D.new()
 	root.name = "Chest_%s" % key_of(block).replace(",", "_").replace("-", "m")
@@ -216,7 +241,7 @@ func _node(block: Vector3i) -> Node3D:
 	bs.size = box.size
 	shape.shape = bs
 	root.add_child(shape)
-	var m := ItemIcons._model(ItemCatalog.get_def(&"chest"))
+	var m := ItemIcons._model(ItemCatalog.get_def(item))
 	# The model is fitted to 1.0 on its longest side: fit it inside the block.
 	var aabb := _model_aabb(m)
 	var k := minf(box.size.x / maxf(aabb.size.x, 0.001), minf(box.size.y / maxf(aabb.size.y, 0.001),
@@ -246,7 +271,8 @@ static func _model_aabb(m: Node3D) -> AABB:
 func to_save() -> Dictionary:
 	var out := {}
 	for key in chests:
-		out[key] = Inventory._save_array(chests[key].slots)
+		out[key] = {"item": String(chests[key].get("item", &"chest")),
+				"slots": Inventory._save_array(chests[key].slots)}
 	return out
 
 
@@ -258,6 +284,15 @@ func restore(saved) -> void:
 		var parts := str(key).split(",")
 		if parts.size() != 3:
 			continue
+		# A chest from before stations was its slots alone.
+		var e = saved[key]
+		var item := &"chest"
+		var raw = e
+		if e is Dictionary:
+			item = StringName(str(e.get("item", "chest")))
+			raw = e.get("slots", [])
+		if not ItemCatalog.has(item):
+			continue
 		var slots := Inventory._empty(Inventory.CHEST_SIZE)
-		Inventory._load_array(slots, saved[key])
-		place(Vector3i(int(parts[0]), int(parts[1]), int(parts[2])), slots, true)
+		Inventory._load_array(slots, raw)
+		place(Vector3i(int(parts[0]), int(parts[1]), int(parts[2])), slots, true, item)

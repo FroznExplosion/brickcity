@@ -164,8 +164,8 @@ func _ready() -> void:
 			_seed = int(loaded["seed"])
 		_drowned = float(loaded.get("drowned", DROWNED))
 		_load_status = "loaded %s" % _world_path
-	# The geometry chamfer near the camera (Terrain.md 22.13) is on wherever
-	# there is ground: TerrainTile.bevel_enabled, not a line here.
+	# Real bevels near the camera: the brick overlay the streamer makes
+	# (TerrainBricks, Docs/BrickOverlay.md), on wherever there is ground.
 
 	# The sea was chosen from the terrain by loading the world, before its
 	# pads were cut — TerrainWorld.sea_level, the one every scene agrees on.
@@ -1330,8 +1330,8 @@ func _run_slope_shots() -> void:
 		["down", at + Vector3(-12.0, 14.0, -12.01), at + Vector3(-12.0, 0.0, -12.0)],
 	]
 	var curve := 0.25
-	if "--nobevel" in OS.get_cmdline_user_args():
-		TerrainTile.bevel_enabled = false
+	if "--nobevel" in OS.get_cmdline_user_args() and _streamer != null and _streamer.bricks != null:
+		_streamer.bricks.set_enabled(false)
 	if "--lodview" in OS.get_cmdline_user_args():
 		set_lod_view(true)
 	for arg in OS.get_cmdline_user_args():

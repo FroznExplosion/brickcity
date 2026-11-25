@@ -145,10 +145,35 @@ have needed work before.
 - **W1** read the ground from the terrain's kept cells (after TerrainRegions
   stage A): `sample_column` stops working out noise per column (a first read
   10-13 us; the real-sea square ~12 ms a tile; springs ~10 ms a tile).
-- **W2** re-measure the tick in a release build, editor closed (2026-11-17:
-  885 ns a flowing cell, 173 ns a still cell) before adding levelling.
-- **W3** far written or wet sections kept in their save form, expanded when
-  the player comes back (today they stay in memory for good).
+- **W2 -- measured 2026-11-24**, editor closed, nothing else running, started under 75 C
+  (`fluid_bench_probe`). Release library (template_release, the worktree's .gdextension
+  pointed at it for the run) and the usual debug one, which is /O2 too, come out the same
+  within heat noise -- the debug build is the game's real number:
+
+  | | release | debug |
+  |---|---|---|
+  | flood, 64 sources (rules a cell) | 943 ns | 776 ns |
+  | spill, 10k bricks (rules a cell) | 223 ns | 186 ns |
+  | spill: mean / worst busy tick | 32.8 / 105 ms | 27.7 / 89 ms |
+  | spill: meshing share of the tick | 66 % (0.91 ms a tile) | 77 % (0.78 ms a tile) |
+  | calm world, a tick | 0.038 ms | 0.033 ms |
+
+  The same as 2026-11-17 (885 / 173 ns). **The rules are not the cost: meshing is** -- two
+  thirds or more of a busy tick, ~0.8 ms a tile re-meshed. That is where to look before
+  anything else (fewer re-meshes a tick for slow changes, cheaper tops), not the cells.
+- **W3 -- done 2026-11-24.** Past 1.5 x the sim radius plus a tile (~112 m;
+  was 2 x), with nothing queued: a section never written -- dry, or only the
+  generated sea, lakes, pools -- is let go (sampled afresh if asked); a written
+  one is PARKED: only its cells that differ from the generated world, sorted
+  by column (`g_parked`, ~5 bytes a cell), put back as each column is sampled
+  again (`Section::pending`). The save writes parked cells as they are; the
+  main thread's reads (`rcell`) see them. `--gate=mem` (the terrain chat's
+  probe, a second leg added): 1,359 sections / 122 MB after a 480 m flight
+  over sea before; now 629 / 56 MB, and 566 / 51 MB after a second 480 m --
+  level, not growing; 14 parked sections, 3 KB. `fluid_probe` 13. Seen: far
+  water meshes read only existing sections, so water let go past ~112 m is
+  drawn again once back within the sim ring (as unvisited water always was;
+  the sea is the tiers').
 - **W4** (optional) still tops as packed brick pieces (the region fit).
 
 ## 7. Stages, in order
@@ -165,13 +190,38 @@ have needed work before.
    Was: **S2** R9: full still water beside a source becomes source (decision B).
    Probe: a source bucket into a brim-full pond makes it heal like a lake; a
    half-full pond does not turn.
-5. **S3** R1/R2: waves on lakes and rivers; `surface_at`, floaters and
+5. **S3 -- done 2026-11-24 (lakes).** An infinite body's open top -- a water source not of
+   the open sea, a full course, open to the sky -- is a piece a stud riding a small wave at
+   its middle (`lake_wave` in brick_fluid.cpp and water_fluid.gdshader, the same two sines on
+   MineWater's clock: `now_s` / `BrickFluid.set_wave_clock`), 0.09 m at most, ramped over 5
+   studs from the body's rim (`lake_amp`: a lone source, a channel, a rim stays flat and
+   merged). `BrickFluid.surface_at` gives that wave from the water or the crest over it, so
+   swimmers and floaters ride it (MineWater.fluid_at counts under a crest as water);
+   `ray_cell` through a crest hits the source under it (R2). Rivers at the sea's level were
+   the sea band's already. `fluid_probe` 14, `water_lake*.png` in `--gate=water`.
+   Was: **S3** R1/R2: waves on lakes and rivers; `surface_at`, floaters and
    swimming on every body; the bucket on a crest or trough. Gate pictures of
    a lake; a probe for the bucket's aim at a crest.
-6. **S4** R3/R4: no placing on water (decision A); the beach on lakes and
+6. **S4 -- done 2026-11-24.** R3: a block put where water or lava is must stand on ground
+   under it or hang under ground over it (`MineBuilder.floats_on_water`; decision A: up or
+   down only) -- laid sideways off a shore over water it is refused (it held nothing and
+   fell). R4: where a brick goes it takes the water's place; a lake's waves calm beside it
+   (the wave's ramp counts any brick as rim), so it reads as shore; broken, the body heals
+   (two sources beside it and ground or source under it: the middle and the shore both,
+   `fluid_probe` 14). The sea's own lapping band (11.9) stays the sea's. Sea gate: the
+   `no bricks on water` line.
+   Was: **S4** R3/R4: no placing on water (decision A); the beach on lakes and
    rivers; a removed brick heals. Probe: place on water refused; a 1x1 hole
    and a shore hole refill.
-7. **W2** the tick measured, then **P** levelling by bodies (section 4).
+7. **W2 -- done** (section 6). **P -- done 2026-11-24.** A still cell resting on full still
+   water seeds its body (`g_level_due`); 2 s calm, the body (connected still cells, at most
+   4,096) is levelled: its units laid again from the lowest floor up, a unit layer at a time,
+   through every opening (a priority flood over the cells' floors), only changed cells
+   written. Left alone when open (a cell found lower than the level: the rules run it),
+   joined to running or infinite water, or too big. That tick's earlier sets and moves on
+   levelled cells are dropped (the apply keeps a cell's FIRST set: an edge-distance update
+   had won and two units went). `fluid_probe` 15: a U-bend fills both arms to one level,
+   48 of 48 units.
 8. **W1** after TerrainRegions stage A; **W3**; **R10** rain and **W4** with
    the user.
 

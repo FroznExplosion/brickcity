@@ -8,7 +8,8 @@ extends RefCounted
 ## Windowed (video memory is only real with a renderer); the gate's own save
 ## folder, so the player's world is never touched. Run by MineWorld's
 ## --gate=mem: the spawn settled, then a flight of ~480 m along X and a
-## settle, then a few shots so the edit table is not empty.
+## settle, then a few shots so the edit table is not empty; a second 480 m
+## for the water's sections (they must level off).
 ##
 ## For each part of the world (the scene's children: Streamer = the near
 ## tiles, Deep = the cave sections, Far = the coarse rings, Trees, Bricks =
@@ -73,6 +74,17 @@ func run(world: Node3D) -> void:
 	_report("after a 480 m flight")
 	_runs_report()
 	_textures()
+	# Twice as far: the water's sections must level off, not grow with the
+	# distance flown (W3, Docs/MineWaterNext.md 6: wet sections far away are
+	# let go or parked).
+	var from2 := w.global_position
+	for i in 600:
+		w.global_position = from2 + Vector3(1.0, 0.0, 0.2) * float(i) * 0.8
+		await world.get_tree().process_frame
+	await _settle(420)
+	var f2: Dictionary = BrickFluid.memory_stats()
+	print("[mem] after a second 480 m: C++ water %d sections, %.2f MB (%d parked, %.3f MB)" % [f2.sections,
+			f2.bytes / 1e6, int(f2.get("parked", 0)), int(f2.get("parked_bytes", 0)) / 1e6])
 	# Underground, so the deep tier (cave sections) is drawn and counted.
 	var e: Vector3 = w.global_position
 	var top := BrickTerrain.surface_plate(floori(e.x / stud), floori(e.z / stud)) * BrickWorld.get_plate_metres()
@@ -209,8 +221,9 @@ func _report(when: String) -> void:
 			m.packs_bytes / 1e6, m.packs_pieces, m.piece_bytes])
 	print("[mem] C++ edit table: %d edits, %.3f MB (tables kept for readers included)" % [m.edits, m.edits_bytes / 1e6])
 	var f: Dictionary = BrickFluid.memory_stats()
-	print("[mem] C++ water: %d sections, %.2f MB (%d ever written, %d wet; %d evicted so far)" % [f.sections,
-			f.bytes / 1e6, f.written, f.wet, int(BrickFluid.stats().get("evicted", 0))])
+	print("[mem] C++ water: %d sections, %.2f MB (%d ever written, %d wet; %d evicted so far; %d parked, %.3f MB)" % [f.sections,
+			f.bytes / 1e6, f.written, f.wet, int(BrickFluid.stats().get("evicted", 0)), int(f.get("parked", 0)),
+			int(f.get("parked_bytes", 0)) / 1e6])
 	print("[mem] Godot static %.1f MB; video %.1f MB (textures %.1f, buffers %.1f); objects %d, nodes %d, resources %d" % [
 			Performance.get_monitor(Performance.MEMORY_STATIC) / 1e6,
 			Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED) / 1e6,

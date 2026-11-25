@@ -60,9 +60,6 @@ func _ready() -> void:
 		if arg == "--shot":
 			_shot_mode = true
 
-	# This bench is where the geometry chamfer is measured, so it is on here
-	# and nowhere else (TerrainTile.bevel_enabled).
-	TerrainTile.bevel_enabled = true
 	BrickTerrain.configure(WORLD_SEED)
 	# The generator's floor sits barely under the default 1.1 m sea, so the
 	# map had puddles and no sea at all: the deepest water in the field
@@ -271,19 +268,6 @@ func _unhandled_input(event: InputEvent) -> void:
 			_water.set_print_lines(on)
 			_water_far.set_print_lines(on)
 			print("[terrain] print lines: %s" % ("ON" if on else "OFF"))
-		KEY_G:
-			TerrainTile.bevel_enabled = not TerrainTile.bevel_enabled
-			var t0 := Time.get_ticks_usec()
-			for tile in _tiles:
-				tile.rebuild(_terrain_mat)
-			var flat := 0
-			var bev := 0
-			for tile in _tiles:
-				flat += tile.tri_count
-				bev += tile.bevel_tri_count
-			print("[terrain] near chamfer tier %s — %d flat + %d chamfered tris, %.0f ms"
-					% ["ON" if TerrainTile.bevel_enabled else "OFF", flat, bev,
-					float(Time.get_ticks_usec() - t0) / 1000.0])
 		KEY_F7:
 			_painted = not _painted
 			for key in _toggles:
@@ -408,7 +392,7 @@ func _update_hud() -> void:
 		"frame    %.1f ms   edits %d   debris %d" % [
 			_frame_ms, BrickTerrain.get_edit_count(), _debris_node().bodies.size()],
 		"blast    %s" % (_last_carve if _last_carve != "" else "left click the ground"),
-		"F1 seams  F2 studs  F3 shadows  F4 stud geometry  F5 water  F6 repair  F7 geometry only  V wave steps  P print  G real chamfer",
+		"F1 seams  F2 studs  F3 shadows  F4 stud geometry  F5 water  F6 repair  F7 geometry only  V wave steps  P print",
 	])
 
 
@@ -437,7 +421,6 @@ func _run_shots() -> void:
 	await _shot_geometry_only()
 	await _measure_chamfer()
 	await _shot_ramp()
-	await _shot_geo_chamfer()
 	await _shot_corner()
 	await _shot_brick_join()
 	print("[terrain] pieces/tris/studs written to shots/")
@@ -606,17 +589,6 @@ func _shot_blast() -> void:
 ## A ramp, close and from the low side — the angle that showed the wall the
 ## wedge was supposed to replace, the overlapping faces beside it, and the
 ## stray square behind it.
-## Real chamfer geometry, on and off, with the triangle cost of each.
-##
-## The shaded bevel cannot give a SILHOUETTE — a brick outlined in light is
-## still a box against the sky — so this is the only version that changes the
-## outline of a piece. What it costs is the whole question, and the answer is
-## printed rather than argued.
-## A convex terrace CORNER, close and low. Three chamfered faces meet there
-## and each one's strip stops a bevel short of the other two, so a missing
-## corner triangle shows as a pinwheel of light and dark wedges — you are
-## seeing the backs of the surrounding facets through the hole. It is the one
-## place the artefact appears and no other capture pointed at it.
 ## Adjacent bricks on flat ground, from just above the surface. This is the
 ## view the gaps and the messy corners were reported from, and no capture
 ## aimed at it — the wide shots average the artefact away and the corner shot
@@ -643,9 +615,6 @@ func _shot_brick_join() -> void:
 
 	var top := float(BrickTerrain.surface_plate(best.x, best.y) + 1) * plate
 	var focus := Vector3((best.x + 1.0) * stud, top, (best.y + 1.0) * stud)
-	TerrainTile.bevel_enabled = true
-	for tile in _tiles:
-		tile.rebuild(_terrain_mat)
 	for key in _toggles:
 		_terrain_mat.set_shader_parameter(key, false)
 	_camera.position = focus + Vector3(0.62, 0.30, 0.62)
@@ -657,6 +626,10 @@ func _shot_brick_join() -> void:
 		_terrain_mat.set_shader_parameter(key, _toggles[key])
 
 
+
+
+## A convex terrace CORNER, close and low (the old chamfered tier's worst
+## place; the real bevels are the brick overlay's now, Docs/BrickOverlay.md).
 func _shot_corner() -> void:
 	var stud := BrickWorld.get_stud_metres()
 	var plate := BrickWorld.get_plate_metres()
@@ -684,53 +657,11 @@ func _shot_corner() -> void:
 		_terrain_mat.set_shader_parameter(key, false)
 	_camera.position = focus + Vector3(0.55, 0.30, 0.55)
 	_camera.look_at(focus, Vector3.UP)
-	# BOTH, from the identical camera. Anything present in the OFF frame is
-	# not the chamfer, whatever it looks like.
-	for on in [false, true]:
-		TerrainTile.bevel_enabled = on
-		for tile in _tiles:
-			tile.rebuild(_terrain_mat)
-		await _frames(6)
-		get_viewport().get_texture().get_image().save_png(
-			"res://shots/terrain_corner_%s.png" % ("on" if on else "off"))
-	print("[terrain] shots written: terrain_corner_on/off.png  (corner at %d,%d)"
-			% [best.x, best.y])
+	await _frames(6)
+	get_viewport().get_texture().get_image().save_png("res://shots/terrain_corner.png")
+	print("[terrain] shot written: terrain_corner.png  (corner at %d,%d)" % [best.x, best.y])
 	for key in _toggles:
 		_terrain_mat.set_shader_parameter(key, _toggles[key])
-
-
-func _shot_geo_chamfer() -> void:
-	var plate := BrickWorld.get_plate_metres()
-	var ground := float(BrickTerrain.surface_plate(2, 2)) * plate
-	_camera.position = Vector3(0.95, ground + 0.42, 0.95)
-	_camera.look_at(Vector3(-0.35, ground + 0.02, -0.35), Vector3.UP)
-	# The shaded bevel off, so only the geometry differs between the frames.
-	_terrain_mat.set_shader_parameter("chamfer_enabled", false)
-
-	var was := TerrainTile.bevel_enabled
-	for on in [false, true]:
-		TerrainTile.bevel_enabled = on
-		var t0 := Time.get_ticks_usec()
-		for tile in _tiles:
-			tile.rebuild(_terrain_mat)
-		var ms := float(Time.get_ticks_usec() - t0) / 1000.0
-		var flat := 0
-		var bev := 0
-		for tile in _tiles:
-			flat += tile.tri_count
-			bev += tile.bevel_tri_count
-		await _frames(6)
-		get_viewport().get_texture().get_image().save_png(
-			"res://shots/geo_chamfer_%s.png" % ("on" if on else "off"))
-		# `bev` is held for the whole field but only tiles inside BEVEL_RANGE
-		# ever draw it, so the resident cost and the drawn cost differ a lot.
-		print("[geo-chamfer] %s: %d flat + %d chamfered tris held, build %.0f ms"
-				% ["ON " if on else "OFF", flat, bev, ms])
-
-	TerrainTile.bevel_enabled = was
-	for tile in _tiles:
-		tile.rebuild(_terrain_mat)
-	_terrain_mat.set_shader_parameter("chamfer_enabled", _toggles["chamfer_enabled"])
 
 
 func _shot_ramp() -> void:

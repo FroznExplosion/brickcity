@@ -45,7 +45,11 @@ public:
     ///   solved:    whether the structure was solved (anything hung near)
     ///   bricks, sample_ms, solve_ms
     /// }
-    static Dictionary survey(Vector3i lo, Vector3i hi, double tension, double mass_per_cell);
+    /// `building_times`: a building material's brick (MAT_FIL_BASE..) weighs
+    /// this many times its cells: the survey runs at the ground's tension (x4
+    /// the buildings'), so at x4 mass a building's bricks hold as the city's do.
+    static Dictionary survey(Vector3i lo, Vector3i hi, double tension, double mass_per_cell,
+            double building_times = 1.0);
 
     /// The class of a terrain material: 0 air, 1 loose (sand, gravel), 2
     /// medium (dirt, grass), 3 strong (rock).

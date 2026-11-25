@@ -53,6 +53,26 @@ var host: Node = null
 ## every run.
 var manual := false
 var sim_radius_m := 90.0
+## The sim radius the world was set up with (detail tiles + 2); `sim_radius_m`
+## is this, or less when water drops at LOD 1.
+var _base_sim_m := 90.0
+var _near_tiles := 4
+## WATER DROPS AT A TERRAIN LOD (Options > Video > Water Drops At; the user,
+## 2026-11-24): water is drawn on a tile only while its ground is drawn at a
+## lower LOD than this -- 0 the detailed tiles, 1 the coarse blocks sampled
+## every 4 studs (to TerrainCoarse.FIRST tiles), 2 every 8, ... At 1 it runs
+## and is drawn on the detailed ground only (cheapest); at 2 (the default) the
+## coarse ring's water stays drawn, frozen; inland water keeps its sections
+## that far (BrickFluid.set_keep_inland), the open sea is the tiers'.
+## The menu sets Engine meta `water_drop_lod`; this, when set (1+), wins over
+## it (the water gate).
+static var drop_lod := -1
+
+
+static func _drop_lod() -> int:
+	if drop_lod >= 1:
+		return drop_lod
+	return int(Engine.get_meta(&"water_drop_lod", 2))
 var sea_on := false
 var wave_scale := 1.0
 ## The sea's tiers (WaterSea), when the sea is on.
@@ -153,7 +173,9 @@ func reset_world(sea_m: float, near_tiles: int, p_sea_on: bool, p_wave_scale := 
 	sea_on = p_sea_on
 	wave_scale = p_wave_scale
 	BrickWave.set_sea_level(level if sea_on else sea_m)
-	sim_radius_m = float(near_tiles + 2) * TILE_STUDS * BrickWorld.get_stud_metres()
+	_near_tiles = near_tiles
+	_base_sim_m = float(near_tiles + 2) * TILE_STUDS * BrickWorld.get_stud_metres()
+	sim_radius_m = _base_sim_m
 	for t in _tiles.keys():
 		_release(t)
 	drawn = 0
@@ -228,6 +250,8 @@ func _process_body(delta: float) -> void:
 	var now := _clock()
 	_water_mat.set_shader_parameter("now_s", now)
 	_lava_mat.set_shader_parameter("now_s", now)
+	# The lakes' waves ride this clock in the shader and in the queries.
+	BrickFluid.set_wave_clock(now)
 	if host == null:
 		return
 	var eye: Vector3 = host._eye()
@@ -394,7 +418,8 @@ func drag_at(p: Vector3) -> float:
 ## 0 none, 1 water, 2 lava at a point (sea waves counted).
 func fluid_at(p: Vector3) -> int:
 	var f := BrickFluid.fluid_at(p)
-	if f == 0 and sea != null and p.y < surface_at(p):
+	# Under a wave's crest (the sea's, or a lake's, S3) is water too.
+	if f == 0 and p.y < surface_at(p):
 		return 1
 	return f
 
@@ -550,14 +575,25 @@ func _prime_near(eye: Vector3) -> void:
 func _check_lod(eye: Vector3) -> void:
 	var tile_m := TILE_STUDS * BrickWorld.get_stud_metres()
 	var n := 0
+	# The chosen drop LOD: the sim's reach (LOD 1: the detailed ground only)
+	# and how far inland water keeps its sections (to the drop LOD's edge,
+	# that square's corner).
+	var dl := _drop_lod()
+	if dl <= 1:
+		sim_radius_m = minf(_base_sim_m, (float(_near_tiles) + 0.5) * tile_m)
+		BrickFluid.set_keep_inland(0.0)
+	else:
+		sim_radius_m = _base_sim_m
+		BrickFluid.set_keep_inland(float(TerrainCoarse.FIRST << (dl - 2)) * tile_m * 1.42 + tile_m)
 	var st: Object = host.get("_streamer") if host != null else null
+	var ct := Vector2i(floori(eye.x / tile_m), floori(eye.z / tile_m))
 	if st != null and st.has_method("has_tile"):
 		for t in _tiles.keys():
-			if not bool(st.call("has_tile", t)):
+			if tile_lod(t, ct, st) >= dl:
 				_release(t)
 				_parked[t] = true
 		for t in _parked.keys():
-			if bool(st.call("has_tile", t)):
+			if tile_lod(t, ct, st) < dl:
 				_parked.erase(t)
 				var c := Vector2((t.x + 0.5) * tile_m, (t.y + 0.5) * tile_m)
 				_lod_pending[t] = true
@@ -631,16 +667,33 @@ func _new_light() -> OmniLight3D:
 	return l
 
 
-## Water tiles drawn where the terrain draws no detail tile (want 0), and
-## tiles parked for it (the water gate).
+## Water tiles drawn where the ground is at the drop LOD or past it (want 0),
+## and tiles parked for it (the water gate).
 func drawn_on_bare() -> int:
 	var st: Object = host.get("_streamer") if host != null else null
 	var n := 0
-	if st != null:
+	if st != null and host != null:
+		var tile_m := TILE_STUDS * BrickWorld.get_stud_metres()
+		var e: Vector3 = host._eye()
+		var ct := Vector2i(floori(e.x / tile_m), floori(e.z / tile_m))
 		for t in _tiles.keys():
-			if not bool(st.call("has_tile", t)):
+			if tile_lod(t, ct, st) >= _drop_lod():
 				n += 1
 	return n
+
+
+## The terrain LOD tile `t`'s ground is drawn at, seen from tile `ct`: 0 a
+## detailed tile (the streamer has it), else the coarse tier's ring by the
+## tile's distance (TerrainCoarse.relod's rule): 1 within FIRST tiles, then
+## one more each doubling.
+static func tile_lod(t: Vector2i, ct: Vector2i, streamer: Object) -> int:
+	if streamer != null and bool(streamer.call("has_tile", t)):
+		return 0
+	var d := maxi(absi(t.x - ct.x), absi(t.y - ct.y))
+	var level := 0
+	while level < TerrainCoarse.LEVELS - 1 and d >= (TerrainCoarse.FIRST << level):
+		level += 1
+	return 1 + level
 
 
 func parked_count() -> int:

@@ -16,30 +16,9 @@ extends Node3D
 ## `MultiMesh.set_buffer`'s layout, and the collision boxes as six floats each,
 ## so the loops below are uploads and not work.
 
-## Real chamfer geometry, and how far it reaches. ~10 bricks — the bevel is
-## 5.9 px at 3 m and 2.2 px at 8 m, so past this it is paying for nothing.
-##
-## The tile is the granularity, not a sphere around the camera. A per-metre
-## radius would mean rebuilding tile meshes as you walk, which is ~11 ms a
-## tile and the exact trap M2c exists to avoid. Instead BOTH meshes are built
-## when the tile loads and Godot's visibility range swaps them — the same
-## zero-runtime-cost pattern the stud and scatter tiers already use.
-const BEVEL_RANGE := 12.0
-const BEVEL := 0.013
-## ON, for every scene that has ground: the heightfield test, the city on
-## terrain, the combat arena. It was a switch each scene set for itself, and
-## only the heightfield test did -- so the same ground was chamfered there and
-## flat under the city (Docs/Terrain.md §22.13 measured it; §22.15 made it the
-## default).
-##
-## It was off for a long time because two meshes a tile were cross-faded by a
-## visibility range, and Godot fades a range per OBJECT: everything 6 to 18 m
-## away was see-through (§20.8). Nothing fades now -- the streamer shows one
-## mesh or the other by the tile's ring round the camera (`set_near`, §22.14)
-## -- and tools/probes/bevel_gap_probe.gd is the gate: no more see-through pixels
-## with it than without. Past the near ring the shader's shaded bevel is the
-## chamfer, as it always was.
-static var bevel_enabled := true
+## Real bevels near the camera are the brick overlay's instanced bricks
+## (TerrainBricks, Docs/BrickOverlay.md). The old chamfered copy of each near
+## tile (build_tile_chamfered) was deleted on 2026-11-24.
 ## How far from the eye a tile's behind faces are drawn at all: the overlay's
 ## reach (12 m) plus a tile's diagonal (16 m), from the tile's corner.
 const BEHIND_RANGE := 30.0
@@ -104,7 +83,6 @@ static var overlay_version := 0
 ## stray stud beside a block as it started to fall). Children inherit it.
 func _init() -> void:
 	physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
-var bevel_tri_count := 0
 
 
 ## Throw away every node and build again from the field.
@@ -150,21 +128,9 @@ func build(tile_x: int, tile_z: int, material: Material,
 	var stud := BrickWorld.get_stud_metres()
 	position = Vector3(tx * tile * stud, 0.0, tz * tile * stud)
 
-	# The far mesh: flat faces, what has always been built.
-	BrickTerrain.set_face_bevel(0.0)
 	var data: Dictionary = baked if not baked.is_empty() \
 			else BrickTerrain.build_tile(tx, tz)
-	# The near mesh: the same tile with its tops chamfered. A direct caller
-	# gets it now; a STREAMED tile (phases) gets it later from the streamer,
-	# baked on a worker and only for tiles near the camera -- building it for
-	# every resident tile, here on the main thread, was 1.6 M triangles held
-	# and ~8 ms a tile for a mesh drawn only inside BEVEL_RANGE.
-	bevel_tri_count = 0
-	_bevel_done = false
-	var near: Dictionary = {}
-	if bevel_enabled and not phases:
-		near = BrickTerrain.build_tile_chamfered(tx, tz, BEVEL)
-		_bevel_done = true
+	if not phases:
 		# Nobody streams a direct caller's tiles: it is near, all of it.
 		_near = true
 	piece_count = data["piece_count"]
@@ -192,8 +158,6 @@ func build(tile_x: int, tile_z: int, material: Material,
 	data.erase("behind_mesh")   # on the GPU now: not kept twice
 	overlay = data.get("overlay_bricks", PackedFloat32Array())
 	overlay_version += 1
-	if not near.is_empty():
-		add_bevel(near)
 	_data = data
 	if phases:
 		return   # the streamer will ask for the rest, a frame at a time
@@ -304,27 +268,9 @@ func has_collision() -> bool:
 	return _collision_done
 
 
-## The chamfered near mesh (BrickTerrain.build_tile_chamfered), shown instead
-## of the flat one while the tile is near (set_near).
-func add_bevel(near: Dictionary) -> void:
-	_bevel_done = true
-	var arrays: Array = near.get("mesh", [])
-	if arrays.is_empty() or _far_surface == null:
-		return
-	_near_surface = _add_surface(arrays, _material, 0.0, 0.0)
-	if _near_surface != null:
-		_near_surface.name = "SurfaceChamfered"
-		# The terrain shader fades its drawn outline and shaded chamfer IN
-		# with distance on this mesh only: the real chamfer up close, both
-		# a little further, the outline alone past that (terrain.gdshader).
-		_near_surface.set_instance_shader_parameter("geo_bevel", 1.0)
-	bevel_tri_count = near["triangle_count"]
-	_apply_near()
-
-
-## The detailed version of this tile -- chamfered surface, bevelled studs --
-## or the plain one. Set by the streamer from the tile's ring round the
-## camera; a whole-tile switch a tile or more away, where a 13 mm bevel is a
+## The detailed version of this tile -- bevelled studs -- or the plain one.
+## Set by the streamer from the tile's ring round the camera; a whole-tile
+## switch a tile or more away, where a 13 mm bevel is a
 ## pixel or two, so it does not read as a pop.
 func set_near(on: bool) -> void:
 	if on == _near:
@@ -348,11 +294,6 @@ func _add_studs(near: bool) -> void:
 func _apply_near() -> void:
 	if _instances_done and _studs_shown and not _data.is_empty():
 		_add_studs(_near)
-	var chamfered := _near and _near_surface != null
-	if _near_surface != null:
-		_near_surface.visible = chamfered
-	if _far_surface != null:
-		_far_surface.visible = not chamfered
 	for c in get_children():
 		if c is MultiMeshInstance3D:
 			if c.name == "Studs" or c.name == "StudsSky":
@@ -369,27 +310,15 @@ func set_studs_shown(on: bool) -> void:
 
 var _near := false
 var _studs_shown := true
-var _near_surface: MeshInstance3D = null
 
 
-## Does this tile still want its chamfered mesh?
-## Is the tile drawn as it should be up close -- its instances in and, near
-## the camera, its chamfered mesh? A tile an edit rebuilt used to show flat
-## and bare for a few frames (TerrainStreamer._assemble swaps it whole now).
+## Is the tile drawn as it should be up close -- its instances in? A tile
+## an edit rebuilt used to show flat and bare for a few frames
+## (TerrainStreamer._assemble swaps it whole now).
 func is_whole() -> bool:
-	if _data.is_empty():
-		return true
-	if not _instances_done:
-		return false
-	return not (_near and bevel_enabled and _near_surface == null
-			and not (_data.get("mesh", []) as Array).is_empty())
+	return _data.is_empty() or _instances_done
 
 
-func needs_bevel() -> bool:
-	return bevel_enabled and not _bevel_done and not _data.is_empty()
-
-
-var _bevel_done := false
 var _far_surface: MeshInstance3D = null
 var _material: Material = null
 
@@ -420,7 +349,7 @@ func _add_surface(arrays: Array, material: Material,
 		mi.visibility_range_end_margin = RANGE_FADE
 	mi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 	# The tile's shadow choice (set_casts_shadow), for a surface added after
-	# it was made -- the chamfered near mesh lands frames later, and it cast
+	# it was made -- one landing frames later cast
 	# whatever the tile said: the ground round the camera shadowed itself into
 	# a fine grain (Docs/MineWorld.md 11).
 	if not _shadow_on:

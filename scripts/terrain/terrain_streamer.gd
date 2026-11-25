@@ -117,9 +117,6 @@ var _free_slots: Array[int] = []
 var _gen := {}
 var _landed_gen := {}
 var _slot_gen: Array[int] = []
-## The chamfered near mesh, baked by its own task beside the flat one.
-var _slot_near_task: Array[int] = []
-var _slot_near: Array[Dictionary] = []
 
 var _built := 0
 var _dropped := 0
@@ -133,21 +130,13 @@ var _shadow_centre := Vector2i(1 << 30, 0)
 ## nothing does, _finish is not run: it sorted and walked every resident tile
 ## each frame to find nothing to do, ~1 ms of an idle frame.
 var _finish_pending := true
-## Tiles within this many of the camera get the chamfered near mesh
-## (TerrainTile.add_bevel). It is shown within near_show_radius (about
-## one tile), so two is enough with a margin, and nothing further pays for it.
-@export var bevel_radius := 2
-## Tiles within this ring SHOW their detailed version (chamfer, bevelled
-## studs); `bevel_radius` bakes one ring further ahead so it is ready.
+## Tiles within this ring SHOW their detailed version (bevelled studs).
 @export var near_show_radius := 1
 var _near_centre := Vector2i(1 << 30, 0)
 ## The centre pinned tiles were last shown or hidden for.
 var _shown_centre := Vector2i(1 << 30, 0)
-## Chamfered bakes in flight: tile coord -> [task id, result holder, tile].
-var _bevel_tasks := {}
-## REFRESHES IN WAITING (an edit's rebuilt tiles): coord -> {tile, near,
-## step}. The new tile is made hidden and finished a step a frame -- its
-## chamfered mesh, then its collider -- while the old one is still drawn and
+## REFRESHES IN WAITING (an edit's rebuilt tiles): coord -> {tile, step,
+## gen}. The new tile is made hidden and finished -- its collider -- while the old one is still drawn and
 ## collided with; then the two swap in one frame (_swap_step). Swapping at
 ## once showed the new tile flat and bare for a few frames (the flicker round
 ## every edit); swapping whole in one frame cost a 5 ms step.
@@ -180,11 +169,10 @@ var latency_log: Array = []
 ## to `g` is on screen once drawn_gen[c] >= g (the breaklag gate's --burst).
 var drawn_gen := {}
 var _stamps := {}
-const BEVEL_IN_FLIGHT := 2
 ## Worst single phase seen, split three ways — which one hurts is the whole
 ## question when a hitch has to be chased.
 ## HELD (moving fast, Docs/MineWorld.md 14): no new bakes start, no studs,
-## scatter, chamfer or collision are added, nor do tiles switch between their
+## scatter or collision are added, nor do tiles switch between their
 ## near and far stud sets; bakes already in flight still
 ## land (their surface only) and far tiles still drop, so the instance pool
 ## fills. What is drawn stays drawn. Off again: everything resumes.
@@ -193,9 +181,6 @@ var hold := false:
 		if hold and not v:
 			_finish_pending = true
 		hold = v
-## Chamfered near meshes handed to their tiles, and the longest hand-over (ms).
-var bevels_added := 0
-var bevel_ms := 0.0
 var _worst_surface_ms := 0.0
 var _worst_inst_ms := 0.0
 var _worst_coll_ms := 0.0
@@ -203,9 +188,8 @@ var _worst_swap_ms := 0.0
 
 
 ## THE BRICK OVERLAY (Docs/BrickOverlay.md) for this ground: real bevelled
-## bricks near the camera over the flat tiles, in place of the old chamfered
-## near tier (TerrainTile.bevel_enabled goes off; its code is kept). Made in
-## setup when `auto_overlay` and TerrainBricks.overlay_default are on; a scene
+## bricks near the camera over the flat tiles. Made in setup when
+## `auto_overlay` and TerrainBricks.overlay_default are on; a scene
 ## that makes its own (the mine world, which also lays it over its deep
 ## sections and hides shot bricks) turns `auto_overlay` off first.
 var auto_overlay := true
@@ -215,7 +199,6 @@ var bricks: TerrainBricks = null
 func setup(material: Material) -> void:
 	_material = material
 	if auto_overlay and TerrainBricks.overlay_default and material is ShaderMaterial:
-		TerrainTile.bevel_enabled = false
 		bricks = TerrainBricks.new()
 		bricks.name = "Bricks"
 		add_child(bricks)
@@ -226,8 +209,6 @@ func setup(material: Material) -> void:
 		_slot_task.append(-1)
 		_slot_coord.append(Vector2i.ZERO)
 		_slot_gen.append(0)
-		_slot_near_task.append(-1)
-		_slot_near.append({})
 		_free_slots.append(i)
 
 
@@ -242,17 +223,11 @@ func _exit_tree() -> void:
 		if _slot_task[slot] < 0:
 			continue
 		WorkerThreadPool.wait_for_task_completion(_slot_task[slot])
-		if _slot_near_task[slot] >= 0:
-			WorkerThreadPool.wait_for_task_completion(_slot_near_task[slot])
-			_slot_near_task[slot] = -1
 		_slot_task[slot] = -1
 		_slots[slot] = {}
 		_free_slots.append(slot)
 	_tasks.clear()
 	_stale.clear()
-	for c in _bevel_tasks:
-		WorkerThreadPool.wait_for_task_completion(_bevel_tasks[c][0])
-	_bevel_tasks.clear()
 	for c in _swaps.keys():
 		_drop_swap(c)
 	# The tiles have left already (children go first) and handed their
@@ -276,8 +251,6 @@ func follow(camera_xz: Vector2) -> void:
 		_collect(cx, cz)
 	_drop(cx, cz)
 	_assemble()
-	if not hold:
-		_bevel_step()
 	if _shown_centre != _centre and pinned.has_area():
 		_shown_centre = _centre
 		var keep := _keep_rect(cx, cz)
@@ -297,43 +270,6 @@ func follow(camera_xz: Vector2) -> void:
 				absi(c.x - cx) <= shadow_radius and absi(c.y - cz) <= shadow_radius)
 
 
-## Start chamfered bakes for near tiles that lack one, and hand finished
-## ones to their tiles -- if the tile is still the one the bake was for (a
-## refreshed tile is a new node, and gets a new bake).
-func _bevel_step() -> void:
-	if not TerrainTile.bevel_enabled:
-		return
-	for c in _bevel_tasks.keys():
-		var job: Array = _bevel_tasks[c]
-		if not WorkerThreadPool.is_task_completed(job[0]):
-			continue
-		WorkerThreadPool.wait_for_task_completion(job[0])
-		_bevel_tasks.erase(c)
-		var tile = job[2]
-		if is_instance_valid(tile) and _tiles.get(c) == tile and tile.needs_bevel():
-			var tb := Time.get_ticks_usec()
-			tile.add_bevel(job[1][0])
-			bevels_added += 1
-			bevel_ms = maxf(bevel_ms, float(Time.get_ticks_usec() - tb) / 1000.0)
-	if _bevel_tasks.size() >= BEVEL_IN_FLIGHT:
-		return
-	for dz in range(-bevel_radius, bevel_radius + 1):
-		for dx in range(-bevel_radius, bevel_radius + 1):
-			var c := _centre + Vector2i(dx, dz)
-			if _bevel_tasks.has(c) or not _tiles.has(c):
-				continue
-			var tile: TerrainTile = _tiles[c]
-			if not tile.needs_bevel():
-				continue
-			var holder := [{}]
-			var task := WorkerThreadPool.add_task(
-				func() -> void: holder[0] = BrickTerrain.build_tile_chamfered(c.x, c.y, TerrainTile.BEVEL),
-				true, "terrain chamfer")
-			_bevel_tasks[c] = [task, holder, tile]
-			if _bevel_tasks.size() >= BEVEL_IN_FLIGHT:
-				return
-
-
 ## Build everything the camera wants, now, blocking. For captures and
 ## benchmarks, which must not photograph a half-built world.
 func settle(camera_xz: Vector2, rounds := 4000) -> void:
@@ -350,12 +286,6 @@ func settle(camera_xz: Vector2, rounds := 4000) -> void:
 				_finish(Time.get_ticks_usec())
 			budget_ms = saved
 			shapes_per_frame = saved_shapes
-			# And the chamfered near meshes, so a capture sees them.
-			for b in 4000:
-				_bevel_step()
-				if _bevel_tasks.is_empty():
-					break
-				OS.delay_msec(1)
 			return
 
 
@@ -772,18 +702,6 @@ func _collect(cx: int, cz: int) -> void:
 		_slot_coord[slot] = c
 		_slots[slot] = {}
 		_slot_gen[slot] = int(_gen.get(c, 0))
-		# A tile rebuilt by an edit near the camera bakes its chamfered near
-		# mesh too, so the new tile goes in whole (_assemble's swap) instead
-		# of flat first and bevelled a few frames later -- on a task of its
-		# own beside the flat one (they were one after the other, one task).
-		var with_near := _tiles.has(c) and TerrainTile.bevel_enabled \
-				and absi(c.x - _centre.x) <= bevel_radius and absi(c.y - _centre.y) <= bevel_radius
-		_slot_near[slot] = {}
-		_slot_near_task[slot] = -1
-		if with_near:
-			_slot_near_task[slot] = WorkerThreadPool.add_task(
-				func() -> void: _slot_near[slot] = BrickTerrain.build_tile_chamfered(c.x, c.y, TerrainTile.BEVEL),
-				true, "terrain chamfer")
 		# The slot is this task's alone, so the worker writes without a lock.
 		_slot_task[slot] = WorkerThreadPool.add_task(
 			func() -> void: _slots[slot] = TerrainTile.bake(c.x, c.y),
@@ -825,16 +743,9 @@ func _land_slots(slots: Array[int], t0: int) -> bool:
 			continue
 		if not WorkerThreadPool.is_task_completed(_slot_task[slot]):
 			continue
-		if _slot_near_task[slot] >= 0 and not WorkerThreadPool.is_task_completed(_slot_near_task[slot]):
-			continue
 		WorkerThreadPool.wait_for_task_completion(_slot_task[slot])
 		var c: Vector2i = _slot_coord[slot]
 		var data: Dictionary = _slots[slot]
-		if _slot_near_task[slot] >= 0:
-			WorkerThreadPool.wait_for_task_completion(_slot_near_task[slot])
-			data["near"] = _slot_near[slot]
-			_slot_near_task[slot] = -1
-			_slot_near[slot] = {}
 		var gen := _slot_gen[slot]
 		_slot_task[slot] = -1
 		_slots[slot] = {}
@@ -872,11 +783,8 @@ func _land_slots(slots: Array[int], t0: int) -> bool:
 				var stale: TerrainTile = _swaps[c].tile
 				stale.recycle()
 				stale.queue_free()
-			_swaps[c] = {"tile": tile, "near": {}, "step": 1, "gen": gen}
-			# The chamfered mesh goes on now, in the landing frame; the next
-			# frame takes the collider and swaps (one frame, it was two).
-			if not (data.get("near", {}) as Dictionary).is_empty():
-				tile.add_bevel(data["near"])
+			# The next frame takes the collider and swaps.
+			_swaps[c] = {"tile": tile, "step": 1, "gen": gen}
 			if log_latency and _stamps.has(c):
 				_stamps[c]["land"] = Time.get_ticks_usec()
 			var sms0 := float(Time.get_ticks_usec() - t1) / 1000.0
@@ -908,7 +816,7 @@ func _land_slots(slots: Array[int], t0: int) -> bool:
 
 
 ## Each refresh in waiting one step on, under the frame's budget: its
-## chamfered mesh, its collider (a few boxes a frame, joining the physics
+## collider (a few boxes a frame, joining the physics
 ## space when complete -- with the old one still there, so the ground the old
 ## tile draws stays solid), then the swap: the old tile's instance nodes go to
 ## the pool and the new one fills them (drawn before: a copy), it is shown and
@@ -927,12 +835,7 @@ func _swap_step(t0: int) -> void:
 			continue
 		var t1 := Time.get_ticks_usec()
 		match int(job.step):
-			0:
-				if not (job.near as Dictionary).is_empty():
-					tile.add_bevel(job.near)
-				job.near = {}
-				job.step = 1
-			1:
+			0, 1:
 				tile.set_casts_shadow(old.casts_shadow())
 				if not tile.add_collision(shapes_per_frame):
 					continue

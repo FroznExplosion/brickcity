@@ -116,6 +116,16 @@ float noise(vec2 p) {
 			mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
 }
 
+// LAKES AND RIVERS (S3, Docs/MineWaterNext.md R1): brick_fluid.cpp's
+// lake_wave, the same expression on the same clock (now_s; the query's
+// BrickFluid.set_wave_clock), in the terrain's frame (model space: the mesh
+// is laid in it), -1..1; a piece's CUSTOM0.z scales it to metres.
+float lake_wave(vec2 p, float t) {
+	float a = (0.8 * p.x + 0.6 * p.y) * (TAU / 5.0) - t * 1.6;
+	float b = (-0.5 * p.x + 0.866 * p.y) * (TAU / 3.2) - t * 2.1 + 1.7;
+	return 0.55 * sin(a) + 0.45 * sin(b);
+}
+
 void vertex() {
 	v_h01 = 0.5;
 	v_sea = 0.0;
@@ -125,7 +135,11 @@ void vertex() {
 	v_nrm = (MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz;
 	// COLOR.r: the water's depth over 12 plates (0.14 m each), from the mesher.
 	v_depth = COLOR.r * 12.0 * 0.14;
-	if (CUSTOM0.y > 0.5) {
+	if (CUSTOM0.y > 1.5) {
+		// A lake piece: the whole piece rides the lake's wave at its middle.
+		vec2 mid = VERTEX.xz + vec2(CUSTOM0.x, CUSTOM0.w) * stud * 0.5;
+		VERTEX.y += CUSTOM0.z * lake_wave(mid, now_s);
+	} else if (CUSTOM0.y > 0.5) {
 		// A real sea piece (MineWater.md 11.9): the whole piece rides the
 		// sea's wave at its stud's middle, exactly as the tiers' pieces do.
 		v_sea = 1.0;

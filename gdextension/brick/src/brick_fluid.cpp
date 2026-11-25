@@ -21,6 +21,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -125,6 +126,13 @@ inline uint32_t hmix(uint32_t h) {
     return h;
 }
 
+/// One cell of a parked section that differs from the generated world (the
+/// save's record): its index in the section and its fluid.
+struct Diff {
+    uint16_t i;
+    uint8_t st, amt, aux;
+};
+
 struct Section {
     int sx = 0, sb = 0, sz = 0;
     std::vector<Cell> c;
@@ -138,6 +146,9 @@ struct Section {
     std::vector<uint8_t> real;
     bool written = false;           ///< any cell ever written (the save skips the rest)
     std::vector<uint8_t> queued;    ///< per cell: in the next tick's list
+    /// Back from parking (W3): its changed cells, by column, put back over
+    /// the generated ones as each column is sampled.
+    std::vector<Diff> pending;
     int wet = 0;                    ///< wet cells (for "anything to draw")
     /// Wet LAVA cells: the terrain's block light (lava_cells_in) reads only
     /// sections with some. The bakes read it under g_state while sample_into
@@ -145,8 +156,17 @@ struct Section {
     std::atomic<int> lava{ 0 };
     static int idx(int lx, int lb, int lz) { return lx + SX * (lz + SX * lb); }
 };
+inline int diff_col(const Diff &d) { return d.i % SCOL; }
 
 std::unordered_map<int64_t, std::unique_ptr<Section>> g_sec;
+/// WATER FAR AWAY IS PARKED (W3, Docs/MineWaterNext.md 6; the terrain chat
+/// measured 122 MB after a 480 m flight over sea, 2026-11-24): a written
+/// section far from the player keeps only the cells that differ from the
+/// generated world, sorted by column -- about 5 bytes a changed cell, not
+/// ~90 KB a section. Asked for again, it is made afresh and they are put
+/// back (sample_into). A section of only generated water is not kept at all.
+std::unordered_map<int64_t, std::vector<Diff>> g_parked;
+int64_t g_parked_bytes = 0;
 std::unordered_map<int64_t, std::vector<int>> g_tile_secs;   ///< tile -> section courses
 std::recursive_mutex g_state;
 std::mutex g_cmd_mx;
@@ -180,6 +200,11 @@ int g_sea_b = 0;          ///< the first course ABOVE the sea
 bool g_sea_on = false;
 bool g_sloped = false;   ///< flat plate steps (the user, 2026-11-21); true = MC slopes
 double g_cx = 0.0, g_cz = 0.0, g_sim_r = 90.0;
+/// How far inland water (lakes, rivers, the player's -- not the open sea,
+/// which the tiers draw) keeps its sections, metres: water is drawn out to
+/// the terrain LOD the player chose (MineWater.drop_lod). 0: no further than
+/// the rest (EVICT_PAST).
+double g_keep_inland_m = 0.0;
 double g_recheck_x = 1e30, g_recheck_z = 1e30;
 
 // THE REAL SEA (MineWater.md 11.8, 11.9): sea water within REAL_BAND studs
@@ -246,6 +271,18 @@ inline bool c_lava(const Cell &c) { return c_wet(c) && c_fluid(c) == F_LAVA; }
 
 std::unordered_set<int64_t> g_mesh_requests;
 std::unordered_set<int64_t> g_far_requests;   ///< tiles wanting the coarse mesh
+
+/// LEVELLING (stage P, Docs/MineWaterNext.md 4): still water has no
+/// pressure -- poured down one arm of a U-bend it stood there; a sealed room
+/// filled unevenly. A still cell resting on full still water (a head on it)
+/// marks its body due; once calm a moment it is levelled as one body: its
+/// units laid again from the lowest floor up through every opening, a unit
+/// layer at a time. Seed cell -> the tick it is due.
+std::unordered_map<int64_t, uint32_t> g_level_due;
+constexpr int LEVEL_EVERY = 10;          ///< ticks between looks
+constexpr int LEVEL_LOOKS = 8;           ///< bodies a look
+constexpr int LEVEL_MAX = 4096;          ///< cells a body may have
+constexpr uint32_t LEVEL_WAIT = 20;      ///< ticks calm before levelling
 
 /// Multiplayer groundwork (MineWater.md 11.5): the cells whose drawn state
 /// changed, with the write count at the time, kept while `g_log_on`. A peer
@@ -505,6 +542,13 @@ Section *sec_make(int sx, int sb, int sz) {
     ns->queued.assign(SCELLS, 0);
     s = ns.get();
     std::lock_guard<std::recursive_mutex> lk(g_state);
+    auto pk = g_parked.find(pack3(sx, sb, sz));
+    if (pk != g_parked.end()) {
+        ns->pending = std::move(pk->second);
+        ns->written = true;
+        g_parked_bytes -= (int64_t)ns->pending.size() * (int64_t)sizeof(Diff);
+        g_parked.erase(pk);
+    }
     g_sec[pack3(sx, sb, sz)] = std::move(ns);
     g_tile_secs[tkey(sx, sz)].push_back(sb);
     return s;
@@ -528,6 +572,21 @@ void sample_into(Section *s, int lx, int lz) {
         Cell &cl = s->c[Section::idx(lx, lb, lz)];
         cl.solid = masks[lb];
         gen_fluid(cl, x, s->sb * SB + lb, z, gt, sp, lake, gmasks[lb] != 7);
+    }
+    if (!s->pending.empty()) {
+        // Back from parking: this column's changed cells over the generated.
+        const int col = lx + SX * lz;
+        auto at = std::lower_bound(s->pending.begin(), s->pending.end(), col,
+                [](const Diff &d, int c) { return diff_col(d) < c; });
+        for (; at != s->pending.end() && diff_col(*at) == col; ++at) {
+            Cell &cl = s->c[at->i];
+            cl.st = at->st;
+            cl.amt = at->amt;
+            cl.aux = at->aux;
+        }
+    }
+    for (int lb = 0; lb < SB; ++lb) {
+        const Cell &cl = s->c[Section::idx(lx, lb, lz)];
         if (c_wet(cl)) ++s->wet;
         if (c_lava(cl)) {
             ++lava;
@@ -567,7 +626,22 @@ Cell rcell(int x, int b, int z) {
             return s->c[Section::idx(lx, lb, lz)];
         }
     }
-    return gen_cell(x, b, z);
+    // Not sampled: the generated cell, or a parked (or pending) change.
+    Cell g = gen_cell(x, b, z);
+    const std::vector<Diff> *diffs = nullptr;
+    if (s != nullptr) {
+        diffs = &s->pending;
+    } else if (!g_parked.empty()) {
+        auto pk = g_parked.find(pack3(sx, sb, sz));
+        if (pk != g_parked.end()) diffs = &pk->second;
+    }
+    if (diffs != nullptr) {
+        const int i = Section::idx(x - sx * SX, b - sb * SB, z - sz * SX);
+        for (const Diff &d : *diffs) {
+            if (d.i == i) { g.st = d.st; g.amt = d.amt; g.aux = d.aux; break; }
+        }
+    }
+    return g;
 }
 
 inline double dist2_centre(int x, int z) {
@@ -990,6 +1064,14 @@ void eval(int x, int b, int z) {
         }
     }
     if (moved) return;
+    // Resting on full still water: there is a head here -- the body may not
+    // be level (a U-bend's arm). Looked at once it has been calm (stage P).
+    if (floor_of(cur.solid) == 0) {
+        const Cell &dl = wcell(x, b - 1, z);
+        if (c_wet(dl) && c_fluid(dl) == cf && c_kind(dl) == K_STILL && floor_u(dl.solid) + dl.amt >= CU) {
+            g_level_due.emplace(pack3(x, b, z), g_tick + LEVEL_WAIT);
+        }
+    }
     // The edge distance (4.2.6): 0 beside dry floor at this cell's own level
     // that the sheet could spread onto, else one more than the nearest still
     // neighbour's. A cell two or more deep gives a tile to a neighbour one
@@ -1302,6 +1384,23 @@ struct MeshBuf {
         idx.push_back(base); idx.push_back(base + 1); idx.push_back(base + 2);
         idx.push_back(base); idx.push_back(base + 2); idx.push_back(base + 3);
     }
+    /// A lake piece's face (S3): CUSTOM0 y = 2, z its wave amplitude, x, w
+    /// the way to its stud's middle as sea_quad's.
+    void lake_quad(const Vector3 &a, const Vector3 &b, const Vector3 &c, const Vector3 &d,
+            const Vector3 &nrm, const Color &cc, const Vector2 &mid, float amp) {
+        const int base = (int)v.size();
+        for (const Vector3 &p : { a, b, c, d }) {
+            v.push_back(p);
+            n.push_back(nrm);
+            col.push_back(cc);
+            cus.push_back(mid.x > p.x ? 1.0f : -1.0f);
+            cus.push_back(2.0f);
+            cus.push_back(amp);
+            cus.push_back(mid.y > p.z ? 1.0f : -1.0f);
+        }
+        idx.push_back(base); idx.push_back(base + 1); idx.push_back(base + 2);
+        idx.push_back(base); idx.push_back(base + 2); idx.push_back(base + 3);
+    }
     Array arrays() const {
         Array a;
         if (v.is_empty()) return a;
@@ -1350,6 +1449,48 @@ float corner_h(int x, int b, int z, int cx, int cz, int fluid, int own) {
         }
     }
     return n > 0 ? sum / (float)n : (float)own;
+}
+
+/// WAVES ON LAKES AND RIVERS (S3, the user's R1, Docs/MineWaterNext.md): an
+/// infinite body's open top -- a source not of the open sea, open to the sky,
+/// a full course -- rides a small wave, piece by piece as the sea's do. Its
+/// height at a stud's middle, metres: LAKE_AMP times how open the stud is
+/// (its distance to the body's edge, ramped over LAKE_RAMP studs: a lone
+/// source, a channel or a pond's rim stays flat) times two crossing sines.
+/// water_fluid.gdshader `lake_wave` is the same expression on `now_s`, the
+/// clock MineWater hands both (set_wave_clock).
+constexpr float LAKE_AMP = 0.09f;
+constexpr int LAKE_R = 6;            ///< studs looked out to for the edge
+constexpr float LAKE_RAMP = 5.0f;
+double g_wave_t = 0.0;
+inline double lake_wave(double x, double z, double t) {
+    const double a = (0.8 * x + 0.6 * z) * (Math_TAU / 5.0) - t * 1.6;
+    const double b = (-0.5 * x + 0.866 * z) * (Math_TAU / 3.2) - t * 2.1 + 1.7;
+    return 0.55 * std::sin(a) + 0.45 * std::sin(b);
+}
+/// Is (x, b, z) an infinite body's open top (a lake or river piece)?
+template <class Get>
+inline bool lake_top(Get get, int x, int b, int z) {
+    const Cell c = get(x, b, z);
+    if (!(c_wet(c) && c_fluid(c) == F_WATER && c_kind(c) == K_SOURCE && !c_ocean(c))) return false;
+    if (floor_u(c.solid) + c.amt < CU) return false;
+    const Cell a = get(x, b + 1, z);
+    return !(c_wet(a) && c_fluid(a) == F_WATER);
+}
+/// A lake top's wave amplitude, metres (0: flat, or not a lake top).
+template <class Get>
+inline float lake_amp(Get get, int x, int b, int z) {
+    if (!lake_top(get, x, b, z)) return 0.0f;
+    int d = LAKE_R + 1;
+    for (int r = 1; r <= LAKE_R && d > LAKE_R; ++r) {
+        for (int i = -r; i <= r && d > LAKE_R; ++i) {
+            if (!lake_top(get, x + i, b, z - r) || !lake_top(get, x + i, b, z + r)
+                    || !lake_top(get, x - r, b, z + i) || !lake_top(get, x + r, b, z + i)) {
+                d = r;
+            }
+        }
+    }
+    return LAKE_AMP * std::min(1.0f, (float)(d - 1) / LAKE_RAMP);
 }
 
 /// Each tile's top corners as last meshed, keyed by corner, course and
@@ -1566,11 +1707,26 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
                         // Only an open top sinks under the course; a side under
                         // more water meets the course above (no seam in a fall).
                         const float sink = top_open ? TOP_SINK : 0.0f;
+                        float lake_a = 0.0f;
                         if (real && top_open && f == F_WATER && b == g_sea_b - 1 && own == g_sea_b * CU) {
                             // At the sea's level: the band's (waves with the sea).
                             sea_top[lx + SX * lz] = true;
                             sea_ocean[lx + SX * lz] = c_ocean(c);
                             any_sea = true;
+                        } else if (top_open && f == F_WATER && c_kind(c) == K_SOURCE && !c_ocean(c)
+                                && (lake_a = lake_amp(wcell, x, b, z)) > 0.0f) {
+                            // A lake or river piece (S3): a flat top riding the
+                            // wave at its middle (the shader), sides deep enough
+                            // for the piece beside it at the other end of it.
+                            const float y = (float)own * P - TOP_SINK;
+                            const Vector2 mid(((float)x + 0.5f) * STUD_M, ((float)z + 0.5f) * STUD_M);
+                            const Vector3 a(x0, y, z0), bq(x0, y, z1), cq(x1, y, z1), dq(x1, y, z0);
+                            const Vector3 dn(0.0f, 2.5f * LAKE_AMP, 0.0f);
+                            m.lake_quad(a, bq, cq, dq, Vector3(0, 1, 0), cc, mid, lake_a);
+                            m.lake_quad(dq, cq, cq - dn, dq - dn, Vector3(1, 0, 0), cc, mid, lake_a);
+                            m.lake_quad(bq, a, a - dn, bq - dn, Vector3(-1, 0, 0), cc, mid, lake_a);
+                            m.lake_quad(cq, bq, bq - dn, cq - dn, Vector3(0, 0, 1), cc, mid, lake_a);
+                            m.lake_quad(a, dq, dq - dn, a - dn, Vector3(0, 0, -1), cc, mid, lake_a);
                         } else if (top_open && !(c_ocean(c) && own == g_sea_b * CU)
                                 && h00 == h10 && h10 == h11 && h11 == h01) {
                             // One easing for the whole top (a rect merges only
@@ -1743,15 +1899,175 @@ int tile_coord(int64_t k, bool z) {
 // --- the tick ------------------------------------------------------------------------
 
 
+/// Level the still body holding (x, b, z) (stage P). False when it was left
+/// alone: open (a way out lower than its level), joined to running or
+/// infinite water, too big, or already level. `done`: cells of bodies seen.
+bool level_body(int x0, int b0, int z0, std::unordered_set<int64_t> &done, std::unordered_set<int64_t> &wrote) {
+    const Cell &s0 = wcell(x0, b0, z0);
+    if (!c_wet(s0) || c_kind(s0) != K_STILL) return false;
+    const int f = c_fluid(s0);
+    // The body: connected still cells of its fluid.
+    std::vector<int64_t> body{ pack3(x0, b0, z0) };
+    std::unordered_set<int64_t> in_body{ body[0] };
+    int64_t units = 0;
+    static const int NX[6] = { 1, -1, 0, 0, 0, 0 }, NB[6] = { 0, 0, 0, 0, 1, -1 }, NZ[6] = { 0, 0, 1, -1, 0, 0 };
+    for (size_t h = 0; h < body.size(); ++h) {
+        if (body.size() > (size_t)LEVEL_MAX) return false;
+        int x, b, z;
+        unpack3(body[h], x, b, z);
+        units += wcell(x, b, z).amt;
+        for (int i = 0; i < 6; ++i) {
+            const Cell &n = wcell(x + NX[i], b + NB[i], z + NZ[i]);
+            if (!c_wet(n) || c_fluid(n) != f) continue;
+            if (c_kind(n) != K_STILL) return false;      // running or infinite water joined
+            const int64_t nk = pack3(x + NX[i], b + NB[i], z + NZ[i]);
+            if (in_body.insert(nk).second) body.push_back(nk);
+        }
+    }
+    for (int64_t k : body) done.insert(k);
+    // Fill again from the lowest floor up: cells join as the level reaches
+    // their floor (a priority flood); each unit layer gives a unit to every
+    // cell the level is inside. A cell found lower than the level is a way
+    // out: the rules run it, not this.
+    struct Q { int key; int64_t k; bool operator>(const Q &o) const { return key > o.key; } };
+    std::priority_queue<Q, std::vector<Q>, std::greater<Q>> pq;
+    std::unordered_set<int64_t> seen;
+    auto floor_key = [](int b, const Cell &c) { return b * CU + floor_u(c.solid); };
+    {
+        int best = INT_MAX;
+        int64_t bk = body[0];
+        for (int64_t k : body) {
+            int x, b, z;
+            unpack3(k, x, b, z);
+            const int fk = floor_key(b, wcell(x, b, z));
+            if (fk < best) { best = fk; bk = k; }
+        }
+        pq.push({ best, bk });
+        seen.insert(bk);
+    }
+    struct In { int64_t k; int lo, hi; int fill; };
+    std::vector<In> reach;
+    int level = pq.top().key;
+    int64_t left = units;
+    while (left > 0) {
+        while (!pq.empty() && pq.top().key <= level) {
+            const Q q = pq.top();
+            pq.pop();
+            if (q.key < level) return false;              // a way out below the level
+            int x, b, z;
+            unpack3(q.k, x, b, z);
+            const Cell &c = wcell(x, b, z);
+            reach.push_back({ q.k, q.key, (b + 1) * CU, 0 });
+            for (int i = 0; i < 6; ++i) {
+                const int nx = x + NX[i], nb = b + NB[i], nz = z + NZ[i];
+                const Cell &n = wcell(nx, nb, nz);
+                if (c_cap(n) <= 0) continue;
+                if (c_wet(n) && c_fluid(n) != f) continue;   // another fluid: a wall
+                if (NB[i] > 0 && (n.solid & 1)) continue;   // a plate over this cell
+                if (NB[i] < 0 && floor_of(c.solid) > 0) continue;
+                const int64_t nk = pack3(nx, nb, nz);
+                if (!seen.insert(nk).second) continue;
+                if (seen.size() > (size_t)LEVEL_MAX * 4) return false;
+                pq.push({ floor_key(nb, n), nk });
+            }
+        }
+        int active = 0;
+        for (const In &r : reach) {
+            if (r.lo <= level && level < r.hi) ++active;
+        }
+        if (active == 0) return false;
+        if (left >= active) {
+            for (In &r : reach) {
+                if (r.lo <= level && level < r.hi) ++r.fill;
+            }
+            left -= active;
+            ++level;
+        } else {
+            for (In &r : reach) {
+                if (left == 0) break;
+                if (r.lo <= level && level < r.hi) { ++r.fill; --left; }
+            }
+        }
+    }
+    // Write what changed: the reached cells' new water, and nothing left in
+    // body cells above the level.
+    std::unordered_map<int64_t, int> fill;
+    for (const In &r : reach) fill[r.k] = r.fill;
+    for (int64_t k : body) fill.emplace(k, 0);
+    bool any = false;
+    for (const auto &e : fill) {
+        int x, b, z;
+        unpack3(e.first, x, b, z);
+        const Cell &c = wcell(x, b, z);
+        const int have = (c_wet(c) && c_fluid(c) == f) ? (int)c.amt : 0;
+        if (have == e.second) continue;
+        Cell n = c;
+        if (e.second > 0) {
+            n.st = mk_st(f, K_STILL, false);
+            n.amt = (uint8_t)e.second;
+            n.aux = E_NONE;
+        } else {
+            n = Cell{ c.solid, 0, 0, 0 };
+        }
+        g_sets.push_back({ x, b, z, n });
+        wrote.insert(e.first);
+        any = true;
+    }
+    return any;
+}
+
+int g_levelled = 0;
+
+/// The bodies due a levelling, a few a look, in the sim radius.
+void level_due() {
+    if (g_level_due.empty() || g_tick % LEVEL_EVERY != 0) return;
+    std::vector<int64_t> now;
+    for (const auto &e : g_level_due) {
+        if (e.second > g_tick) continue;
+        int x, b, z;
+        unpack3(e.first, x, b, z);
+        if (dist2_centre(x, z) > g_sim_r * g_sim_r) continue;
+        now.push_back(e.first);
+        if ((int)now.size() >= LEVEL_LOOKS) break;
+    }
+    std::unordered_set<int64_t> done, wrote;
+    const size_t sets_before = g_sets.size();
+    for (int64_t k : now) {
+        g_level_due.erase(k);
+        if (done.count(k)) continue;
+        int x, b, z;
+        unpack3(k, x, b, z);
+        if (level_body(x, b, z, done, wrote)) ++g_levelled;
+    }
+    // This tick's moves were worked out from the water before the levelling:
+    // one into or out of a levelled cell would take or add units twice.
+    if (!wrote.empty()) {
+        // The apply keeps a cell's first set: the rules' own sets to a
+        // levelled cell this tick (its edge distance, say) would win.
+        std::vector<SetOp> keep;
+        keep.reserve(g_sets.size());
+        for (size_t i = 0; i < g_sets.size(); ++i) {
+            const SetOp &o = g_sets[i];
+            if (i < sets_before && wrote.count(pack3(o.x, o.b, o.z))) continue;
+            keep.push_back(o);
+        }
+        g_sets.swap(keep);
+        g_moves.erase(std::remove_if(g_moves.begin(), g_moves.end(), [&](const MoveOp &m) {
+            return wrote.count(pack3(m.x, m.b, m.z)) || wrote.count(pack3(m.tx, m.tb, m.tz));
+        }), g_moves.end());
+    }
+}
+
 /// SECTIONS FAR AWAY ARE LET GO. Every column the water ever sampled kept its
 /// section for good -- the flow's look for a drop, priming, the sea's floor
 /// -- so a long walk left thousands behind, and the save, the sea mask and
-/// every lookup walked them. Only a section with nothing of its own goes:
-/// never written, dry, nothing queued in it. All of that is the seed and the
-/// terrain's edits again, sampled afresh if anything asks. Written or wet
-/// sections stay (they ARE the water's state).
+/// every lookup walked them. A section with nothing queued goes: one never
+/// written (dry, or only the generated sea, lakes, pools -- the seed and the
+/// terrain's edits again, sampled afresh if anything asks); a written one is
+/// parked, its changed cells kept (g_parked, W3). Wet sections used to stay
+/// for good: 1,030 of them after a flight over the sea.
 constexpr uint32_t EVICT_EVERY = 50;     ///< ticks (5 s)
-constexpr double EVICT_PAST = 2.0;       ///< x the sim radius, plus a tile
+constexpr double EVICT_PAST = 1.5;       ///< x the sim radius, plus a tile (2.0 kept ~775 sections, 69 MB, round the player: W3)
 int g_evicted = 0;
 
 void evict_far() {
@@ -1761,10 +2077,19 @@ void evict_far() {
     std::vector<int64_t> gone;
     for (const auto &e : g_sec) {
         const Section *s = e.second.get();
-        if (s->written || s->wet != 0) continue;
         const double cx = ((double)s->sx + 0.5) * tile_m - g_cx;
         const double cz = ((double)s->sz + 0.5) * tile_m - g_cz;
-        if (cx * cx + cz * cz <= r * r) continue;
+        const double d2 = cx * cx + cz * cz;
+        if (d2 <= r * r) continue;
+        if (g_keep_inland_m > r && d2 <= g_keep_inland_m * g_keep_inland_m && s->wet > 0) {
+            // Inland water out to the chosen LOD stays, to be drawn (its
+            // far mesh reads sections); a section of only open sea goes.
+            bool inland = false;
+            for (const Cell &c : s->c) {
+                if (c_wet(c) && !c_ocean(c)) { inland = true; break; }
+            }
+            if (inland) continue;
+        }
         bool queued = false;
         for (uint8_t q : s->queued) {
             if (q) { queued = true; break; }
@@ -1777,6 +2102,36 @@ void evict_far() {
         auto it = g_sec.find(k);
         if (it == g_sec.end()) continue;
         const Section *s = it->second.get();
+        if (s->written) {
+            // Its changed cells: the ready columns' against the generated
+            // world, and an unsampled column's still-pending ones.
+            std::vector<Diff> keep;
+            for (int col = 0; col < SCOL; ++col) {
+                const int lx = col % SX, lz = col / SX;
+                if (!s->ready[col]) continue;
+                for (int lb = 0; lb < SB; ++lb) {
+                    const int i = Section::idx(lx, lb, lz);
+                    const Cell &c = s->c[i];
+                    Cell g = c;
+                    gen_fluid(g, s->sx * SX + lx, s->sb * SB + lb, s->sz * SX + lz, s->gtop[col],
+                            s->spring[col], s->lake[col]);
+                    if (c.st == g.st && c.amt == g.amt && c.aux == g.aux) continue;
+                    keep.push_back({ (uint16_t)i, c.st, c.amt, c.aux });
+                }
+            }
+            for (const Diff &d : s->pending) {
+                if (!s->ready[diff_col(d)]) keep.push_back(d);
+            }
+            std::sort(keep.begin(), keep.end(), [](const Diff &a, const Diff &b) {
+                return diff_col(a) != diff_col(b) ? diff_col(a) < diff_col(b) : a.i < b.i;
+            });
+            if (!keep.empty()) {
+                g_parked_bytes += (int64_t)keep.size() * (int64_t)sizeof(Diff);
+                g_parked[k] = std::move(keep);
+            }
+        }
+        const int lv = s->lava.load(std::memory_order_relaxed);
+        if (lv != 0) g_lava_total.fetch_add(-lv, std::memory_order_relaxed);
         auto ts = g_tile_secs.find(tkey(s->sx, s->sz));
         if (ts != g_tile_secs.end()) {
             auto &v = ts->second;
@@ -1947,6 +2302,7 @@ void do_tick() {
         ++evals;
         eval(x, b, z);
     }
+    if (g_simulate) level_due();
 
     // Apply (MineWater.md 4.2: sets first, then the moves that still hold).
     std::unordered_set<int64_t> set_now;
@@ -2128,6 +2484,9 @@ double BrickFluid::reset(double sea_m, bool sea_on) {
     join_wait();
     std::lock_guard<std::recursive_mutex> lk(g_state);
     g_sec.clear();
+    g_parked.clear();
+    g_parked_bytes = 0;
+    g_level_due.clear();
     g_sec_epoch.fetch_add(1);
     g_tile_secs.clear();
     g_due.clear();
@@ -2179,6 +2538,12 @@ void BrickFluid::set_centre(Vector3 at, double sim_radius_m) {
     g_cx = at.x;
     g_cz = at.z;
     g_sim_r = std::max(8.0, sim_radius_m);
+}
+
+void BrickFluid::set_wave_clock(double t) { g_wave_t = t; }
+
+void BrickFluid::set_keep_inland(double metres) {
+    g_keep_inland_m = std::max(0.0, metres);
 }
 
 void BrickFluid::set_sloped(bool on) {
@@ -2500,6 +2865,15 @@ double BrickFluid::surface_at(Vector3 p) {
     const Vector3i k = cell_of(p);
     MainLock lk;
     Cell c = rcell(k.x, k.y, k.z);
+    // A lake's wave (S3): its top plus the wave at the stud's middle, from
+    // the top's own cell or the air over it (a crest).
+    for (int bb = k.y; bb >= k.y - 1; --bb) {
+        const float amp = lake_amp(rcell, k.x, bb, k.z);
+        if (amp <= 0.0f) continue;
+        const Cell t = rcell(k.x, bb, k.z);
+        const double top = (double)(bb * CU + floor_u(t.solid) + t.amt) * UNIT_M;
+        return top + amp * lake_wave((k.x + 0.5) * STUD_M, (k.z + 0.5) * STUD_M, g_wave_t);
+    }
     if (!c_wet(c)) {
         // Just above a shallow cell: its top is still the surface here.
         return -INFINITY;
@@ -2561,8 +2935,26 @@ Dictionary BrickFluid::ray_cell(Vector3 from, Vector3 dir, double max_metres) {
     double t = 0.0;
     Vector3i nrm;
     for (int it = 0; it < 400 && t <= max_metres; ++it) {
-        const Cell cl = rcell(c[0], c[1], c[2]);
-        const bool hit_fluid = c_wet(cl);
+        Cell cl = rcell(c[0], c[1], c[2]);
+        bool hit_fluid = c_wet(cl);
+        // A lake's crest drawn up into this air cell (S3, R2): the source
+        // under it is what the bucket takes.
+        if (!hit_fluid && cl.solid == 0) {
+            const float amp = lake_amp(rcell, c[0], c[1] - 1, c[2]);
+            if (amp > 0.0f) {
+                const Cell lc = rcell(c[0], c[1] - 1, c[2]);
+                const double crest = (double)((c[1] - 1) * CU + floor_u(lc.solid) + lc.amt) * UNIT_M
+                        + amp * lake_wave((c[0] + 0.5) * STUD_M, (c[2] + 0.5) * STUD_M, g_wave_t);
+                const double y_in = from.y + d.y * t;
+                const double y_out = from.y + d.y * std::min(std::min(tmax[0], tmax[1]), tmax[2]);
+                if (std::min(y_in, y_out) <= crest) {
+                    c[1] -= 1;
+                    cl = lc;
+                    hit_fluid = true;
+                    nrm = Vector3i(0, 1, 0);
+                }
+            }
+        }
         const bool hit_ground = cl.solid != 0 && !hit_fluid;
         if (hit_fluid || hit_ground) {
             out["cell"] = Vector3i(c[0], c[1], c[2]);
@@ -2710,6 +3102,9 @@ Dictionary BrickFluid::memory_stats() {
     }
     Dictionary d;
     d["sections"] = (int64_t)g_sec.size();
+    d["parked"] = (int64_t)g_parked.size();
+    d["parked_bytes"] = g_parked_bytes + (int64_t)g_parked.size() * 64;
+    bytes += g_parked_bytes + (int64_t)g_parked.size() * 64;
     d["bytes"] = bytes;
     d["written"] = written;
     d["wet"] = wet;
@@ -2776,6 +3171,35 @@ PackedByteArray BrickFluid::get_save() {
             }
         }
     }
+    // A section back from parking: the changed cells of columns not yet
+    // sampled are still in `pending`.
+    for (const auto &e : g_sec) {
+        const Section &s = *e.second;
+        for (const Diff &d : s.pending) {
+            if (s.ready[diff_col(d)]) continue;
+            const int lx = d.i % SX, lz = (d.i / SX) % SX, lb = d.i / SCOL;
+            put32(s.sx * SX + lx);
+            put32(s.sb * SB + lb);
+            put32(s.sz * SX + lz);
+            buf.push_back(d.st);
+            buf.push_back(d.amt);
+            buf.push_back((uint8_t)(d.aux & 0x7F));
+        }
+    }
+    // Parked sections: their changed cells are the save's records already.
+    for (const auto &e : g_parked) {
+        int sx, sb, sz;
+        unpack3(e.first, sx, sb, sz);
+        for (const Diff &d : e.second) {
+            const int lx = d.i % SX, lz = (d.i / SX) % SX, lb = d.i / SCOL;
+            put32(sx * SX + lx);
+            put32(sb * SB + lb);
+            put32(sz * SX + lz);
+            buf.push_back(d.st);
+            buf.push_back(d.amt);
+            buf.push_back((uint8_t)(d.aux & 0x7F));
+        }
+    }
     PackedByteArray out;
     out.resize((int64_t)buf.size());
     std::copy(buf.begin(), buf.end(), out.ptrw());
@@ -2833,6 +3257,8 @@ void BrickFluid::_bind_methods() {
     ClassDB::bind_static_method("BrickFluid", D_METHOD("busy"), &BrickFluid::busy);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("build_tile_mesh", "tx", "tz"), &BrickFluid::build_tile_mesh);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("ease_seconds"), &BrickFluid::ease_seconds);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("set_keep_inland", "metres"), &BrickFluid::set_keep_inland);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("set_wave_clock", "t"), &BrickFluid::set_wave_clock);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("request_mesh", "tx", "tz"), &BrickFluid::request_mesh);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("drawn_tiles"), &BrickFluid::drawn_tiles);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("cell_info", "cell"), &BrickFluid::cell_info);

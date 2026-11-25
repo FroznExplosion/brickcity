@@ -12,7 +12,7 @@ extends RefCounted
 ##   material (block: BrickTerrain material index, else -1),
 ##   fluid (1 water, 2 lava, 0 none), fluid_kind ("source" / "still").
 
-const KINDS := ["block", "fluid", "bucket", "source_bucket", "chest", "tool", "backpack", "misc"]
+const KINDS := ["block", "fluid", "bucket", "source_bucket", "chest", "station", "tool", "backpack", "gun", "misc"]
 ## Which hand an item may be in (zylanntest's HandUse).
 const HANDS := ["any", "right", "off", "two"]
 const NOT_ITEMS := ["air", "bedrock"]
@@ -22,6 +22,12 @@ const BUCKET_TILES := 9
 static var _items := {}
 static var _order: Array[StringName] = []
 static var _by_material := {}
+## A block item folded into a material family (Docs/Inventory.md 11):
+## old id -> the family's (a save from before is moved onto it).
+static var _folded := {}
+## A block's count is in plate cells (a 1x1 plate is 1, a 2x4 brick 24):
+## what one stack of a material may hold.
+const BLOCK_STACK := 999
 
 
 static func load_all(force := false) -> void:
@@ -30,14 +36,21 @@ static func load_all(force := false) -> void:
 	_items.clear()
 	_order.clear()
 	_by_material.clear()
+	_folded.clear()
 	var names: PackedStringArray = BrickTerrain.material_names()
 	for m in names.size():
 		if NOT_ITEMS.has(names[m]):
 			continue
 		var id := block_id_for(names[m])
 		_add({"id": id, "name": names[m].capitalize(), "kind": "block", "material": m,
-				"hand": "right",
+				"hand": "right", "max_stack": BLOCK_STACK,
 				"colour": BrickWorld.get_filament_colour(BrickTerrain.material_filament_index(m))})
+	# A gun item a weapon class (Docs/Inventory.md 10): the stack's data is the
+	# gun itself (CharacterSave.gun_entry), so one item covers every roll.
+	for cid in WeaponClass.gun_ids():
+		_add({"id": gun_id(StringName(cid)), "name": String(cid).capitalize(), "kind": "gun", "max_stack": 1,
+				"hand": "right", "colour": Color(0.62, 0.64, 0.7), "glyph": "G",
+				"description": "A gun. In the hand: LMB fires, RMB aims, R reloads."})
 	for path in ContentPacks.files("data/items"):
 		var f := FileAccess.open(path, FileAccess.READ)
 		if f == null:
@@ -52,6 +65,36 @@ static func load_all(force := false) -> void:
 				var e: Dictionary = raw.duplicate(true)
 				e["id"] = StringName(k)
 				_add(e)
+	_fold_families(names)
+
+
+## MATERIALS (Docs/Inventory.md 11): a block item with `colours` (a pack's
+## table: "soil": {"colours": ["grass", "dirt", ...]}) is a material that
+## lays any of those terrain colours. The colours' own block items fold into
+## it: breaking any of them gives the material, and a save that held one gets
+## the material instead (`folded_into`).
+static func _fold_families(names: PackedStringArray) -> void:
+	for id in _order.duplicate():
+		var e: Dictionary = _items.get(id, {})
+		if e.is_empty() or e.kind != "block" or not bool(e.get("family", false)):
+			continue
+		for m in e.colours:
+			_by_material[int(m)] = id
+			var other := block_id_for(names[int(m)])
+			if other != id and _items.has(other) and not bool(_items[other].get("family", false)):
+				_items.erase(other)
+				_order.erase(other)
+				_folded[other] = id
+
+
+## The material an old block id was folded into, or &"".
+static func folded_into(id: StringName) -> StringName:
+	load_all()
+	return _folded.get(id, &"")
+
+
+static func gun_id(class_id: StringName) -> StringName:
+	return StringName("gun_%s" % class_id)
 
 
 static func block_id_for(material_name: String) -> StringName:
@@ -87,6 +130,10 @@ static func _complete(e: Dictionary) -> Dictionary:
 		"fluid_kind": str(e.get("fluid_kind", "source")),
 		## A backpack's storage slots (Docs/Inventory.md 8).
 		"slots": int(e.get("slots", 0)),
+		## A material's terrain colours (indices), the first its own; a family
+		## names them (Docs/Inventory.md 11).
+		"colours": PackedInt32Array(),
+		"family": e.has("colours") or bool(e.get("family", false)),
 	}
 	if not KINDS.has(out.kind):
 		out.kind = "misc"
@@ -98,9 +145,26 @@ static func _complete(e: Dictionary) -> Dictionary:
 	if m is String:
 		m = Array(BrickTerrain.material_names()).find(m)
 	out["material"] = int(m)
+	if out.kind == "block":
+		var names := Array(BrickTerrain.material_names())
+		var cols := PackedInt32Array()
+		var given = e.get("colours", [])
+		for c2 in (given if (given is Array or given is PackedStringArray or given is PackedInt32Array) else []):
+			var i: int = c2 if (c2 is int) else names.find(str(c2))
+			if i > 0 and not cols.has(i):
+				cols.append(i)
+		if cols.is_empty() and out.material > 0:
+			cols.append(out.material)
+		out["colours"] = cols
+		if out.material <= 0 and not cols.is_empty():
+			out.material = cols[0]
+		if not e.has("colour") and out.material > 0:
+			out["colour"] = BrickWorld.get_filament_colour(BrickTerrain.material_filament_index(out.material))
+		if not e.has("max_stack"):
+			out.max_stack = BLOCK_STACK
 	# A tool's own numbers (the Mega Pickaxe): how much one break clears and
 	# how often it repeats while held (MineBuilder._break_cells/_break_repeat).
-	for k in ["break_area", "break_repeat"]:
+	for k in ["break_area", "break_repeat", "model"]:
 		if e.has(k):
 			out[k] = e[k]
 	return out
@@ -143,6 +207,8 @@ static func label(s: ItemStack) -> String:
 	var d := get_def(s.id)
 	var n: String = d.get("name", String(s.id))
 	match d.get("kind", ""):
+		"gun":
+			return str(s.data.get("name", n))
 		"bucket":
 			return "%s %d/%d tiles" % [n, int(s.data.get("tiles", 0)), BUCKET_TILES]
 		"source_bucket":
