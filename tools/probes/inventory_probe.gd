@@ -55,6 +55,7 @@ func _init() -> void:
 	_crafting()
 	_wood_and_leaves()
 	_guns()
+	_placed_backpacks()
 	print("inventory probe: %d ok, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -594,3 +595,42 @@ func _guns() -> void:
 	g.free()
 	again.free()
 	hands.free()
+
+
+## A backpack put down (zylanntest's): a container whose slots are its own
+## contents; broken, it falls as itself with them; picked up, nothing drops.
+func _placed_backpacks() -> void:
+	print("placed backpacks")
+	var inv := Inventory.new()
+	var drops := DroppedItems.new()
+	drops.setup(null, inv)
+	var chests := MineChests.new()
+	chests.setup(null, inv, drops)
+	var bag := Inventory.make_backpack(&"small_backpack")
+	bag.contents[2] = ItemStack.make(&"coal_ore", 5)
+	var b := Vector3i(1, 20, 1)
+	_ok("a backpack is a container with its own size (9)", MineChests.is_container(&"small_backpack")
+			and MineChests.slot_count(&"small_backpack") == 9)
+	chests.place(b, bag.contents, true, &"small_backpack")
+	var key := MineChests.key_of(b)
+	_ok("put down: its slots are the very contents it carried", chests.slots_of(key) == bag.contents
+			and chests.slots_of(key)[2].count == 5)
+	var back := MineChests.new()
+	back.setup(null, inv, drops)
+	back.restore(JSON.parse_string(JSON.stringify(chests.to_save())))
+	_ok("saved and back: 9 slots, the coal in slot 3", back.slots_of(key).size() == 9
+			and back.slots_of(key)[2] != null and back.slots_of(key)[2].count == 5)
+	chests.break_chest(key, false)
+	_ok("broken: it falls as one backpack with its contents (creative too)", drops.count() == 1
+			and (drops.drops[0].stack as ItemStack).id == &"small_backpack"
+			and (drops.drops[0].stack as ItemStack).contents[2].count == 5)
+	back.remove(key)
+	_ok("removed (picked up): gone, nothing dropped", back.count() == 0 and drops.count() == 1)
+	for x in [drops, chests, back]:
+		for n in x.get_children():
+			n.free()
+	drops.clear()
+	chests.clear()
+	drops.free()
+	chests.free()
+	back.free()

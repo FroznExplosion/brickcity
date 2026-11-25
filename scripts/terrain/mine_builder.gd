@@ -217,6 +217,9 @@ func _input(event: InputEvent) -> void:
 					inv.toggle_hotbar()
 				_x_down = -1
 			get_viewport().set_input_as_handled()
+		elif event.pressed and k == KEY_G:
+			host.throw_grenade()          # whatever is in the hand (Docs/Inventory.md 10)
+			get_viewport().set_input_as_handled()
 		elif event.pressed and (k == KEY_E or k == KEY_TAB):
 			host.toggle_inventory()
 			get_viewport().set_input_as_handled()
@@ -252,6 +255,10 @@ func _input(event: InputEvent) -> void:
 		return
 	if not active:
 		return            # a gun: the clicks are the gun's
+	if mb.button_index == MOUSE_BUTTON_LEFT and hand_kind() == "grenade":
+		host.throw_grenade()
+		get_viewport().set_input_as_handled()
+		return
 	match mb.button_index:
 		MOUSE_BUTTON_LEFT:
 			break_target()
@@ -560,14 +567,18 @@ func place_target() -> bool:
 	if target.has("tree"):
 		return false           # nothing is built onto a tree
 	if target.has("chest"):
-		# RMB on a chest opens it, whatever is in the hand (Minecraft's).
-		host.open_chest(target.chest)
+		# Shift + RMB on a backpack put down: picked up and worn (swapped for
+		# the one worn); else RMB opens it, whatever is in the hand.
+		if Input.is_key_pressed(KEY_SHIFT) and ItemCatalog.kind(host.chests.item_of(target.chest)) == "backpack":
+			host.take_backpack(target.chest)
+		else:
+			host.open_chest(target.chest)
 		target = {}
 		return true
 	var d := hand_def()
 	var k := str(d.get("kind", ""))
-	if k == "chest" or k == "station":
-		return _place_chest()          # a workbench or furnace stands like a chest
+	if k == "chest" or k == "station" or k == "backpack":
+		return _place_chest()          # a workbench, furnace or backpack stands like a chest
 	var b := _block_of(target.cell)
 	var n: Vector3i = target.normal
 	var to := b + n
@@ -712,9 +723,18 @@ func pick_target() -> void:
 func _place_chest() -> bool:
 	var cell: Vector3i = target.cell + Vector3i(target.normal)
 	var blk := MineChests.block_of(cell)
-	if _box_hits_player(host.chests.box_of(blk)) or not host.chests.place(blk, [], false, inv.hand().id):
+	var h := inv.hand()
+	var bag := ItemCatalog.kind(h.id) == "backpack"
+	if _box_hits_player(host.chests.box_of(blk)) \
+			or not host.chests.place(blk, h.contents if bag else [], false, h.id):
 		return false
-	inv.consume_hand(1)
+	if bag:
+		# The backpack itself goes down, with its contents: out of the hand
+		# even in creative (or the same things would be in two places).
+		inv.set_slot(inv.hand_addr(), null)
+		inv.changed.emit()
+	else:
+		inv.consume_hand(1)
 	placed += 1
 	log_blocks.append("place chest %s" % MineChests.key_of(blk))
 	target = {}

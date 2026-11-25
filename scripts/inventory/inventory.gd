@@ -56,6 +56,8 @@ var creative := true
 ## clicks change it in place) and its key.
 var chest_slots: Array = []
 var chest_key := ""
+## What the open container is called (a chest, a backpack put down).
+var chest_title := "Chest"
 
 var _drag_active := false
 var _drag_button := -1
@@ -126,6 +128,8 @@ func seed_default() -> void:
 		var st := [&"workbench", &"furnace"][k] as StringName
 		if ItemCatalog.has(st) and main.size() > 24:
 			main[23 + k] = ItemStack.make(st, 1)
+	if ItemCatalog.has(&"grenade") and main.size() > 22:
+		main[22] = ItemStack.make(&"grenade", ItemCatalog.max_stack(&"grenade"))
 	changed.emit()
 
 
@@ -755,9 +759,10 @@ func clear_craft() -> Array:
 
 ## Borrow `slots` (kept by the chest's owner) under `key`, so the clicks change
 ## it in place.
-func open_chest(key: String, slots: Array) -> void:
+func open_chest(key: String, slots: Array, title := "Chest") -> void:
 	chest_key = key
 	chest_slots = slots
+	chest_title = title
 	changed.emit()
 
 

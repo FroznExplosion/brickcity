@@ -300,8 +300,12 @@ func _refresh() -> void:
 	if page == "craft":
 		_rebuild_craft()
 	_chest_box.visible = not inv.chest_key.is_empty()
-	title_label.text = "Chest" if not inv.chest_key.is_empty() else "Inventory"
+	title_label.text = inv.chest_title if not inv.chest_key.is_empty() else "Inventory"
+	(_chest_box.get_child(0) as Label).text = inv.chest_title
 	for s in _slots:
+		if not s.addr.is_empty() and s.addr.area == &"chest":
+			# A backpack put down has fewer slots than a chest.
+			s.visible = int(s.addr.index) < inv.area_size(&"chest")
 		if not s.addr.is_empty():
 			var a: Dictionary = s.addr
 			s.selected = (a.area == inv.hotbar_area() and a.index == inv.active_slot) \

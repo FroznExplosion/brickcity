@@ -12,7 +12,7 @@ extends RefCounted
 ##   material (block: BrickTerrain material index, else -1),
 ##   fluid (1 water, 2 lava, 0 none), fluid_kind ("source" / "still").
 
-const KINDS := ["block", "fluid", "bucket", "source_bucket", "chest", "station", "tool", "backpack", "gun", "misc"]
+const KINDS := ["block", "fluid", "bucket", "source_bucket", "chest", "station", "tool", "backpack", "gun", "grenade", "misc"]
 ## Which hand an item may be in (zylanntest's HandUse).
 const HANDS := ["any", "right", "off", "two"]
 const NOT_ITEMS := ["air", "bedrock"]
