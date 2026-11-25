@@ -48,6 +48,7 @@ func _init() -> void:
 	_character()
 	_backpacks()
 	_crafting()
+	_guns()
 	print("inventory probe: %d ok, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -165,8 +166,14 @@ func _catalog() -> void:
 	_ok("every material but air and bedrock is a block item", blocks == names.size() - 2,
 			"%d of %d" % [blocks, names.size()])
 	_ok("air and bedrock are not items", not ItemCatalog.has(&"air") and not ItemCatalog.has(&"bedrock"))
-	var ds := ItemCatalog.get_def(&"dark_stone")
-	_ok("dark_stone places 'dark stone'", ds.get("material", -1) == Array(names).find("dark stone"))
+	var ds := ItemCatalog.get_def(&"stone")
+	_ok("the stone material lays dark stone and granite too (stage 11)",
+			PackedInt32Array(ds.get("colours", [])).has(Array(names).find("dark stone"))
+			and PackedInt32Array(ds.get("colours", [])).has(Array(names).find("granite")))
+	_ok("granite is folded into stone, grass into soil", not ItemCatalog.has(&"granite")
+			and ItemCatalog.folded_into(&"granite") == &"stone" and ItemCatalog.folded_into(&"grass") == &"soil"
+			and ItemCatalog.block_item(Array(names).find("dark grass")) == &"soil")
+	_ok("a material stacks to 999 plate cells", ItemCatalog.max_stack(&"stone") == 999)
 	for id in [&"bucket", &"source_bucket", &"water_source", &"water_brick", &"lava_source", &"pickaxe", &"chest"]:
 		_ok("pack item %s" % id, ItemCatalog.has(id), str(ContentPacks.files("data/items")))
 	_ok("lava source pours lava", int(ItemCatalog.get_def(&"lava_source").fluid) == 2)
@@ -177,8 +184,8 @@ func _catalog() -> void:
 func _stacks() -> void:
 	print("stacks")
 	var inv := Inventory.new()
-	inv.main[0] = ItemStack.make(&"stone", 60)
-	inv.cursor = ItemStack.make(&"stone", 10)
+	inv.main[0] = ItemStack.make(&"chest", 60)
+	inv.cursor = ItemStack.make(&"chest", 10)
 	inv.left_click(A(&"main", 0))
 	_ok("merge stops at 64, the rest stays on the cursor",
 			inv.main[0].count == 64 and inv.cursor != null and inv.cursor.count == 6)
@@ -192,7 +199,7 @@ func _stacks() -> void:
 func _clicks() -> void:
 	print("clicks")
 	var inv := Inventory.new()
-	inv.main[0] = ItemStack.make(&"dirt", 11)
+	inv.main[0] = ItemStack.make(&"soil", 11)
 	inv.right_click(A(&"main", 0))
 	_ok("right click on a stack picks up half, rounded up", inv.cursor.count == 6 and inv.main[0].count == 5)
 	inv.right_click(A(&"main", 1))
@@ -204,7 +211,7 @@ func _clicks() -> void:
 	inv.main[3] = ItemStack.make(&"sand", 3)
 	inv.left_click(A(&"main", 3))
 	inv.left_click(A(&"main", 2))
-	_ok("left click on another item swaps", inv.main[2].id == &"sand" and inv.cursor.id == &"dirt"
+	_ok("left click on another item swaps", inv.main[2].id == &"sand" and inv.cursor.id == &"soil"
 			and inv.cursor.count == 4)
 	inv.cursor = null
 	inv.double_click(A(&"main", 0))
@@ -244,7 +251,7 @@ func _hands() -> void:
 	print("hands")
 	var inv := Inventory.new()
 	inv.seed_default()
-	_ok("the kit: blocks on bar 1, the bucket on bar 2", inv.hand() != null and inv.hand().id == &"grass"
+	_ok("the kit: materials on bar 1, the bucket on bar 2", inv.hand() != null and inv.hand().id == &"soil"
 			and inv.hotbars[1][0] != null and inv.hotbars[1][0].id == &"bucket")
 	inv.cursor = ItemStack.make(&"stone", 1)
 	inv.left_click(A(&"offhand", 0))
@@ -262,18 +269,18 @@ func _hands() -> void:
 			and inv.hand().id == &"sand")
 	inv.select_slot(8)
 	var old := inv.hand()
-	_ok("pick (creative): a block on no bar comes into the hand", inv.pick(&"granite")
-			and inv.hand().id == &"granite" and inv.hand().count == 64)
+	_ok("pick (creative): a block on no bar comes into the hand", inv.pick(&"coal_ore")
+			and inv.hand().id == &"coal_ore" and inv.hand().count == 999)
 	_ok("... and the old stack went to storage", inv.main.has(old))
 	var n := inv.hand().count
 	_ok("creative: placing uses nothing up", inv.consume_hand(4) and inv.hand().count == n)
 	inv.creative = false
 	inv.consume_hand(4)
 	_ok("survival: placing uses the stack up", inv.hand().count == n - 4)
-	_ok("survival: pick of a block you have none of does nothing", not inv.pick(&"obsidian"))
-	inv.hotbars[0][8] = ItemStack.make(&"granite", 2)
+	_ok("survival: pick of a block you have none of does nothing", not inv.pick(&"diamond_ore"))
+	inv.hotbars[0][8] = ItemStack.make(&"coal_ore", 2)
 	_ok("survival: not enough for a block", not inv.consume_hand(4) and inv.hand().count == 2)
-	var left := inv.add_item(ItemStack.make(&"granite", 10))
+	var left := inv.add_item(ItemStack.make(&"coal_ore", 10))
 	_ok("add_item tops up the hand's stack first", left == null and inv.hand().count == 12)
 
 
@@ -308,7 +315,14 @@ func _save() -> void:
 	_ok("the bucket kept its water (JSON numbers come back as floats)",
 			int(back.hotbars[1][0].data.get("tiles", 0)) == 6)
 	_ok("storage kept its chests", back.main[4] != null and back.main[4].id == &"chest" and back.main[4].count == 3)
-	_ok("blocks came back", back.hotbars[0][3] != null and back.hotbars[0][3].id == &"dark_stone")
+	_ok("blocks came back", back.hotbars[0][3] != null and back.hotbars[0][3].id == &"snow")
+	var old := {"format": 1, "hotbar_0": [{"id": "granite", "count": 10}, {"id": "sand", "count": 4}],
+			"hotbar_1": [], "offhand": []}
+	var o := Inventory.new()
+	o.from_dict(old)
+	_ok("a save from before stage 11: granite is stone, bricks are plate cells (10 -> 30, 4 -> 12)",
+			o.hotbars[0][0] != null and o.hotbars[0][0].id == &"stone" and o.hotbars[0][0].count == 30
+			and o.hotbars[0][1] != null and o.hotbars[0][1].count == 12 and not Inventory.units_in_bricks)
 	var d := inv.to_dict()
 	d["backpack"]["contents"][6] = {"id": "no_such_item", "count": 1}
 	back.from_dict(d)
@@ -389,57 +403,103 @@ func _backpacks() -> void:
 	_ok("a backpack never stacks", not Inventory.make_backpack(&"small_backpack").same_kind(Inventory.make_backpack(&"small_backpack")))
 
 
-## Stage 9: crafting (zylanntest's 2 x 2 grid; recipes in data/recipes).
+## Stage 12: crafting, Terraria's -- what a recipe takes, where it is made,
+## from what is carried (data/recipes; the stage 9 grid went).
 func _crafting() -> void:
 	print("crafting")
 	RecipeBook.load_all(true)
-	_ok("the base pack's recipes load", RecipeBook.all().size() >= 10, str(RecipeBook.all().size()))
+	_ok("the base pack's recipes load", RecipeBook.all().size() >= 12, str(RecipeBook.all().size()))
+	var by := {}
+	for r in RecipeBook.all():
+		by[r.name] = r
 	var inv := Inventory.new()
-	for i in 4:
-		inv.craft[i] = ItemStack.make(&"sand", 1)
-	var out := inv.get_slot(A(&"craft_out"))
-	_ok("4 sand in the grid make sandstone", out != null and out.id == &"sandstone")
-	inv.left_click(A(&"craft_out"))
-	_ok("taking it: onto the cursor, the grid used up", inv.cursor != null and inv.cursor.id == &"sandstone"
-			and inv.craft.all(func(s): return s == null))
-	inv.cursor = null
-	inv.craft = [ItemStack.make(&"granite", 1), ItemStack.make(&"diorite", 1), null, ItemStack.make(&"iron_ore", 1)]
-	_ok("a #stone recipe takes granite and diorite: a pickaxe", inv.get_slot(A(&"craft_out")) != null
-			and inv.get_slot(A(&"craft_out")).id == &"pickaxe")
-	inv.craft = [ItemStack.make(&"stone", 1), ItemStack.make(&"stone", 1), ItemStack.make(&"iron_ore", 1), null]
-	_ok("... and its mirror image", inv.get_slot(A(&"craft_out")) != null and inv.get_slot(A(&"craft_out")).id == &"pickaxe")
-	inv.craft = [null, ItemStack.make(&"stone", 3), null, ItemStack.make(&"granite", 3)]
-	_ok("a 1 x 2 recipe in either column: 2 gravel", inv.get_slot(A(&"craft_out")) != null
-			and inv.get_slot(A(&"craft_out")).count == 2)
-	_ok("Q on the output gives nothing (only crafting makes it)", inv.take_from(A(&"craft_out"), true) == null
-			and inv.craft[1].count == 3)
-	inv.craft = [ItemStack.make(&"sand", 5), ItemStack.make(&"sand", 5), ItemStack.make(&"sand", 5), ItemStack.make(&"sand", 3)]
-	inv.shift_click(A(&"craft_out"))
-	var made := 0
-	for a in inv.all_addrs():
-		var s := inv.get_slot(a)
-		if s != null and s.id == &"sandstone" and a.area != &"craft_out":
-			made += s.count
-	_ok("shift: as many as there are (3), into the inventory", made == 3 and inv.craft[3] == null
-			and inv.craft[0] != null and inv.craft[0].count == 2)
-	_ok("an unknown shape makes nothing", (func():
-			inv.craft = [ItemStack.make(&"sand", 1), null, null, ItemStack.make(&"dirt", 1)]
-			return inv.get_slot(A(&"craft_out")) == null).call())
+	for b in 2:
+		for i in Inventory.HOTBAR_SIZE:
+			inv.hotbars[b][i] = null
+	inv.main[0] = ItemStack.make(&"stone", 40)
+	_ok("gravel by hand: can be made with 40 stone", inv.can_craft(by["Gravel"], []))
+	var res := inv.craft(by["Gravel"], [])
+	_ok("made: 12 stone used, 12 gravel given", res.made == 1 and inv.count_of({"id": &"stone", "tag": "", "count": 1}) == 28
+			and inv.count_of({"id": &"gravel", "tag": "", "count": 1}) == 12)
+	_ok("a chest needs a workbench near", not inv.can_craft(by["Chest"], [])
+			and inv.missing(by["Chest"], []).has("a workbench near"))
+	_ok("... and 48 stone: with only 28, 20 more", not inv.can_craft(by["Chest"], [&"workbench"])
+			and inv.missing(by["Chest"], [&"workbench"]).has("20 more any stone"))
+	inv.main[1] = ItemStack.make(&"stone", 100)
+	_ok("with the stone and a workbench near: a chest", inv.craft(by["Chest"], [&"workbench"]).made == 1
+			and inv.count_of({"id": &"chest", "tag": "", "count": 1}) == 1)
+	var all_res := inv.craft(by["Gravel"], [], true)
+	_ok("All: as many as the stone makes (80 left -> 6)", all_res.made == 6
+			and inv.count_of({"id": &"stone", "tag": "", "count": 1}) == 8)
 	var small := Inventory.make_backpack(&"small_backpack")
-	small.contents[2] = ItemStack.make(&"coal_ore", 7)
-	inv.craft = [small, ItemStack.make(&"iron_ore", 1), ItemStack.make(&"iron_ore", 1), ItemStack.make(&"iron_ore", 1)]
-	var med := inv.get_slot(A(&"craft_out"))
-	_ok("a Medium backpack from a Small one keeps its contents, 18 slots", med != null and med.id == &"medium_backpack"
-			and med.contents.size() == 18 and med.contents[2] != null and med.contents[2].count == 7)
-	inv.cursor = null
-	inv.left_click(A(&"craft_out"))
-	_ok("... and the Small one is used up", inv.craft[0] == null and inv.cursor != null and inv.cursor.id == &"medium_backpack")
-	inv.cursor = null
-	inv.craft = [ItemStack.make(&"clay", 2), null, null, null]
-	var left := inv.clear_craft()
-	_ok("closing: the grid goes back into the inventory", left.is_empty() and inv.craft[0] == null
-			and inv.main.any(func(s): return s != null and s.id == &"clay"))
-	var back := Inventory.new()
-	inv.craft[1] = ItemStack.make(&"snow", 4)
-	back.from_dict(JSON.parse_string(JSON.stringify(inv.to_dict())))
-	_ok("the craft grid is saved", back.craft[1] != null and back.craft[1].count == 4)
+	small.contents[3] = ItemStack.make(&"coal_ore", 7)
+	inv.main[5] = small
+	inv.main[6] = ItemStack.make(&"iron_ore", 40)
+	var up := inv.craft(by["Medium Backpack"], [&"workbench"])
+	var med: ItemStack = null
+	for a2 in inv.all_addrs():
+		var s := inv.get_slot(a2)
+		if s != null and s.id == &"medium_backpack":
+			med = s
+	_ok("a Medium backpack from a Small one keeps its contents, 18 slots", up.made == 1 and med != null
+			and med.contents.size() == 18 and med.contents[3] != null and med.contents[3].count == 7)
+	_ok("... the Small one used up", inv.count_of({"id": &"small_backpack", "tag": "", "count": 1}) == 0)
+	var old := {"format": 2, "hotbar_0": [], "hotbar_1": [], "offhand": [], "craft": [{"id": "clay", "count": 5}]}
+	var o := Inventory.new()
+	o.from_dict(old)
+	_ok("an old save's craft grid goes into storage", o.count_of({"id": &"clay", "tag": "", "count": 1}) == 5)
+	var drops := DroppedItems.new()
+	drops.setup(null, inv)
+	var chests := MineChests.new()
+	chests.setup(null, inv, drops)
+	chests.place(Vector3i(0, 10, 0), [], true, &"workbench")
+	chests.place(Vector3i(5, 10, 0), [], true, &"chest")
+	var at := chests.box_of(Vector3i(0, 10, 0)).get_center()
+	_ok("a placed workbench is a station in reach; a chest is not", chests.stations_near(at) == [&"workbench"])
+	_ok("... and out of reach 10 m away", chests.stations_near(at + Vector3(10, 0, 0)).is_empty())
+	var back := MineChests.new()
+	back.setup(null, inv, drops)
+	back.restore(JSON.parse_string(JSON.stringify(chests.to_save())))
+	_ok("saved and back: the workbench and the chest", back.count() == 2
+			and back.item_of(MineChests.key_of(Vector3i(0, 10, 0))) == &"workbench")
+	chests.break_chest(MineChests.key_of(Vector3i(0, 10, 0)), true)
+	_ok("broken (survival): it drops a workbench", drops.count() == 1 and (drops.drops[0].stack as ItemStack).id == &"workbench")
+	for x in [drops, chests, back]:
+		for n in x.get_children():
+			n.free()
+	drops.clear()
+	chests.clear()
+	back.clear()
+	drops.free()
+	chests.free()
+	back.free()
+
+
+## Stage 10: a gun is an item -- the stack's data makes the same gun again.
+func _guns() -> void:
+	print("guns")
+	_ok("a gun item a weapon class", ItemCatalog.has(&"gun_rifle") and ItemCatalog.kind(&"gun_pistol") == "gun")
+	var lib := GunPlaceholderParts.build_library()
+	var res := GunGenerator.generate(lib, 4242, WeaponClass.rolled(&"rifle", 4242), 2)
+	var g := GunInstance.from_result(res)
+	var s := MineHands.stack_of(g, 17)
+	_ok("a rifle's stack: gun_rifle, its name, its rounds", s.id == &"gun_rifle" and s.data.get("name") == g.gun_name
+			and int(s.data.get("ammo")) == 17)
+	var back := ItemStack.from_dict(JSON.parse_string(JSON.stringify(s.to_dict())))
+	var again := CharacterSave.make_gun(back.data, lib)
+	_ok("saved and made again: the same gun (seed, name, tier)", again != null and again.gun_seed == g.gun_seed
+			and again.gun_name == g.gun_name and again.tier == g.tier)
+	_ok("guns never stack", not s.same_kind(MineHands.stack_of(g)) or ItemCatalog.max_stack(&"gun_rifle") == 1)
+	var inv := Inventory.new()
+	var hands := MineHands.new()
+	hands.library = lib
+	_ok("no guns carried: a rifle and a pistol are given", hands.ensure_guns(inv, {}))
+	var n := 0
+	for a in inv.all_addrs():
+		if MineHands.is_gun(inv.get_slot(a)):
+			n += 1
+	_ok("... two of them", n == 2)
+	_ok("... and not again once there are some", not hands.ensure_guns(inv, {}))
+	g.free()
+	again.free()
+	hands.free()

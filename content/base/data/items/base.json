@@ -1,14 +1,13 @@
 {
 	"items": {
-		"stone": { "tags": ["stone"] },
-		"dark_stone": { "tags": ["stone"] },
-		"granite": { "tags": ["stone"] },
-		"diorite": { "tags": ["stone"] },
-		"grass": { "tags": ["grass"] },
-		"dry_grass": { "tags": ["grass"] },
-		"lush_grass": { "tags": ["grass"] },
-		"cold_grass": { "tags": ["grass"] },
-		"dark_grass": { "tags": ["grass"] },
+		"soil": { "name": "Soil", "kind": "block", "hand": "right", "tags": ["soil"],
+			"colours": ["grass", "dirt", "podzol", "dry grass", "lush grass", "cold grass", "dark grass"],
+			"description": "Dug ground. Laid as grass, dirt, podzol or the grasses (V: the colour)." },
+		"stone": { "tags": ["stone"], "colours": ["stone", "dark stone", "granite", "diorite", "road"],
+			"description": "Laid as stone, dark stone, granite, diorite or road (V: the colour)." },
+		"sand": { "colours": ["sand", "red sand"], "description": "Laid as sand or red sand (V: the colour)." },
+		"clay": { "colours": ["clay", "terracotta", "cream terracotta", "red terracotta"],
+			"description": "Laid as clay or the terracottas (V: the colour)." },
 		"bucket": { "name": "Bucket", "kind": "bucket", "max_stack": 1, "colour": "#8c8c99", "glyph": "U",
 			"description": "Holds 9 tiles of water (3 bricks). Left: scoop from still water, or fill from a source. Right: pour a brick." },
 		"source_bucket": { "name": "Source bucket", "kind": "source_bucket", "max_stack": 1, "colour": "#595973", "glyph": "S",
@@ -33,6 +32,10 @@
 			"colour": "#654321", "glyph": "B", "description": "Worn in the backpack slot: 18 storage slots. What is in it goes where it goes." },
 		"large_backpack": { "name": "Large Backpack", "kind": "backpack", "slots": 27, "max_stack": 1, "hand": "right",
 			"colour": "#3a2a1a", "glyph": "B", "description": "Worn in the backpack slot: 27 storage slots. What is in it goes where it goes." },
+		"workbench": { "name": "Workbench", "kind": "station", "model": "table", "hand": "right", "colour": "#9a7448", "glyph": "W",
+			"description": "Place it: recipes marked \"at a workbench\" can be made within 4 m of it (E, the Craft tab)." },
+		"furnace": { "name": "Furnace", "kind": "station", "model": "furnace", "hand": "right", "colour": "#6b6b70", "glyph": "F",
+			"description": "Place it: recipes marked \"at a furnace\" (ore into tools) can be made within 4 m of it." },
 		"chest": { "name": "Chest", "kind": "chest", "hand": "right", "colour": "#8a5a2b", "glyph": "C",
 			"description": "Holds 27 stacks. Place it, then right-click it to open." }
 	}

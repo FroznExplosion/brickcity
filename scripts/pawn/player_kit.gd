@@ -50,11 +50,15 @@ var rng: RandomNumberGenerator
 ## Handed to the arsenal: boarding a vehicle on Use, the backpack's mech page.
 var board: Callable
 var mech_screen: Node
+## False: no arsenal -- the scene runs the player's guns itself (the mine
+## world's hotbar, Docs/Inventory.md 10). The level and skills still load.
+var use_arsenal := true
+var _progress_loaded := false
 
 
 ## A kit for `p_player` -- its camera, gun -- under `parent`; `s` is the AI the
 ## player fights beside and against. `opts`: scripted, library, world, meter_at,
-## rng, board, mech_screen (each as the field of that name).
+## rng, board, mech_screen (each as the field of that name), arsenal (use_arsenal).
 static func attach(parent: Node3D, p_player: PlayerController, p_cam: Camera3D, p_gun: GunController,
 		s: AIServices, opts := {}) -> PlayerKit:
 	var k := PlayerKit.new()
@@ -74,6 +78,7 @@ static func attach(parent: Node3D, p_player: PlayerController, p_cam: Camera3D, 
 		k.rng = RandomNumberGenerator.new()
 	k.board = opts.get("board", Callable())
 	k.mech_screen = opts.get("mech_screen", null)
+	k.use_arsenal = bool(opts.get("arsenal", true))
 	parent.add_child(k)
 	return k
 
@@ -117,6 +122,12 @@ func enter(p_pawn: Pawn, p_view: PlayerView, tier := 1, shared_feedback: CombatF
 		pawn.meleed.connect(fb.on_player_shot)
 	if fb != null and not gun.side_hit.is_connected(fb.on_player_shot):
 		gun.side_hit.connect(fb.on_player_shot)
+	if not use_arsenal:
+		if not _progress_loaded and not scripted:
+			_progress_loaded = true
+			player.progress.take(CharacterSave.load_from().progress_dict())
+			player.progress.changed.connect(_save)
+		return
 	var first := arsenal == null
 	if first:
 		arsenal = PlayerArsenal.new()
