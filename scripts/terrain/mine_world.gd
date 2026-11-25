@@ -2940,41 +2940,70 @@ func _run_pbrwood_gate() -> void:
 	check.call("a column of each colour laid (%d of %d)" % [laid, cols.size()], laid == cols.size())
 	var stud := BrickWorld.get_stud_metres()
 	var plate := BrickWorld.get_plate_metres()
-	var mid := Vector3((x0 + cols.size()) * stud, _ground_m(x0 + cols.size(), cell.y) + 4.5 * plate,
-			cell.y * stud)
-	var shots := [["near", 3.2, -0.12], ["mid", 12.0, -0.3], ["far", 40.0, -0.35]]
-	var near_on: Image = null
-	for sh in shots:
-		var dist: float = sh[1]
-		var eye := mid + Vector3(0, dist * 0.35, -dist)
+	# The wall's near face (-z), terrain frame: what every shot looks at.
+	var y_lo := _ground_m(x0 + cols.size(), cell.y)
+	var face_lo := Vector3(x0 * stud, y_lo, cell.y * stud)
+	var face_hi := Vector3((x0 + cols.size() * 2) * stud, y_lo + 9.0 * plate, cell.y * stud)
+	var aim := (face_lo + face_hi) * 0.5
+	if _hud_layer != null:
+		_hud_layer.visible = false
+	var look := func(dist: float) -> void:
+		var eye: Vector3 = aim + Vector3(dist * 0.25, dist * 0.3, -dist)
 		_fly_to(eye - Vector3(0, 1.6, 0), Vector3(0, 0, 1))
-		walker.pitch = float(sh[2])
-		await _frames(90)
-		var path := UserPaths.DEV + "pbr_terrain_%s.png" % sh[0]
-		await _shot(path)
-		if sh[0] == "near":
-			near_on = vp.get_texture().get_image()
-	# The same near view with the sets off (the overlay copies the ground's
-	# parameters once a second).
-	_fly_to(mid + Vector3(0, 3.2 * 0.35, -3.2) - Vector3(0, 1.6, 0), Vector3(0, 0, 1))
-	walker.pitch = -0.12
+		await _frames(3)
+		# A little right of the wall's middle (screen right is -x looking
+		# +z): the held item covers the bottom right.
+		var dir: Vector3 = (aim - Vector3(dist * 0.12, 0, 0) - _eye()).normalized()
+		_fly_to(eye - Vector3(0, 1.6, 0), Vector3(dir.x, 0, dir.z))
+		walker.pitch = asin(clampf(dir.y, -1.0, 1.0))
+	await look.call(3.0)
+	await _frames(90)
+	await _shot(UserPaths.DEV + "pbr_terrain_near.png")
+	var near_on := vp.get_texture().get_image()
+	# Where the wall's face is in that picture.
+	var cam := _eye_camera()
+	var rect := Rect2(cam.unproject_position(to_global(face_lo)), Vector2.ZERO)
+	for corner in [Vector3(face_hi.x, face_lo.y, face_lo.z), Vector3(face_lo.x, face_hi.y, face_lo.z), face_hi]:
+		rect = rect.expand(cam.unproject_position(to_global(corner)))
+	# The same view with the sets off (the overlay copies the ground's
+	# parameters once a second); the camera has not moved.
 	_mat.set_shader_parameter("pbr_far_range", 0.0)
 	await _frames(90)
 	await _shot(UserPaths.DEV + "pbr_terrain_near_off.png")
 	var near_off := vp.get_texture().get_image()
 	_mat.set_shader_parameter("pbr_far_range", 60.0)
-	var diff := 0.0
-	var n := 0
-	if near_on != null and near_off != null and near_on.get_size() == near_off.get_size():
-		var sz := near_on.get_size()
-		for y in range(int(sz.y * 0.3), int(sz.y * 0.7), 2):
-			for x in range(int(sz.x * 0.3), int(sz.x * 0.7), 2):
-				var a := near_on.get_pixel(x, y)
-				var b := near_off.get_pixel(x, y)
-				diff += absf(a.r - b.r) + absf(a.g - b.g) + absf(a.b - b.b)
-				n += 1
-	diff = diff / maxf(float(n) * 3.0, 1.0)
-	check.call("the sets change the wall up close (mean %.4f a channel)" % diff, diff > 0.01)
+	for sh in [["mid", 10.0], ["far", 40.0]]:
+		await look.call(float(sh[1]))
+		await _frames(90)
+		await _shot(UserPaths.DEV + "pbr_terrain_%s.png" % sh[0])
+	if _hud_layer != null:
+		_hud_layer.visible = true
+	# Texture detail (neighbouring pixels' difference) over the wall's part
+	# of the picture, sets on against off: the photo's figure is detail the
+	# flat colour lacks (the sea and clouds move between the two, so a plain
+	# difference is noise). Down to the picture's foot: the wall's lower
+	# courses run off it.
+	var sz := near_on.get_size()
+	rect = rect.intersection(Rect2(Vector2.ZERO, Vector2(sz)))
+	rect.end.y = sz.y
+	var detail := func(img: Image) -> float:
+		var sum := 0.0
+		var n := 0
+		for y in range(int(rect.position.y), int(rect.end.y) - 1, 2):
+			for x in range(int(rect.position.x), int(rect.end.x) - 1, 2):
+				var a := img.get_pixel(x, y)
+				var b := img.get_pixel(x + 1, y)
+				var c := img.get_pixel(x, y + 1)
+				sum += absf(a.r - b.r) + absf(a.g - b.g) + absf(a.b - b.b) 						+ absf(a.r - c.r) + absf(a.g - c.g) + absf(a.b - c.b)
+				n += 6
+		return sum / maxf(float(n), 1.0)
+	var on_d: float = detail.call(near_on)
+	var off_d: float = detail.call(near_off)
+	print("[pbr-gate] the wall on screen: %s" % rect)
+	check.call("the wall fills a good part of the near picture (%.0f px)" % rect.get_area(),
+			rect.get_area() > 40000.0)
+	check.call("the sets give the wall its figure up close (detail %.4f on, %.4f off)" % [on_d, off_d],
+			on_d > off_d * 1.5)
 	print("[pbr-gate] PBRWOOD-GATE %s (%d failed)%s" % ["PASS" if fails.is_empty() else "FAIL",
 			fails.size(), "" if fails.is_empty() else ": " + ", ".join(fails)])
 	get_tree().quit(0 if fails.is_empty() else 1)
