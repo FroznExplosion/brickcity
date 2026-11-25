@@ -325,6 +325,16 @@ func update_target() -> void:
 		_outline.global_transform = Transform3D(Basis.from_scale(box.size * 1.01),
 				host.to_global(box.position - box.size * 0.005))
 		return
+	# A tree nearer than the ground (Docs/Inventory.md 13): its trunk or its
+	# canopy, outlined; LMB fells it.
+	var tr: Dictionary = host.tree_ray(from, dir, REACH)
+	if not tr.is_empty() and (target.is_empty() or float(tr.dist) < from.distance_to(target.position)):
+		target = {"tree": tr.cell, "position": tr.point}
+		var tbox: AABB = tr.box
+		_outline.visible = true
+		_outline.global_transform = Transform3D(Basis.from_scale(tbox.size * 1.01),
+				host.to_global(tbox.position - tbox.size * 0.005))
+		return
 	if target.is_empty():
 		_outline.visible = false
 		return
@@ -438,6 +448,8 @@ func break_target() -> bool:
 		log_blocks.append("break chest %s" % target.chest)
 		target = {}
 		return true
+	if target.has("tree"):
+		return _fell(target.tree, target.position)
 	var material := int(target.get("material", 0))
 	if hand_kind() == "tool":
 		return _pick(material)
@@ -457,6 +469,26 @@ func break_target() -> bool:
 		var left := inv.add_item(ItemStack.make(id, int(res.changed)))
 		if left != null:
 			host.drops.spawn(left, at)
+	return true
+
+
+## LMB on a tree, by hand or with a tool (Docs/Inventory.md 13): the whole
+## tree comes down. Survival: its trunk as wood, its canopy as leaves, in
+## plate cells (Trees.yield_cells); what does not fit drops where it stood.
+func _fell(cell: Vector2i, at: Vector3) -> bool:
+	var got: Dictionary = host.fell_tree(cell)
+	target = {}
+	if got.is_empty():
+		return false
+	broken += 1
+	log_blocks.append("fell tree %s" % cell)
+	if not inv.creative:
+		for k in ["wood", "leaves"]:
+			var id := StringName(k)
+			if int(got.get(k, 0)) > 0 and ItemCatalog.has(id):
+				var left := inv.add_item(ItemStack.make(id, int(got[k])))
+				if left != null:
+					host.drops.spawn(left, at)
 	return true
 
 
@@ -522,6 +554,8 @@ func place_target() -> bool:
 		update_target()
 		if target.is_empty():
 			return false
+	if target.has("tree"):
+		return false           # nothing is built onto a tree
 	if target.has("chest"):
 		# RMB on a chest opens it, whatever is in the hand (Minecraft's).
 		host.open_chest(target.chest)
@@ -656,6 +690,9 @@ func pick_target() -> void:
 		return
 	if target.has("chest"):
 		inv.pick(host.chests.item_of(target.chest))
+		return
+	if target.has("tree"):
+		inv.pick(&"wood")
 		return
 	# The material that lays it, set to that colour.
 	var m := int(target.material)

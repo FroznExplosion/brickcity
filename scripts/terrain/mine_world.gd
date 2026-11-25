@@ -473,6 +473,8 @@ func generate(s: Dictionary) -> void:
 			_trees.near_m = float(arg.split("=")[1])
 	_trees.stream(int(settings.seed), _tree_chance_at, _tree_variant_at, 420.0)
 	_trees.solid_m = 64.0   # trunks the player and rounds meet
+	# The trees this world's player cut down stay down (Docs/Inventory.md 13).
+	_trees.set_felled(_felled_load)
 	# The instance pool, filled now rather than by the first new ground's
 	# never-drawn nodes (the spawn spike, Docs/MineWorld.md 14).
 	if _prewarm_on:
@@ -1609,6 +1611,26 @@ func world_items_changed() -> void:
 	_world_dirty = true
 
 
+## FELLING (Docs/Inventory.md 13). The tree a ray meets (terrain frame), as
+## TerrainTrees.ray gives it, or {}.
+func tree_ray(from: Vector3, dir: Vector3, reach: float) -> Dictionary:
+	return _trees.ray(from, dir, reach) if _trees != null else {}
+
+
+## Cut down the tree whose trunk is at `cell`: gone from the world and its
+## save. Returns what it was made of, {"wood": cells, "leaves": cells}, or {}
+## if none stood there.
+func fell_tree(cell: Vector2i) -> Dictionary:
+	if _trees == null:
+		return {}
+	var variant := _trees.fell(cell)
+	if variant < 0:
+		return {}
+	_world_dirty = true
+	print("[mine] tree felled at %s (variant %d)" % [cell, variant])
+	return Trees.yield_cells(variant).duplicate()
+
+
 # ---------------------------------------------------------------------------
 # The pause menu (Escape): the game's own (menu/core/MenuManager.gd), allowed
 # here through terrain_scene.gd and BrickcityMenuHost's scene hooks.
@@ -1770,6 +1792,8 @@ var _world_dirty := false
 var _inv_loaded := false
 ## This world's game mode (Docs/Inventory.md 7): saved in its world file.
 var survival := false
+## The world file's felled trees, until the trees are made (generate).
+var _felled_load: Array = []
 
 
 static func _inventory_path(edits_path: String) -> String:
@@ -1811,6 +1835,8 @@ func _load_inventory() -> void:
 	# The world's game mode (stage 7). A file from before kept the inventory's
 	# own "creative" flag.
 	survival = bool(world.get("survival", not bool(world.get("creative", true))))
+	var fl = world.get("felled", [])
+	_felled_load = fl if fl is Array else []
 	inv.creative = not survival
 	if first and how_kit_added(inv):
 		_inv_dirty = true
@@ -1839,7 +1865,7 @@ func how_kit_added(inv: Inventory) -> bool:
 	if inv.ensure_item(&"chest", &"mega_pickaxe"):
 		print("[mine] chests added to the inventory")
 		added = true
-	for st in [&"workbench", &"furnace"]:
+	for st in [&"workbench", &"furnace", &"wood", &"leaves"]:
 		if inv.ensure_item(st):
 			print("[mine] %s added to the inventory" % st)
 			added = true
@@ -1900,7 +1926,8 @@ func save_edits(wait := false) -> void:
 		_inv_dirty = false
 		save_character()
 	# The world file: only what is the world's (stage 6).
-	var inv_save := {"format": 3, "survival": survival}
+	var inv_save := {"format": 3, "survival": survival,
+			"felled": _trees.felled_list() if _trees != null else _felled_load}
 	if chests != null:
 		inv_save["chests"] = chests.to_save()
 	if drops != null:
@@ -2192,7 +2219,9 @@ func _key(code: Key) -> void:
 ## the held stack back; 1-9 over a slot sends it to the hotbar; the screen
 ## fits 640x400 (MenuFit.audit); E closes; X and 3 put hotbar 2's item in the
 ## hand and RMB places it; the inventory comes back after saving and
-## generating the world again. Prints INV-GATE PASS/FAIL.
+## generating the world again; survival: a tree felled gives wood and leaves,
+## a wood brick laid, the tree still gone after generating again (section
+## 13). Prints INV-GATE PASS/FAIL.
 func _run_inventory_gate() -> void:
 	var fails: Array[String] = []
 	var check := func(what: String, ok: bool) -> void:
@@ -2654,18 +2683,104 @@ func _run_inventory_gate() -> void:
 	await _shot(UserPaths.DEV + "inv_shapes.png")
 	builder.size_i = 0
 	builder.turned = false
+	# Section 13: a tree felled in survival gives wood and leaves in plate
+	# cells, it is gone from the trees, and a wood brick is laid from them.
+	var felled_cell: Vector2i = await _gate_fell_tree(check)
 	save_edits(true)
 	var again2 := settings.duplicate(true)
 	settings = {}
 	generate(again2)
 	await _frames(20)
 	check.call("after generating again: still survival", survival and not builder.inv.creative)
+	check.call("... and the felled tree still gone (%s)" % felled_cell, felled_cell != Vector2i.MAX
+			and _trees.felled.has(felled_cell))
 	set_survival(false)
 	builder.set_active(false)
 	builder.gate_keys = false
 	print("[inv-gate] INV-GATE %s (%d failed)%s" % ["PASS" if fails.is_empty() else "FAIL",
 			fails.size(), "" if fails.is_empty() else ": " + ", ".join(fails)])
 	get_tree().quit(0 if fails.is_empty() else 1)
+
+
+## --gate=inventory, section 13 (Docs/Inventory.md): the tree nearest the
+## player looked at from beside its trunk, LMB (break_target), survival.
+## Returns the felled trunk cell, or Vector2i.MAX.
+func _gate_fell_tree(check: Callable) -> Vector2i:
+	var inv: Inventory = builder.inv
+	var here := _eye()
+	var best: Dictionary = {}
+	var best_d := INF
+	for c in _trees._cells:
+		for row in _trees._cells[c]:
+			var d: float = ((row.xf as Transform3D).origin - here).length()
+			if d < best_d:
+				best_d = d
+				best = row
+	check.call("a tree stands near the player (%.0f m)" % best_d, not best.is_empty())
+	if best.is_empty():
+		return Vector2i.MAX
+	var trunk: AABB = Trees.boxes(int(best.variant))[0]
+	trunk.position += (best.xf as Transform3D).origin
+	var aim := trunk.get_center()
+	aim.y = trunk.position.y + minf(1.65, trunk.size.y * 0.5)   # standing eye height
+	# From whichever side the ground leaves the trunk in sight.
+	for side in [Vector3(1, 0, 0), Vector3(-1, 0, 0), Vector3(0, 0, 1), Vector3(0, 0, -1)]:
+		var at: Vector3 = aim + side * 2.5 - Vector3(0, 1.6, 0)
+		_fly_to(at, -side)
+		await _frames(3)
+		var dir := (aim - _eye()).normalized()
+		_fly_to(at, Vector3(dir.x, 0, dir.z))
+		walker.pitch = asin(clampf(dir.y, -1.0, 1.0))
+		await _frames(3)
+		builder.update_target()
+		if builder.target.has("tree"):
+			break
+	check.call("the trunk is what is looked at, outlined", builder.target.has("tree"))
+	if not builder.target.has("tree"):
+		return Vector2i.MAX
+	var cell: Vector2i = builder.target.tree
+	var variant := -1
+	for c in _trees._cells:
+		for row in _trees._cells[c]:
+			if Vector2i(row.x, row.z) == cell:
+				variant = int(row.variant)
+	await _shot(UserPaths.DEV + "inv_tree.png")
+	# Room for exactly what it gives: no wood or leaves carried.
+	for a in inv.all_addrs():
+		var s := inv.get_slot(a)
+		if s != null and (s.id == &"wood" or s.id == &"leaves"):
+			inv.set_slot(a, null)
+	inv.select_item(&"pickaxe")
+	var trees_before: int = _trees.count
+	var want: Dictionary = Trees.yield_cells(variant)
+	var felled: bool = builder.break_target()
+	await _frames(5)
+	var wood := inv.count_of({"id": &"wood", "tag": "", "count": 1})
+	var leaves := inv.count_of({"id": &"leaves", "tag": "", "count": 1})
+	check.call("LMB fells it: %d trees -> %d, %s in the felled set" % [trees_before, _trees.count, cell],
+			felled and _trees.count == trees_before - 1 and _trees.felled.has(cell))
+	check.call("survival: its trunk as %d wood, its canopy as %d leaves (want %s)" % [wood, leaves, want],
+			wood == int(want.wood) and leaves == int(want.leaves) and wood > 0)
+	builder.update_target()
+	check.call("the tree is no longer looked at", builder.target.get("tree", Vector2i.MAX) != cell)
+	await _shot(UserPaths.DEV + "inv_tree_felled.png")
+	# A wood brick laid from the stack: a 2x2 brick, on the ground below.
+	inv.select_item(&"wood")
+	builder.size_i = 0
+	walker.pitch = -0.9
+	await _frames(5)
+	builder.update_target()
+	var laid: bool = builder.place_target()
+	await _frames(10)
+	var used: int = wood - inv.count_of({"id": &"wood", "tag": "", "count": 1})
+	builder.update_target()
+	var names := BrickTerrain.material_names()
+	var looked := int(builder.target.get("material", 0))
+	check.call("a wood brick laid: %d plate cells of wood used, the brick looked at is %s"
+			% [used, names[looked] if looked < names.size() else str(looked)],
+			laid and used > 0 and used <= 12 and looked < names.size() and names[looked] == "wood")
+	await _shot(UserPaths.DEV + "inv_wood_brick.png")
+	return cell
 
 
 func _inv_slot(scr: InventoryScreen, a: Dictionary, item := &"") -> InvSlot:

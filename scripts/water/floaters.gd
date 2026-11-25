@@ -53,7 +53,13 @@ func setup(p_host: Node, p_water: Node) -> void:
 
 
 ## The density (over water's) of a material name.
+## Every colour of wood and leaves (Docs/Inventory.md 13: "pale wood",
+## "autumn leaves" ...) floats as its family does.
 static func density_of(material: String) -> float:
+	if material.ends_with(" wood"):
+		material = "wood"
+	elif material.ends_with(" leaves"):
+		material = "leaves"
 	return float(FLOATS.get(material, STONE))
 
 

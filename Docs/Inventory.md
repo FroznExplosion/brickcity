@@ -349,3 +349,55 @@ right after the pickaxe on bar 2; a save made before it existed gets it once
 the broken bricks are all counted as the material looked at. `-- --gate=mega`
 compares it with the pickaxe (270 plate cells against 12 on uneven ground; a
 full face is 300); inventory_probe checks the kit and the save top-up.
+
+## 13. Wood and leaves (2026-11-24)
+
+Asked by the user: build with every brick type by material -- stone, wood,
+leaves -- and get wood from trees. Before this the terrain had one `wood` and
+one `leaves` material (MineWater.md 14.8, floating debris), no item said what
+they were for, and a tree could not be broken.
+
+**Materials.** Appended to BrickTerrain's `Material` (append-only: a save
+stores the byte), each a filament no other ground uses (floaters.gd tells a
+piece's material by its colour). No dark wood: the one dark brown left, skin
+dark, is dirt's brown to 0.01.
+
+| Family | Colours (terrain materials, filament) |
+|---|---|
+| wood | wood (caramel, the old one), pale wood (skin medium), birch wood (sand) |
+| leaves | leaves (forest, the old one), light leaves (lime), autumn leaves (orange), red leaves (red) |
+
+`material_burns` (brick_terrain.h) is wood or leaves of any colour: lava
+lights them (brick_fluid `ignite_round`, lava_fire.gd), and floaters.gd floats
+them. The terrain draws them in their filament colours like all ground (the
+PBR wood/leaf sets of Docs/PbrWood.md are brick-world materials, not terrain;
+a PBR look for terrain wood is later work).
+
+**Items.** `wood` and `leaves` in content/base/data/items/base.json with
+`colours`: material families (section 11), so Z shapes, R turns, V picks the
+colour and the cost is plate cells, as for stone. Creative kits get a full
+stack of each once (`how_kit_added`).
+
+**Trees break whole.** A mine world tree stays a TerrainTrees row (a brick
+recipe drawn by ImpostorLod), not terrain cells: stamping trees into the field
+would mean the generator, the coarse tiers and the far cards all learning
+trees. Instead:
+- `TerrainTrees.ray` meets a tree's trunk box or canopy box (per variant,
+  from its recipe's Wood and Leaf parts). The builder looks at it when it is
+  nearer than the ground (like a chest), outlined.
+- LMB (hand or pickaxe) fells it: `TerrainTrees.fell` takes it out of its
+  ImpostorLod set and its trunk collider, and remembers its trunk cell in
+  `felled`, which `_place` skips, so a cell streamed in again leaves it out.
+- Survival: the tree's plate cells, Wood parts as `wood` and Leaf parts as
+  `leaves` (`Trees.yield_cells`: a 7-brick trunk is 84 wood); what does not
+  fit drops where it stood. Creative: nothing given.
+- `felled` is saved in the world file (`.inv`, key `felled`: [[x, z], ...]),
+  so a felled tree stays gone.
+
+**Recipes.** Workbench 48 wood (it was stone and clay), chest 96 wood at a
+workbench, pickaxe 12 wood (the handle) + 24 stone + 12 iron ore.
+
+**Tests.** inventory_probe: the families and their fold, the materials burn,
+`yield_cells`, the recipes, felled round trip. `--gate=inventory`: survival,
+a tree looked at, LMB, wood and leaves in the inventory, the tree gone from
+the set, a wood brick laid from the stack.

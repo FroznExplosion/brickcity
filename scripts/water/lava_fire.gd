@@ -22,8 +22,9 @@ var host: Node = null
 var burning := {}                 ## Vector3i plate cell -> {left: float, node: Node3D}
 var burned := 0
 
-var _wood := -1
-var _leaves := -1
+## Every colour of wood and of leaves (Docs/Inventory.md 13), material indices.
+var _wood: Array[int] = []
+var _leaves: Array[int] = []
 var _spread_in := 0.0
 var _flame_mesh: BoxMesh
 var _flame_mat: StandardMaterial3D
@@ -33,8 +34,13 @@ var _lights := 0
 func setup(p_host: Node) -> void:
 	host = p_host
 	var names := BrickTerrain.material_names()
-	_wood = names.find("wood")
-	_leaves = names.find("leaves")
+	_wood.clear()
+	_leaves.clear()
+	for m in names.size():
+		if names[m] == "wood" or names[m].ends_with(" wood"):
+			_wood.append(m)
+		elif names[m] == "leaves" or names[m].ends_with(" leaves"):
+			_leaves.append(m)
 	_flame_mesh = BoxMesh.new()
 	var stud := BrickWorld.get_stud_metres()
 	_flame_mesh.size = Vector3(stud * 0.8, BrickWorld.get_plate_metres() * 2.5, stud * 0.8)
@@ -59,14 +65,14 @@ func clear() -> void:
 
 func burnable(cell: Vector3i) -> bool:
 	var m := BrickTerrain.solid_at(cell.x, cell.y, cell.z)
-	return m == _wood or m == _leaves
+	return _wood.has(m) or _leaves.has(m)
 
 
 ## Set one plate cell alight (x, plate, z), if it burns and is not already.
 func ignite(cell: Vector3i) -> bool:
 	if burning.has(cell) or burning.size() >= MAX_FIRES or not burnable(cell):
 		return false
-	var leaves := BrickTerrain.solid_at(cell.x, cell.y, cell.z) == _leaves
+	var leaves := _leaves.has(BrickTerrain.solid_at(cell.x, cell.y, cell.z))
 	var span: Vector2 = LEAVES_S if leaves else WOOD_S
 	var stud := BrickWorld.get_stud_metres()
 	var plate := BrickWorld.get_plate_metres()

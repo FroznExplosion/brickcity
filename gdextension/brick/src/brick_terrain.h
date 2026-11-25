@@ -135,8 +135,25 @@ enum Material {
     /// uses, so a block's colour index says what it is.
     MAT_WOOD,
     MAT_LEAVES,
+    /// More colours of the two (Docs/Inventory.md 13): the wood and leaves
+    /// item families lay any of them. Also filaments no ground uses, and none
+    /// near one (skin dark, a dark wood, was dirt's brown to 0.01).
+    MAT_PALE_WOOD,
+    MAT_BIRCH_WOOD,
+    MAT_LIGHT_LEAVES,
+    MAT_AUTUMN_LEAVES,
+    MAT_RED_LEAVES,
     MATERIAL_COUNT
 };
+
+/// Wood or leaves, any colour: what lava sets alight and water floats.
+inline bool material_is_wood(int m) {
+    return m == MAT_WOOD || m == MAT_PALE_WOOD || m == MAT_BIRCH_WOOD;
+}
+inline bool material_is_leaves(int m) {
+    return m == MAT_LEAVES || m == MAT_LIGHT_LEAVES || m == MAT_AUTUMN_LEAVES || m == MAT_RED_LEAVES;
+}
+inline bool material_burns(int m) { return material_is_wood(m) || material_is_leaves(m); }
 
 /// BUILDING MATERIALS (Docs/TerrainBuildings.md, stage 2): one a filament
 /// colour, MAT_FIL_BASE + the filament's index, so a building stamped into
@@ -202,6 +219,11 @@ inline int material_filament(int m) {
         case MAT_OBSIDIAN: return 53;      // plum
         case MAT_WOOD: return 28;          // caramel
         case MAT_LEAVES: return 41;        // forest
+        case MAT_PALE_WOOD: return 57;     // skin medium
+        case MAT_BIRCH_WOOD: return 29;    // sand
+        case MAT_LIGHT_LEAVES: return 36;  // lime
+        case MAT_AUTUMN_LEAVES: return FIL_ORANGE;
+        case MAT_RED_LEAVES: return FIL_RED;
         default: return FIL_GREY;
     }
 }

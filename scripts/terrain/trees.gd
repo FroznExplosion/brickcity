@@ -120,6 +120,48 @@ static func recipe(variant: int) -> BuildRecipe:
 	return r
 
 
+static var _yields := {}
+static var _boxes := {}
+
+
+## What felling a variant gives (Docs/Inventory.md 13): the plate cells of its
+## Wood parts and of its Leaf parts, {"wood": n, "leaves": n} -- a round 2x2
+## is 12, a 4x4 plate 16, as a block of the same size costs.
+static func yield_cells(variant: int) -> Dictionary:
+	variant = posmod(variant, VARIANTS)
+	if not _yields.has(variant):
+		var r := recipe(variant)
+		var out := {"wood": 0, "leaves": 0}
+		for i in r.size():
+			var s := BuildRecipe.part_size(r.part_of(i))
+			var key := "wood" if r.material_of(i) == WOOD else ("leaves" if r.material_of(i) == LEAF else "")
+			if key != "":
+				out[key] += s.x * s.y * s.z
+		_yields[variant] = out
+	return _yields[variant]
+
+
+## A variant's trunk and canopy as boxes in its mesh's own metres (the recipe
+## rebased to its min corner, as `placement` places it): [trunk, canopy].
+## What the mine world's builder aims at (TerrainTrees.ray).
+static func boxes(variant: int) -> Array:
+	variant = posmod(variant, VARIANTS)
+	if not _boxes.has(variant):
+		var r := recipe(variant)
+		var o := r.origin()
+		var size := BrickWorld.get_cell_size()
+		var out := [AABB(), AABB()]
+		var seen := [false, false]
+		for i in r.size():
+			var k := 0 if r.material_of(i) == WOOD else 1
+			var lo := Vector3(r.cell_of(i) - o) * size
+			var b := AABB(lo, Vector3(BuildRecipe.part_size(r.part_of(i))) * size)
+			out[k] = b if not seen[k] else (out[k] as AABB).merge(b)
+			seen[k] = true
+		_boxes[variant] = out
+	return _boxes[variant]
+
+
 ## Where the trunk's (0, 0, 0) corner is in a placed tree's frame, in cells.
 static func trunk_offset(variant: int) -> Vector3i:
 	return TRUNK_CORNER - recipe(variant).origin()
