@@ -683,3 +683,29 @@ is on: keep the fit's own coarse cell store wider than the generated-tile
 store (64 tiles), or fit in the order tiles stream so neighbours are kept;
 then the fitter's own time (~200 us a region: the candidate loop's fits and
 seam counts).
+
+**Measured with the switch on (2026-11-25, windowed, one run at a time):**
+
+- `--gate=bricks --fitted` PASS (fill 0.5 ms, a shot brick hidden the frame
+  it is hit, its hole handed over in 2-5 frames).
+- `--gate=breaklag --burst`: fitted 30 of 30 broke, trigger to hole mean 34
+  ms, worst 47; old pattern mean 33, worst 38.
+- `--gate=flight` (1440 m fast flight, streaming): old pattern worst frame 38
+  ms, 1 over 33 ms, 0 holes; fitted worst 659 ms, 23 over 33 ms, the flight
+  15 -> 18 s. Free RAM hit 0 MB in the fitted run (142 MB in the old), so
+  paging is in those spikes too; but no main-thread path fits a region (the
+  coarse far tier does not use the bond; tiles bake on workers), so the cost
+  is the workers' load (about 3x a tile's bake, cold) taking cores from the
+  main thread.
+- Cold split, a tile in a row of 4 (`build_tile`, headless): neighbours'
+  noise ~114 ms, the fit ~45 ms (~270 regions: the tile's and the even
+  regions round them, fitted ahead for its neighbours), the mesh 14. The
+  fitter: the wide pass 37%, the raster fill 34%, cave air 17%. Speedups
+  that change no brick (keys sorted once, the course under counted once a
+  footprint, free cells as row masks): the batch fit 13.2 -> 9.1 ms a tile.
+
+Next, before the switch is on: the halo (an odd region's even neighbours
+reach ~1.5 tiles, so a tile's fit makes its neighbours' noise and regions
+early) -- fit regions where a tile's own bake asks, keep the noise the
+fit made for the tiles that follow (the generated-tile store holds 64), and
+the seams count a candidate does (40% of the fit).
