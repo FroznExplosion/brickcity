@@ -1800,12 +1800,15 @@ func _load_inventory() -> void:
 	inv.creative = not survival
 	if first and how_kit_added(inv):
 		_inv_dirty = true
+	# A world file from before stage 11 (format < 3) counted blocks in bricks.
+	Inventory.units_in_bricks = int(world.get("format", 3)) < 3 and not world.is_empty()
 	if chests != null:
 		chests.inv = inv
 		chests.restore(world.get("chests", {}))
 	if drops != null:
 		drops.inv = inv
 		drops.restore(world.get("drops", []))
+	Inventory.units_in_bricks = false
 	_world_dirty = false
 	builder._refresh_bar()
 
@@ -1879,7 +1882,7 @@ func save_edits(wait := false) -> void:
 		_inv_dirty = false
 		save_character()
 	# The world file: only what is the world's (stage 6).
-	var inv_save := {"format": 2, "survival": survival}
+	var inv_save := {"format": 3, "survival": survival}
 	if chests != null:
 		inv_save["chests"] = chests.to_save()
 	if drops != null:
@@ -2193,7 +2196,7 @@ func _run_inventory_gate() -> void:
 	while not ItemIcons.ready and waited < 120:
 		await _frames(1)
 		waited += 1
-	check.call("item icons rendered at load (stage 4)", ItemIcons.ready and ItemIcons.has_icon(&"granite")
+	check.call("item icons rendered at load (stage 4)", ItemIcons.ready and ItemIcons.has_icon(&"coal_ore")
 			and ItemIcons.has_icon(&"bucket"))
 	# Stage 10: the kit's guns (MineHands.ensure_guns) -- moved to the end of
 	# the storage here so the checks below find the hotbars as they were.
@@ -2220,12 +2223,12 @@ func _run_inventory_gate() -> void:
 	var tab: Button = scr.get("_tab_creative")
 	await _click(tab.get_global_rect().get_center())
 	check.call("the Creative tab shows the catalog", scr.page == "creative")
-	await _click(_inv_slot(scr, {}, &"granite").get_global_rect().get_center())
+	await _click(_inv_slot(scr, {}, &"coal_ore").get_global_rect().get_center())
 	check.call("a catalog item comes onto the cursor, a full stack",
-			inv.cursor != null and inv.cursor.id == &"granite" and inv.cursor.count == 64)
+			inv.cursor != null and inv.cursor.id == &"coal_ore" and inv.cursor.count == 999)
 	await _click(_inv_slot(scr, Inventory.addr(&"hotbar_1", 2)).get_global_rect().get_center())
 	check.call("... and swaps with what hotbar 2 slot 3 held (water source now held)",
-			inv.hotbars[1][2] != null and inv.hotbars[1][2].id == &"granite"
+			inv.hotbars[1][2] != null and inv.hotbars[1][2].id == &"coal_ore"
 			and inv.cursor != null and inv.cursor.id == &"water_source")
 	await _shot(UserPaths.DEV + "inv_creative.png")
 	# The slot under the mouse spins (zylanntest's hover): a moment later it
@@ -2236,11 +2239,11 @@ func _run_inventory_gate() -> void:
 	var a1: float = spun.get("_angle")
 	check.call("the hovered slot spins (%.2f -> %.2f rad)" % [a0, a1], absf(wrapf(a1 - a0, -PI, PI)) > 0.2)
 	await _shot(UserPaths.DEV + "inv_spin.png")
-	await _click(_inv_slot(scr, {}, &"dirt").get_global_rect().get_center())
+	await _click(_inv_slot(scr, {}, &"gravel").get_global_rect().get_center())
 	check.call("a held stack clicked on the catalog is thrown away", inv.cursor == null)
-	# A left drag spreads a stack: sand over the first three storage slots
+	# A left drag spreads a stack: chests (64 to a stack) over the first three storage slots
 	# (storage starts empty; the hotbars are the kit's).
-	await _click(_inv_slot(scr, {}, &"sand").get_global_rect().get_center())
+	await _click(_inv_slot(scr, {}, &"chest").get_global_rect().get_center())
 	await _shot(UserPaths.DEV + "inv_held.png")
 	var tab_s: Button = scr.get("_tab_storage")
 	await _click(tab_s.get_global_rect().get_center())
@@ -2250,8 +2253,8 @@ func _run_inventory_gate() -> void:
 		pts.append(_inv_slot(scr, Inventory.addr(&"main", i)).get_global_rect().get_center())
 	await _gate_drag(pts)
 	var spread := [inv.main[0], inv.main[1], inv.main[2]]
-	check.call("a left drag spreads 64 sand over 3 slots (21 each, 1 held)",
-			spread.all(func(s): return s != null and s.id == &"sand" and s.count == 21)
+	check.call("a left drag spreads 64 chests over 3 slots (21 each, 1 held)",
+			spread.all(func(s): return s != null and s.id == &"chest" and s.count == 21)
 			and inv.cursor != null and inv.cursor.count == 1)
 	var held_before := inv.cursor != null
 	await _key(KEY_ESCAPE)
@@ -2266,7 +2269,7 @@ func _run_inventory_gate() -> void:
 	# Left click picks a stack up, left click on an empty slot puts it down.
 	await _click(_inv_slot(scr, Inventory.addr(&"main", 2)).get_global_rect().get_center())
 	await _click(_inv_slot(scr, Inventory.addr(&"main", 5)).get_global_rect().get_center())
-	var moved: bool = inv.main[2] == null and inv.main[5] != null and inv.main[5].id == &"sand" and inv.cursor == null
+	var moved: bool = inv.main[2] == null and inv.main[5] != null and inv.main[5].id == &"chest" and inv.cursor == null
 	check.call("a stack picked up and put down in another slot", moved)
 	if moved:
 		var over := _inv_slot(scr, Inventory.addr(&"main", 5)).get_global_rect().get_center()
@@ -2276,9 +2279,9 @@ func _run_inventory_gate() -> void:
 		Input.parse_input_event(m)
 		await _frames(2)
 		await _key(KEY_9)
-		check.call("9 over a storage slot sends it to hotbar 1 slot 9 (its terracotta to storage)",
-				inv.hotbars[0][8] != null and inv.hotbars[0][8].id == &"sand"
-				and inv.main[5] != null and inv.main[5].id == &"terracotta")
+		check.call("9 over a storage slot sends it to hotbar 1 slot 9 (its obsidian to storage)",
+				inv.hotbars[0][8] != null and inv.hotbars[0][8].id == &"chest"
+				and inv.main[5] != null and inv.main[5].id == &"obsidian")
 	# Stage 8: backpacks, real clicks. Off: no storage; parked in a hotbar; a
 	# Small one from the catalog on: 9 slots; the Large one back: 27, its
 	# contents still in it.
@@ -2300,9 +2303,9 @@ func _run_inventory_gate() -> void:
 	await _click(_inv_slot(scr, Inventory.addr(&"backpack")).get_global_rect().get_center())
 	await _click(_inv_slot(scr, Inventory.addr(&"hotbar_1", 8)).get_global_rect().get_center())
 	await _frames(3)
-	check.call("the Large one swapped back on: 27 slots, its terracotta still in slot 6, the Small one in the hotbar",
+	check.call("the Large one swapped back on: 27 slots, its obsidian still in slot 6, the Small one in the hotbar",
 			inv.backpack != null and inv.backpack.id == &"large_backpack" and int(scr.get("_storage_n")) == 27
-			and inv.main[5] != null and inv.main[5].id == &"terracotta"
+			and inv.main[5] != null and inv.main[5].id == &"obsidian"
 			and inv.hotbars[1][8] != null and inv.hotbars[1][8].id == &"small_backpack" and inv.cursor == null)
 	# Stage 9: crafting, real clicks. The sand stack picked up, one put in each
 	# craft cell (right click), sandstone taken from the output, the rest put
@@ -2401,7 +2404,7 @@ func _run_inventory_gate() -> void:
 	if inv.active_hotbar != 1:
 		inv.toggle_hotbar()
 	await _key(KEY_3)
-	check.call("3: granite in the hand", inv.hand() != null and inv.hand().id == &"granite")
+	check.call("3: coal ore in the hand", inv.hand() != null and inv.hand().id == &"coal_ore")
 	builder.update_target()
 	var placed: bool = builder.place_target()
 	await _frames(10)
@@ -2409,7 +2412,7 @@ func _run_inventory_gate() -> void:
 	var names := BrickTerrain.material_names()
 	var m_id := int(builder.target.get("material", -1))
 	check.call("RMB placed it: the block looked at is %s" % (names[m_id] if m_id >= 0 else "nothing"),
-			placed and m_id >= 0 and names[m_id] == "granite")
+			placed and m_id >= 0 and names[m_id] == "coal ore")
 	await _shot(UserPaths.DEV + "inv_hotbar.png")
 	# Stage 5: a chest from the kit (hotbar 2 slot 8), put down on the ground
 	# looked straight down at, opened with RMB, filled with real clicks.
@@ -2443,8 +2446,8 @@ func _run_inventory_gate() -> void:
 		await _click(_inv_slot(scr, Inventory.addr(&"hotbar_0", 0)).get_global_rect().get_center())
 		await _click(_inv_slot(scr, Inventory.addr(&"chest", 0)).get_global_rect().get_center())
 		var cs: Array = chests.slots_of(ckey)
-		check.call("grass clicked from hotbar 1 into the chest", cs.size() > 0 and cs[0] != null
-				and (cs[0] as ItemStack).id == &"grass")
+		check.call("soil clicked from hotbar 1 into the chest", cs.size() > 0 and cs[0] != null
+				and (cs[0] as ItemStack).id == &"soil")
 		await _shot(UserPaths.DEV + "inv_chest.png")
 		win.size = Vector2i(640, 400)
 		await _frames(10)
@@ -2465,18 +2468,18 @@ func _run_inventory_gate() -> void:
 	generate(again)
 	await _frames(20)
 	inv = builder.inv
-	check.call("after generating again: granite in hotbar 2 slot 3, sand in hotbar 1 slot 9, terracotta in storage",
-			inv.hotbars[1][2] != null and inv.hotbars[1][2].id == &"granite"
-			and inv.hotbars[0][8] != null and inv.hotbars[0][8].id == &"sand"
-			and inv.main[5] != null and inv.main[5].id == &"terracotta")
+	check.call("after generating again: coal ore in hotbar 2 slot 3, chests in hotbar 1 slot 9, obsidian in storage",
+			inv.hotbars[1][2] != null and inv.hotbars[1][2].id == &"coal_ore"
+			and inv.hotbars[0][8] != null and inv.hotbars[0][8].id == &"chest"
+			and inv.main[5] != null and inv.main[5].id == &"obsidian")
 	var back: Array = chests.slots_of(ckey)
 	var gun_back: ItemStack = inv.main[26]
 	check.call("after generating again: the rifle in storage, its rounds kept",
 			MineHands.is_gun(gun_back) and int(gun_back.data.get("ammo", -1)) == rounds1)
-	check.call("after generating again: the chest is there, the grass in it", chests.count() == 1
-			and back.size() > 0 and back[0] != null and (back[0] as ItemStack).id == &"grass")
+	check.call("after generating again: the chest is there, the soil in it", chests.count() == 1
+			and back.size() > 0 and back[0] != null and (back[0] as ItemStack).id == &"soil")
 	if chests.count() == 1:
-		# A shot breaks it; the grass falls out; flying over it picks it up.
+		# A shot breaks it; the soil falls out; flying over it picks it up.
 		# Generating again put the player on foot at the spawn, maybe beside
 		# the chest: fly 2.4 m over it, out of a drop's reach.
 		var box: AABB = chests.box_of(chests.chests[ckey].block)
@@ -2486,9 +2489,9 @@ func _run_inventory_gate() -> void:
 		await _frames(10)
 		_mine(to_global(box.get_center()), Vector3.DOWN, null)
 		await _frames(5)
-		check.call("a shot breaks the chest, its grass drops (creative: not the chest)",
+		check.call("a shot breaks the chest, its soil drops (creative: not the chest)",
 				chests.count() == 0 and drops.count() == 1
-				and (drops.drops[0].stack as ItemStack).id == &"grass")
+				and (drops.drops[0].stack as ItemStack).id == &"soil")
 		await _frames(60)
 		var drop_at: Vector3 = drops.drops[0].pos if drops.count() > 0 else box.get_center()
 		check.call("the drop came to rest on the ground (%.2f m over the chest's floor)"
@@ -2498,17 +2501,17 @@ func _run_inventory_gate() -> void:
 		var had := 0
 		for a in inv.all_addrs():
 			var s := inv.get_slot(a)
-			if s != null and s.id == &"grass":
+			if s != null and s.id == &"soil":
 				had += s.count
 		_fly_to(drop_at + Vector3(0, 0.1, 0), Vector3(0, 0, -1))
 		await _frames(30)
 		var now_has := 0
 		for a in inv.all_addrs():
 			var s := inv.get_slot(a)
-			if s != null and s.id == &"grass":
+			if s != null and s.id == &"soil":
 				now_has += s.count
-		check.call("walking over it picks it up (grass %d -> %d)" % [had, now_has],
-				drops.count() == 0 and now_has == had + 64)
+		check.call("walking over it picks it up (soil %d -> %d)" % [had, now_has],
+				drops.count() == 0 and now_has > had)
 		# The ground under a second chest goes: it breaks.
 		_fly_to(box.get_center() + Vector3(0, 2.4, 0), Vector3(0, 0, -1))
 		walker.pitch = -1.45
@@ -2535,8 +2538,8 @@ func _run_inventory_gate() -> void:
 	var cinv := Inventory.new()
 	var wtext := FileAccess.get_file_as_string(_inventory_path(save_path()))
 	var wsave = JSON.parse_string(wtext)
-	check.call("the inventory is in the character file (granite in hotbar 2 slot 3)",
-			cinv.from_dict(ch.items) and cinv.hotbars[1][2] != null and cinv.hotbars[1][2].id == &"granite")
+	check.call("the inventory is in the character file (coal ore in hotbar 2 slot 3)",
+			cinv.from_dict(ch.items) and cinv.hotbars[1][2] != null and cinv.hotbars[1][2].id == &"coal_ore")
 	check.call("the world file holds only the world's (no hotbars; chests, drops, mode)",
 			wsave is Dictionary and not wsave.has("hotbar_0") and wsave.has("chests") and wsave.has("survival"))
 	# Stage 7: the world menu's Survival box, clicked.
@@ -2550,7 +2553,7 @@ func _run_inventory_gate() -> void:
 		toggle_menu()
 		await _frames(5)
 	_fly_to(_eye() - Vector3(0, 1.6, 0), Vector3(0, 0, -1))
-	inv.select_item(&"granite")
+	inv.select_item(&"coal_ore")
 	var before := inv.hand().count if inv.hand() != null else -1
 	builder.size_i = 0
 	walker.pitch = -1.0
@@ -2560,14 +2563,37 @@ func _run_inventory_gate() -> void:
 	var after := inv.hand().count if inv.hand() != null else -1
 	# One brick a stud column it fills: 4 for a 2x2 block on flat ground, fewer
 	# where the ground already stood in a column (placing only fills air).
-	check.call("survival: a 2x2 block uses granite up (%d -> %d)" % [before, after],
-			put and after < before and after >= before - 4)
+	check.call("survival: a 2x2 block uses coal ore up (%d -> %d)" % [before, after],
+			put and after < before and after >= before - 12)
 	await _frames(5)
 	builder.update_target()
 	var took: bool = builder.break_target()
 	await _frames(5)
 	var after2 := inv.hand().count if inv.hand() != null else -1
-	check.call("survival: breaking it gives granite back (%d -> %d)" % [after, after2], took and after2 > after)
+	check.call("survival: breaking it gives coal ore back (%d -> %d)" % [after, after2], took and after2 > after)
+	# Stage 11: the material's colour (V), the shape (Z), turned (R); the cost
+	# is the plate cells laid.
+	inv.select_item(&"stone")
+	await _frames(3)
+	await _key(KEY_V)
+	var lay: int = builder.lay_material(ItemCatalog.get_def(&"stone"))
+	check.call("V: stone lays its next colour (%s)" % names[lay], names[lay] == "dark stone")
+	for i in 4:
+		await _key(KEY_Z)
+	await _key(KEY_R)
+	check.call("Z x4: a 2x4 brick; R: turned (%s)" % builder.dims(), builder.dims() == Vector3i(4, 3, 2))
+	var s0: int = inv.hand().count
+	builder.update_target()
+	var laid: bool = builder.place_target()
+	await _frames(10)
+	var used: int = s0 - inv.hand().count
+	builder.update_target()
+	var looked := int(builder.target.get("material", 0))
+	check.call("a turned 2x4 dark stone brick laid: %d plate cells used (24 at most), the brick looked at is %s"
+			% [used, names[looked]], laid and used > 0 and used <= 24 and names[looked] == "dark stone")
+	await _shot(UserPaths.DEV + "inv_shapes.png")
+	builder.size_i = 0
+	builder.turned = false
 	save_edits(true)
 	var again2 := settings.duplicate(true)
 	settings = {}
@@ -5033,7 +5059,7 @@ func _run_sea_gate() -> void:
 	# No bricks on water (R3, decision A): one laid sideways off the pillar
 	# over deep water is refused; one on the sea floor goes.
 	var size0: int = builder.size_i
-	builder.size_i = (builder.SIZES as Array).find(1)
+	builder.size_i = 1          # the 1x1 brick (MineBuilder.SHAPES)
 	var deep_to := Vector3i(pc.x + 2, sea_b - 1, pc.y)
 	var fx := pc.x + 5
 	var fp := BrickTerrain.surface_plate(fx, pc.y)

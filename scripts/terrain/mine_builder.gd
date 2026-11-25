@@ -48,12 +48,23 @@ extends Node3D
 
 const REACH := 6.0
 const REPEAT := 0.22
-const SIZES := [2, 1, 4]
+## The SHAPES a material is laid in (Docs/Inventory.md 11): name, studs
+## across (x), studs deep (z), plates tall. Z cycles them, R turns a long one,
+## V the material's colour. A shape sits on a lattice of its own size, so
+## laid ones line up; it costs the plate cells it fills.
+const SHAPES := [
+	["2x2 brick", 2, 2, 3], ["1x1 brick", 1, 1, 3], ["4x4 brick", 4, 4, 3], ["1x2 brick", 1, 2, 3],
+	["2x4 brick", 2, 4, 3], ["1x1 plate", 1, 1, 1], ["2x2 plate", 2, 2, 1], ["2x4 plate", 2, 4, 1]]
 const BAR_KEYS := [KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9]
 
 var host: Node = null
 var active := false
+## The shape (SHAPES index; the name is older than the shapes).
 var size_i := 0
+## A long shape turned a quarter (R).
+var turned := false
+## Each material's chosen colour (material id -> index into its colours, V).
+var _colour := {}
 var inv := Inventory.new()
 ## A piece's brick looked at, nearer than the ground: [piece, point inside
 ## it], or empty.
@@ -112,8 +123,22 @@ func set_inventory(p_inv: Inventory) -> void:
 	_refresh_bar()
 
 
+## The shape's size: studs across, plates tall, studs deep.
+func dims() -> Vector3i:
+	var s: Array = SHAPES[size_i]
+	return Vector3i(int(s[2]) if turned else int(s[1]), int(s[3]), int(s[1]) if turned else int(s[2]))
+
+
 func block_studs() -> int:
-	return SIZES[size_i]
+	return dims().x
+
+
+## The terrain colour the material in hand lays (its chosen one).
+func lay_material(d: Dictionary) -> int:
+	var cols: PackedInt32Array = d.get("colours", PackedInt32Array())
+	if cols.is_empty():
+		return int(d.get("material", 0))
+	return cols[posmod(int(_colour.get(d.id, 0)), cols.size())]
 
 
 ## What the hand holds, and its catalog entry ({} for an empty hand).
@@ -193,7 +218,16 @@ func _input(event: InputEvent) -> void:
 			host.toggle_inventory()
 			get_viewport().set_input_as_handled()
 		elif event.pressed and k == KEY_Z:
-			size_i = (size_i + 1) % SIZES.size()
+			size_i = (size_i + 1) % SHAPES.size()
+			_refresh_bar()
+			get_viewport().set_input_as_handled()
+		elif event.pressed and k == KEY_R and active and hand_kind() == "block":
+			turned = not turned          # with a gun R is the gun's reload
+			_refresh_bar()
+			get_viewport().set_input_as_handled()
+		elif event.pressed and k == KEY_V and active and hand_kind() == "block":
+			var d := hand_def()
+			_colour[d.id] = int(_colour.get(d.id, 0)) + 1
 			_refresh_bar()
 			get_viewport().set_input_as_handled()
 		elif event.pressed and BAR_KEYS.has(k):
@@ -304,27 +338,27 @@ func update_target() -> void:
 
 ## The block (on this size's lattice) holding plate cell `cell`.
 func _block_of(cell: Vector3i) -> Vector3i:
-	var s := block_studs()
-	return Vector3i(floori(float(cell.x) / s), floori(float(cell.y) / 3.0), floori(float(cell.z) / s))
+	var d := dims()
+	return Vector3i(floori(float(cell.x) / d.x), floori(float(cell.y) / d.y), floori(float(cell.z) / d.z))
 
 
 func _cell_lo(block: Vector3i) -> Vector3:
-	var s := block_studs()
+	var d := dims()
 	var stud := BrickWorld.get_stud_metres()
-	return Vector3(block.x * s * stud, block.y * 3 * BrickWorld.get_plate_metres(), block.z * s * stud)
+	return Vector3(block.x * d.x * stud, block.y * d.y * BrickWorld.get_plate_metres(), block.z * d.z * stud)
 
 
 func _block_size_m() -> Vector3:
-	var s := block_studs()
+	var d := dims()
 	var stud := BrickWorld.get_stud_metres()
-	return Vector3(s * stud, 3.0 * BrickWorld.get_plate_metres(), s * stud)
+	return Vector3(d.x * stud, d.y * BrickWorld.get_plate_metres(), d.z * stud)
 
 
 ## Plate-cell bounds (inclusive) of a block.
 func _cells(block: Vector3i) -> Array[Vector3i]:
-	var s := block_studs()
-	var lo := Vector3i(block.x * s, block.y * 3, block.z * s)
-	return [lo, lo + Vector3i(s - 1, 2, s - 1)]
+	var d := dims()
+	var lo := Vector3i(block.x * d.x, block.y * d.y, block.z * d.z)
+	return [lo, lo + d - Vector3i.ONE]
 
 
 ## NO BRICKS ON WATER (Docs/MineWaterNext.md R3; decision A, the user
@@ -420,7 +454,7 @@ func break_target() -> bool:
 	# where the block was.
 	var id := ItemCatalog.block_item(material)
 	if not inv.creative and id != &"":
-		var left := inv.add_item(ItemStack.make(id, ceili(int(res.changed) / 3.0)))
+		var left := inv.add_item(ItemStack.make(id, int(res.changed)))
 		if left != null:
 			host.drops.spawn(left, at)
 	return true
@@ -474,7 +508,7 @@ func _land_picks() -> void:
 		host.terrain_edited(res)
 		var id := ItemCatalog.block_item(int(job[2]))
 		if not inv.creative and id != &"":
-			inv.add_item(ItemStack.make(id, ceili(removed / 3.0)))
+			inv.add_item(ItemStack.make(id, removed))
 
 
 func _exit_tree() -> void:
@@ -505,21 +539,23 @@ func place_target() -> bool:
 		return pour(to)
 	if k != "block":
 		return false            # tools, chests (stage 5), an empty hand
-	var s := block_studs()
-	if not inv.creative and inv.hand().count < s * s:
+	var dd := dims()
+	if not inv.creative and inv.hand().count < dd.x * dd.y * dd.z:
 		return false
 	if _blocks_player(to) or host.chests.overlaps(AABB(_cell_lo(to), _block_size_m())):
 		return false
 	if floats_on_water(to):
 		log_blocks.append("refused on water %s" % to)
 		return false
-	var res: Dictionary = BrickTerrain.fill_box(c[0], c[1], int(d.material), true)
+	var lay := lay_material(d)
+	var res: Dictionary = BrickTerrain.fill_box(c[0], c[1], lay, true)
 	if int(res.changed) == 0:
 		return false
 	# One brick, the block laid: the ground's bond keeps it whole -- drawn,
 	# broken and falling as one (Docs/TerrainBond.md 1).
-	BrickTerrain.mark_placed(c[0], c[1], int(d.material))
-	inv.consume_hand(ceili(int(res.changed) / 3.0))
+	BrickTerrain.mark_placed(c[0], c[1], lay)
+	# The plate cells it filled (Docs/Inventory.md 11).
+	inv.consume_hand(int(res.changed))
 	placed += 1
 	log_blocks.append("place %s" % to)
 	host.terrain_edited(res)
@@ -621,7 +657,14 @@ func pick_target() -> void:
 	if target.has("chest"):
 		inv.pick(&"chest")
 		return
-	inv.pick(ItemCatalog.block_item(int(target.material)))
+	# The material that lays it, set to that colour.
+	var m := int(target.material)
+	var fam := ItemCatalog.block_item(m)
+	if inv.pick(fam):
+		var cols: PackedInt32Array = ItemCatalog.get_def(fam).get("colours", PackedInt32Array())
+		if cols.has(m):
+			_colour[fam] = cols.find(m)
+		_refresh_bar()
 
 
 ## The chest item's RMB: a chest standing on the face looked at -- its x and z
@@ -659,12 +702,18 @@ func _box_hits_player(box: AABB) -> bool:
 func _refresh_bar() -> void:
 	if _hud == null:
 		return
-	var s := block_studs()
 	var what := ItemCatalog.label(inv.hand())
+	var keys := "1-9 / wheel hand  X bar  E items"
 	if hand_kind() == "block":
-		what += "  -  block %dx%d studs, 1 brick" % [s, s]
-	_hud.caption = "%s%s   (1-9 / wheel hand  X bar, hold: off-hand  Z size  E items)" % [
-			what, "" if inv.creative else "  [survival]"]
+		var d := hand_def()
+		var dd := dims()
+		var cols: PackedInt32Array = d.get("colours", PackedInt32Array())
+		if cols.size() > 1:
+			what += " (%s)" % BrickTerrain.material_names()[lay_material(d)]
+		what += "  -  %s%s, %d cells" % [SHAPES[size_i][0], " turned" if turned and dd.x != dd.z else "",
+				dd.x * dd.y * dd.z]
+		keys = "Z shape  R turn  V colour  " + keys
+	_hud.caption = "%s%s   (%s)" % [what, "" if inv.creative else "  [survival]", keys]
 	_hud.redraw()
 
 

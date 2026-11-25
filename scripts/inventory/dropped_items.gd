@@ -155,8 +155,8 @@ func restore(saved) -> void:
 	for e in saved:
 		if not (e is Dictionary):
 			continue
-		var s := ItemStack.from_dict(e.get("stack"))
+		var s := Inventory._keep_known(ItemStack.from_dict(e.get("stack")))
 		var p = e.get("pos", [])
-		if s == null or not ItemCatalog.has(s.id) or not (p is Array) or p.size() != 3:
+		if s == null or not (p is Array) or p.size() != 3:
 			continue
 		spawn(s, Vector3(p[0], p[1], p[2]), Vector3.ZERO, float(e.get("age", 0.0)))
