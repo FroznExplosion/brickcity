@@ -620,3 +620,22 @@ Who: the terrain-audit chat owns the overlay and break speed and is editing
 the mesher and `find_brick`; the lookup and the cache are this chat's
 (terrain_fit.*). The callers' switch is one change across their code: agree
 who makes it before starting.
+
+### 12.1 The lookup, built (2026-11-25)
+
+`brick::fitted_brick(x, course, z, FitBrick&)` (terrain_fit.h; scripts:
+`TerrainFit.brick_at`). A tile's bricks are fitted with one tile round it
+(sampled through the kept generated cells), only the regions the tile needs
+(`Fitter::focus`), kept by tile (64, least recently used out), 2-byte ids a
+cell, sand and gravel marked, not listed. Surface band only; the deep tier
+is the next piece. `TerrainFit.configure` clears it.
+
+`region_fit_probe` checks it: every cell of 3 areas' middle tiles asked from
+4 threads in a shuffled tile order equals the batch fit (1.1 M cells, 0
+wrong). Bricks crossing tile edges agree from both sides.
+
+Cost, debug build, 4 threads at once, hot machine (ratios only): 130-160 ms
+and 390-500 KB a tile. To cut before the game uses it: a release
+measurement; a smaller margin than a whole tile round; FitBrick packed (32 ->
+12 bytes); the cave scan only round the needed regions. Memory goal: what
+it replaces (the packs, ~10 MB) plus the kept cells.

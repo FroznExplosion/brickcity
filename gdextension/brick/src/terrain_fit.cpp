@@ -9,7 +9,10 @@
 #include <godot_cpp/variant/vector2i.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <mutex>
+#include <thread>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -41,20 +44,23 @@ double hash01(int a, int b, int c, int d) {
 struct Area {
     int ox = 0, oz = 0;   ///< absolute stud of local (0, 0)
     int c0 = 0, nc = 0;   ///< first course, courses
+    int tiles = AREA_TILES, w = AREA;   ///< tiles a side, studs a side
     std::vector<uint8_t> mat, kind;
-    int idx(int lx, int lz, int lc) const { return lx + AREA * (lz + AREA * lc); }
+    int idx(int lx, int lz, int lc) const { return lx + w * (lz + w * lc); }
     bool in(int lx, int lz, int lc) const {
-        return lx >= 0 && lz >= 0 && lc >= 0 && lx < AREA && lz < AREA && lc < nc;
+        return lx >= 0 && lz >= 0 && lc >= 0 && lx < w && lz < w && lc < nc;
     }
 };
 
 /// The area's cells, from the generator (no edits in a probe's world).
-void sample_area(int tx0, int tz0, Area &a) {
+void sample_area(int tx0, int tz0, Area &a, int ntiles = AREA_TILES) {
+    a.tiles = ntiles;
+    a.w = ntiles * TILE;
     std::vector<std::unique_ptr<brick::TileSample>> s;
     int plo = 1 << 30, phi = -(1 << 30);
-    for (int k = 0; k < AREA_TILES * AREA_TILES; ++k) {
+    for (int k = 0; k < ntiles * ntiles; ++k) {
         auto t = std::make_unique<brick::TileSample>();
-        brick::packed_tile(tx0 + k % AREA_TILES, tz0 + k / AREA_TILES, *t);
+        brick::packed_tile(tx0 + k % ntiles, tz0 + k / ntiles, *t);
         plo = std::min(plo, t->lo_owned());
         phi = std::max(phi, t->hi_owned());
         s.push_back(std::move(t));
@@ -63,12 +69,12 @@ void sample_area(int tx0, int tz0, Area &a) {
     a.oz = tz0 * TILE;
     a.c0 = fdiv(plo, 3);
     a.nc = fdiv(phi + 2, 3) - a.c0;
-    const size_t n = (size_t)AREA * AREA * a.nc;
+    const size_t n = (size_t)a.w * a.w * a.nc;
     a.mat.assign(n, 0);
     a.kind.assign(n, K_AIR);
-    for (int k = 0; k < AREA_TILES * AREA_TILES; ++k) {
+    for (int k = 0; k < ntiles * ntiles; ++k) {
         const brick::TileSample &t = *s[(size_t)k];
-        const int bx = (k % AREA_TILES) * TILE, bz = (k / AREA_TILES) * TILE;
+        const int bx = (k % ntiles) * TILE, bz = (k / ntiles) * TILE;
         for (int lz = 0; lz < TILE; ++lz) {
             for (int lx = 0; lx < TILE; ++lx) {
                 for (int lc = 0; lc < a.nc; ++lc) {
@@ -155,12 +161,19 @@ int64_t region_key(int rx, int rz, int layer) {
 /// Odd courses' squares are shifted this many studs (the probe sets it). An
 /// ODD shift also moves the rows of 2-deep bricks, so their long sides are
 /// not over the course below's.
-int g_off = 7;
-int course_off(int c) { return (c & 1) ? g_off : 0; }
+int course_off(int c, int off) { return (c & 1) ? off : 0; }
 
 class Fitter {
 public:
     Fitter(const Area &a, const FitParams &p, Fit &f) : a_(a), p_(p), f_(f) {}
+
+    /// Fit only what the bricks touching the box [x0, x1) x [z0, z1) need:
+    /// odd layers' regions touching it, even layers' regions touching it
+    /// grown by a square and a cell (what those odd regions' outlines read).
+    void focus(int x0, int x1, int z0, int z1) {
+        only_ = true;
+        fx0_ = x0; fx1_ = x1; fz0_ = z0; fz1_ = z1;
+    }
 
     void run() {
         f_.id.assign(a_.kind.size(), -1);
@@ -177,10 +190,16 @@ public:
                     if ((L & 1) != parity) {
                         continue;
                     }
-                    const int rx0 = fdiv(a_.ox - SQ, SQ), rx1 = fdiv(a_.ox + AREA, SQ);
-                    const int rz0 = fdiv(a_.oz - SQ, SQ), rz1 = fdiv(a_.oz + AREA, SQ);
+                    const int rx0 = fdiv(a_.ox - SQ, SQ), rx1 = fdiv(a_.ox + a_.w, SQ);
+                    const int rz0 = fdiv(a_.oz - SQ, SQ), rz1 = fdiv(a_.oz + a_.w, SQ);
                     for (int rz = rz0; rz <= rz1; ++rz) {
                         for (int rx = rx0; rx <= rx1; ++rx) {
+                            if (only_) {
+                                const int m = (L & 1) ? 0 : SQ + p_.offset + 1;
+                                const int sx0 = rx * SQ, sx1 = rx * SQ + SQ + p_.offset;
+                                const int sz0 = rz * SQ, sz1 = rz * SQ + SQ + p_.offset;
+                                if (sx1 <= fx0_ - m || sx0 >= fx1_ + m || sz1 <= fz0_ - m || sz0 >= fz1_ + m) continue;
+                            }
                             region(rx, rz, L);
                             ++f_.regions;
                         }
@@ -201,6 +220,8 @@ private:
     int n_ = 0;
     int seed_ = 1;
     int64_t st_seams_ = 0, st_units_ = 0;
+    bool only_ = false;
+    int fx0_ = 0, fx1_ = 0, fz0_ = 0, fz1_ = 0;
     const double *share_ = nullptr;   ///< the current band's shares
     const double *heights_ = nullptr;
     std::vector<int16_t> top_;        ///< a column's highest solid local course, -1 none
@@ -209,18 +230,19 @@ private:
     /// Columns' tops, and cave air (air under its column's top) grown by
     /// cave_reach: where the stagger is the caves' (weaker).
     void prepare() {
-        top_.assign((size_t)AREA * AREA, -1);
-        for (int lz = 0; lz < AREA; ++lz)
-            for (int lx = 0; lx < AREA; ++lx)
+        const int W = a_.w;
+        top_.assign((size_t)W * W, -1);
+        for (int lz = 0; lz < W; ++lz)
+            for (int lx = 0; lx < W; ++lx)
                 for (int lc = a_.nc - 1; lc >= 0; --lc)
-                    if (a_.kind[(size_t)a_.idx(lx, lz, lc)] != K_AIR) { top_[(size_t)(lx + AREA * lz)] = (int16_t)lc; break; }
+                    if (a_.kind[(size_t)a_.idx(lx, lz, lc)] != K_AIR) { top_[(size_t)(lx + W * lz)] = (int16_t)lc; break; }
         near_cave_.assign(a_.kind.size(), 0);
         if (p_.cave_stagger < -1.5) return;
         const int R = p_.cave_reach;
         for (int lc = 0; lc < a_.nc; ++lc)
-            for (int lz = 0; lz < AREA; ++lz)
-                for (int lx = 0; lx < AREA; ++lx) {
-                    if (a_.kind[(size_t)a_.idx(lx, lz, lc)] != K_AIR || lc >= top_[(size_t)(lx + AREA * lz)]) continue;
+            for (int lz = 0; lz < W; ++lz)
+                for (int lx = 0; lx < W; ++lx) {
+                    if (a_.kind[(size_t)a_.idx(lx, lz, lc)] != K_AIR || lc >= top_[(size_t)(lx + W * lz)]) continue;
                     for (int dc = -R; dc <= R; ++dc)
                         for (int dz = -R; dz <= R; ++dz)
                             for (int dx = -R; dx <= R; ++dx)
@@ -238,7 +260,7 @@ private:
             for (int dx = 0; dx < SQ; ++dx) {
                 const int lx = bx + dx - a_.ox, lz = bz + dz - a_.oz;
                 if (!a_.in(lx, lz, lc) || a_.kind[(size_t)a_.idx(lx, lz, lc)] < K_MEDIUM) continue;
-                depth += (double)(top_[(size_t)(lx + AREA * lz)] - lc);
+                depth += (double)(top_[(size_t)(lx + a_.w * lz)] - lc);
                 ++n;
             }
         const double m = n > 0 ? depth / n * (double)BrickTerrain::get_brick_metres() : 0.0;
@@ -292,8 +314,8 @@ private:
                     default: return brick::BOND_NONE;
                 }
             };
-            for (int lz = 0; lz < AREA; ++lz) {
-                for (int lx = 0; lx < AREA; ++lx) {
+            for (int lz = 0; lz < a_.w; ++lz) {
+                for (int lx = 0; lx < a_.w; ++lx) {
                     const int i = a_.idx(lx, lz, lc);
                     const int k = a_.kind[(size_t)i];
                     if (k < K_LOOSE || f_.id[(size_t)i] >= 0) continue;
@@ -354,7 +376,7 @@ private:
     }
 
     bool square_has(int c, int rx, int rz, int x0, int x1, int z0, int z1) const {
-        const int o = course_off(c);
+        const int o = course_off(c, p_.offset);
         const int sx0 = rx * SQ + o, sz0 = rz * SQ + o;
         return x0 >= sx0 && x1 < sx0 + SQ && z0 >= sz0 && z1 < sz0 + SQ;
     }
@@ -416,7 +438,7 @@ private:
         for (int k = 0; k < 3; ++k) {
             const int c = L * 3 + k;
             if (c < a_.c0 || c >= a_.c0 + a_.nc) continue;
-            const int o = course_off(c);
+            const int o = course_off(c, p_.offset);
             const int bx = rx * SQ + o, bz = rz * SQ + o;
             pick_band(c, bx, bz);
             if (p_.wide_first) wide_pass(c, k, rx, rz, L, reg, bx, bz);
@@ -737,7 +759,7 @@ void measure(const Area &a, const Fit &f, Sums &s) {
     }
     s.ms += f.ms;
     s.regions += f.regions;
-    s.tiles += AREA_TILES * AREA_TILES;
+    s.tiles += a.tiles * a.tiles;
 }
 
 // --- pictures -----------------------------------------------------------------
@@ -770,7 +792,7 @@ PackedByteArray slice_picture(const Area &a, const Fit &f, int lz, int &w, int &
     px.resize((int64_t)w * h * 3);
     uint8_t *d = px.ptrw();
     auto cell_id = [&](int lx, int lc) -> int {
-        if (lx < 0 || lx >= AREA || lc < 0 || lc >= a.nc) return -2;
+        if (lx < 0 || lx >= a.w || lc < 0 || lc >= a.nc) return -2;
         return f.id[(size_t)a.idx(lx, lz, lc)];
     };
     for (int lc = 0; lc < a.nc; ++lc) {
@@ -927,6 +949,7 @@ std::unique_ptr<World> g_world;
 } // namespace
 
 void TerrainFit::configure(const Dictionary &settings) {
+    brick::fitted_clear();
     if (!g_world) g_world = std::make_unique<World>();
     g_world->settings = settings.duplicate(true);
     g_world->params = parse(settings);
@@ -934,6 +957,235 @@ void TerrainFit::configure(const Dictionary &settings) {
 
 Dictionary TerrainFit::get_configured() {
     return g_world ? g_world->settings.duplicate(true) : Dictionary();
+}
+
+// --- the lookup (Docs/TerrainRegions.md 12) -----------------------------------
+//
+// A tile's bricks: the tile and one tile round it fitted together (every
+// region touching the tile has all it reads inside: its squares, cells 2
+// round, the even layers round an odd one), kept by tile, least recently
+// used out. A brick crossing into the next tile is the same brick there:
+// both fit its region the same way (a pure function of the generated cells).
+// The surface band only for now; below it (the deep tier) nothing is fitted.
+
+namespace {
+constexpr size_t BLOCKS_MAX = 64;
+/// Courses at the band's bottom left unanswered: the fit there lacks the
+/// layers under it (cut by the sample).
+constexpr int BOTTOM_MARGIN = 6;
+
+/// A cell's entry: an index into `bricks`, or one of these.
+constexpr uint16_t CELL_NONE = 0xFFFF;    ///< air, a surface piece, unfitted
+constexpr uint16_t CELL_LOOSE = 0xFFFE;   ///< sand / gravel: its own 1x1
+constexpr size_t BRICKS_MAX = 0xFFF0;
+
+struct Block {
+    int c_lo = 0, c_hi = 0;               ///< courses answered, [c_lo, c_hi)
+    std::vector<uint16_t> id;              ///< TILE x TILE x (c_hi - c_lo)
+    std::vector<brick::FitBrick> bricks;
+    double ms = 0.0;
+};
+
+struct BlockCache {
+    std::mutex lock;
+    struct Entry { uint64_t used; std::shared_ptr<const Block> block; };
+    std::unordered_map<int64_t, Entry> tiles;
+    uint64_t clock = 0;
+    uint64_t gen = 0;                      ///< bumped by configure: old blocks go
+    int64_t made = 0, hits = 0;
+};
+BlockCache *g_blocks = nullptr;
+
+BlockCache &blocks() {
+    static std::once_flag once;
+    std::call_once(once, [] { g_blocks = new BlockCache(); });
+    return *g_blocks;
+}
+
+int64_t tile_key2(int tx, int tz) { return ((int64_t)tx << 32) ^ (int64_t)(uint32_t)tz; }
+
+std::shared_ptr<const Block> make_block(int tx, int tz, const FitParams &p) {
+    const uint64_t t0 = godot::Time::get_singleton()->get_ticks_usec();
+    Area a;
+    sample_area(tx - 1, tz - 1, a, 3);
+    Fit f;
+    {
+        Fitter ft(a, p, f);
+        ft.focus(tx * TILE, tx * TILE + TILE, tz * TILE, tz * TILE + TILE);
+        ft.run();
+    }
+    auto b = std::make_shared<Block>();
+    b->c_lo = a.c0 + BOTTOM_MARGIN;
+    b->c_hi = a.c0 + a.nc;
+    const int nc = std::max(0, b->c_hi - b->c_lo);
+    b->id.assign((size_t)TILE * TILE * nc, CELL_NONE);
+    std::unordered_map<int, uint16_t> remap;
+    for (int lc = 0; lc < nc; ++lc) {
+        for (int lz = 0; lz < TILE; ++lz) {
+            for (int lx = 0; lx < TILE; ++lx) {
+                const int ai = a.idx(TILE + lx, TILE + lz, lc + BOTTOM_MARGIN);
+                const int fid = f.id[(size_t)ai];
+                if (fid < 0) continue;
+                if (f.bricks[(size_t)fid].loose) {
+                    b->id[(size_t)lx + TILE * ((size_t)lz + TILE * (size_t)lc)] = CELL_LOOSE;
+                    continue;
+                }
+                auto it = remap.find(fid);
+                uint16_t out;
+                if (it == remap.end()) {
+                    const Brick &br = f.bricks[(size_t)fid];
+                    if (b->bricks.size() >= BRICKS_MAX) continue;   // never seen: ~30k a tile
+                    out = (uint16_t)b->bricks.size();
+                    b->bricks.push_back(brick::FitBrick{ br.x, br.z, br.c, br.sx, br.sz, br.h, br.mat, br.loose });
+                    remap[fid] = out;
+                } else {
+                    out = it->second;
+                }
+                b->id[(size_t)lx + TILE * ((size_t)lz + TILE * (size_t)lc)] = out;
+            }
+        }
+    }
+    b->ms = (double)(godot::Time::get_singleton()->get_ticks_usec() - t0) / 1000.0;
+    return b;
+}
+
+std::shared_ptr<const Block> block_of(int tx, int tz) {
+    BlockCache &bc = blocks();
+    const int64_t k = tile_key2(tx, tz);
+    uint64_t gen;
+    {
+        std::lock_guard<std::mutex> lk(bc.lock);
+        auto it = bc.tiles.find(k);
+        if (it != bc.tiles.end()) {
+            it->second.used = ++bc.clock;
+            ++bc.hits;
+            return it->second.block;
+        }
+        gen = bc.gen;
+    }
+    if (!g_world) return nullptr;
+    // Fitted outside the lock (milliseconds); two threads missing the same
+    // tile both fit it and agree, the second's copy is simply dropped.
+    std::shared_ptr<const Block> b = make_block(tx, tz, g_world->params);
+    std::lock_guard<std::mutex> lk(bc.lock);
+    ++bc.made;
+    if (bc.gen != gen) return b;
+    auto it = bc.tiles.find(k);
+    if (it != bc.tiles.end()) return it->second.block;
+    if (bc.tiles.size() >= BLOCKS_MAX) {
+        auto oldest = bc.tiles.begin();
+        for (auto e = bc.tiles.begin(); e != bc.tiles.end(); ++e)
+            if (e->second.used < oldest->second.used) oldest = e;
+        bc.tiles.erase(oldest);
+    }
+    bc.tiles[k] = BlockCache::Entry{ ++bc.clock, b };
+    return b;
+}
+} // namespace
+
+bool brick::fitted_brick(int x, int course, int z, FitBrick &out) {
+    const int tx = fdiv(x, TILE), tz = fdiv(z, TILE);
+    const std::shared_ptr<const Block> b = block_of(tx, tz);
+    if (!b || course < b->c_lo || course >= b->c_hi) return false;
+    const int lx = x - tx * TILE, lz = z - tz * TILE, lc = course - b->c_lo;
+    const uint16_t i = b->id[(size_t)lx + TILE * ((size_t)lz + TILE * (size_t)lc)];
+    if (i == CELL_NONE) return false;
+    if (i == CELL_LOOSE) {
+        // Its own 1x1; its material is the cell's (the caller has it).
+        out = FitBrick{ x, z, course, 1, 1, 1, 0, true };
+        return true;
+    }
+    out = b->bricks[(size_t)i];
+    return true;
+}
+
+void brick::fitted_clear() {
+    BlockCache &bc = blocks();
+    std::lock_guard<std::mutex> lk(bc.lock);
+    bc.tiles.clear();
+    ++bc.gen;
+}
+
+Dictionary TerrainFit::brick_at(int x, int course, int z) {
+    brick::FitBrick b;
+    Dictionary d;
+    if (!brick::fitted_brick(x, course, z, b)) return d;
+    d["x"] = b.x; d["z"] = b.z; d["c"] = b.c;
+    d["sx"] = b.sx; d["sz"] = b.sz; d["h"] = b.h;
+    d["mat"] = b.mat; d["loose"] = b.loose;
+    return d;
+}
+
+Dictionary TerrainFit::lookup_stats() {
+    BlockCache &bc = blocks();
+    std::lock_guard<std::mutex> lk(bc.lock);
+    Dictionary d;
+    d["kept"] = (int64_t)bc.tiles.size();
+    d["made"] = bc.made;
+    d["hits"] = bc.hits;
+    double ms = 0.0;
+    int64_t bricks = 0, bytes = 0;
+    for (const auto &e : bc.tiles) {
+        ms += e.second.block->ms;
+        bricks += (int64_t)e.second.block->bricks.size();
+        bytes += (int64_t)(e.second.block->id.capacity() * 2 + e.second.block->bricks.capacity() * sizeof(brick::FitBrick));
+    }
+    d["ms_each"] = bc.tiles.empty() ? 0.0 : ms / (double)bc.tiles.size();
+    d["bricks"] = bricks;
+    d["bytes"] = bytes;
+    return d;
+}
+
+/// The lookup against the batch fit: the 5 x 5 tile area at `tile` fitted
+/// whole with the world's settings, then every cell of its middle 3 x 3
+/// tiles (in the courses both answer) asked of fitted_brick, tiles in a
+/// shuffled order, from `threads` threads at once, cache cleared first.
+Dictionary TerrainFit::check_lookup(Vector2i tile, int threads) {
+    Dictionary d;
+    if (!g_world) { d["error"] = "not configured"; return d; }
+    Area a;
+    sample_area(tile.x, tile.y, a);
+    Fit f;
+    Fitter(a, g_world->params, f).run();
+    brick::fitted_clear();
+    std::vector<int> order;
+    for (int k = 0; k < 9; ++k) order.push_back(k);
+    std::sort(order.begin(), order.end(), [](int x, int y) { return brick::bond_hash(x, 5, 9) < brick::bond_hash(y, 5, 9); });
+    std::atomic<int64_t> checked{ 0 }, wrong{ 0 }, missing{ 0 };
+    std::atomic<int> next{ 0 };
+    const uint64_t t0 = godot::Time::get_singleton()->get_ticks_usec();
+    auto work = [&]() {
+        for (;;) {
+            const int q = next.fetch_add(1);
+            if (q >= 9) return;
+            const int k = order[(size_t)q];
+            const int bx = TILE + (k % 3) * TILE, bz = TILE + (k / 3) * TILE;
+            for (int lc = BOTTOM_MARGIN + 6; lc < a.nc; ++lc) {
+                for (int lz = bz; lz < bz + TILE; ++lz) {
+                    for (int lx = bx; lx < bx + TILE; ++lx) {
+                        const int fid = f.id[(size_t)a.idx(lx, lz, lc)];
+                        if (fid < 0) continue;
+                        const Brick &br = f.bricks[(size_t)fid];
+                        brick::FitBrick got;
+                        ++checked;
+                        if (!brick::fitted_brick(a.ox + lx, a.c0 + lc, a.oz + lz, got)) { ++missing; continue; }
+                        if (got.x != br.x || got.z != br.z || got.c != br.c || got.sx != br.sx || got.sz != br.sz || got.h != br.h)
+                            ++wrong;
+                    }
+                }
+            }
+        }
+    };
+    std::vector<std::thread> pool;
+    for (int t = 1; t < std::max(1, threads); ++t) pool.emplace_back(work);
+    work();
+    for (auto &t : pool) t.join();
+    d["checked"] = checked.load();
+    d["wrong"] = wrong.load();
+    d["missing"] = missing.load();
+    d["ms"] = (double)(godot::Time::get_singleton()->get_ticks_usec() - t0) / 1000.0;
+    d["stats"] = lookup_stats();
+    return d;
 }
 
 Array TerrainFit::run(const Array &areas, const Array &variants) {
@@ -945,7 +1197,6 @@ Array TerrainFit::run(const Array &areas, const Array &variants) {
     Array out;
     for (int v = 0; v < variants.size(); ++v) {
         const FitParams p = parse(variants[v]);
-        g_off = p.offset;
         Sums s;
         Dictionary r;
         for (size_t i = 0; i < as.size(); ++i) {
@@ -965,8 +1216,8 @@ Array TerrainFit::run(const Array &areas, const Array &variants) {
                 int64_t open = 0;
                 const Area &A = as[i];
                 for (int lc = 1; lc + 1 < A.nc; ++lc) {
-                    for (int lz2 = 1; lz2 + 1 < AREA; ++lz2) {
-                        for (int lx = 1; lx + 1 < AREA; ++lx) {
+                    for (int lz2 = 1; lz2 + 1 < A.w; ++lz2) {
+                        for (int lx = 1; lx + 1 < A.w; ++lx) {
                             const int k = A.kind[(size_t)A.idx(lx, lz2, lc)];
                             ++kc[k];
                             if (k >= K_MEDIUM && (A.kind[(size_t)A.idx(lx + 1, lz2, lc)] == K_AIR
@@ -1018,4 +1269,7 @@ void TerrainFit::_bind_methods() {
     ClassDB::bind_static_method("TerrainFit", D_METHOD("run", "areas", "variants"), &TerrainFit::run);
     ClassDB::bind_static_method("TerrainFit", D_METHOD("configure", "settings"), &TerrainFit::configure);
     ClassDB::bind_static_method("TerrainFit", D_METHOD("get_configured"), &TerrainFit::get_configured);
+    ClassDB::bind_static_method("TerrainFit", D_METHOD("brick_at", "x", "course", "z"), &TerrainFit::brick_at);
+    ClassDB::bind_static_method("TerrainFit", D_METHOD("lookup_stats"), &TerrainFit::lookup_stats);
+    ClassDB::bind_static_method("TerrainFit", D_METHOD("check_lookup", "tile", "threads"), &TerrainFit::check_lookup, DEFVAL(4));
 }
