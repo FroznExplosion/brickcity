@@ -32,4 +32,8 @@ public:
     /// FitParams). Returns one Dictionary a variant: metrics summed over the
     /// areas, plus pictures of the first area.
     static Array run(const Array &areas, const Array &variants);
+    /// The world's fill settings (the worldgen preset's "bricks",
+    /// WorldgenPresets.DEFAULT_BRICKS' keys). Held for the game's bricks.
+    static void configure(const Dictionary &settings);
+    static Dictionary get_configured();
 };

@@ -7,7 +7,8 @@ extends RefCounted
 ##     {"name": "Default", "seed": 1234,
 ##      "gen": {<BrickTerrain.get_gen_params keys, any subset>},
 ##      "trees": {"<biome name>": 0.0..1.0, ...},
-##      "detail_tiles": 4, "far_tiles": 64, "cave_tiles": 4, "chamfer": true}
+##      "detail_tiles": 4, "far_tiles": 64, "cave_tiles": 4, "chamfer": true,
+##      "bricks": {<the ground's brick fill, DEFAULT_BRICKS' keys, any subset>}}
 ##
 ## Shipped ones are content (`worldgen/` in every pack, ContentPacks); the
 ## player's own are saved under user://library/worldgen/ (UserPaths). A
@@ -23,6 +24,33 @@ const DEFAULT_TREES := {
 	"Plains": 0.03, "Forest": 0.55, "Birch Forest": 0.5, "Dark Forest": 0.85,
 	"Taiga": 0.5, "Snowy Plains": 0.02, "Snowy Taiga": 0.4, "Savanna": 0.06,
 	"Jungle": 0.8, "Meadow": 0.02, "Windswept Hills": 0.08,
+}
+## The ground's brick fill (Docs/TerrainRegions.md 11; TerrainFit.configure):
+## shares of each footprint by count (loose: within about 5 points), aimed
+## higher in proportion on the 2- and 3-wide ones (`aim`); tall bricks (2 and
+## 3 courses) as shares; the stagger (0 = always the best; more = weaker),
+## the caves' (near cave air); the chance a brick crosses a tile edge; and
+## bands by depth under the surface with their own shapes and tall shares.
+## Sand, red sand and gravel are always 1x1, whatever this says.
+const DEFAULT_BRICKS := {
+	"shapes": {
+		"2x4": 0.20, "2x2": 0.20, "1x3": 0.03, "1x4": 0.03, "1x5": 0.02, "1x6": 0.02,
+		"2x3": 0.04, "2x5": 0.02, "2x6": 0.03, "3x3": 0.02, "3x4": 0.02, "3x5": 0.01, "3x6": 0.01,
+		"1x2": 0.25, "1x1": 0.10,
+	},
+	"tall2": 0.07, "tall3": 0.03,
+	"aim": 0.3,
+	"stagger": 0.0, "cave_stagger": 0.35,
+	"cross": 1.0,
+	"mixed": true,
+	"bands": [{
+		"below_m": 12.0,
+		"shapes": {
+			"2x4": 0.22, "2x6": 0.10, "2x2": 0.15, "3x4": 0.06, "3x6": 0.05, "3x3": 0.04, "2x3": 0.05,
+			"1x4": 0.04, "1x6": 0.03, "1x2": 0.18, "1x1": 0.08,
+		},
+		"tall2": 0.13, "tall3": 0.07,
+	}],
 }
 ## Which of Trees' four variants grow in a biome (none listed: any).
 const BIOME_VARIANTS := {
@@ -122,7 +150,17 @@ static func complete(d: Dictionary) -> Dictionary:
 		"cave_tiles": int(d.get("cave_tiles", d.get("detail_tiles", 4))),
 		"chamfer": bool(d.get("chamfer", true)),
 		"spawn": d.get("spawn", null),
+		"bricks": complete_bricks(d.get("bricks", {})),
 	}
+
+
+## DEFAULT_BRICKS under whatever `b` says; `shapes` and `bands`, when given,
+## replace the defaults' whole (a mix is one thing).
+static func complete_bricks(b: Dictionary) -> Dictionary:
+	var out: Dictionary = DEFAULT_BRICKS.duplicate(true)
+	for k in b:
+		out[k] = b[k].duplicate(true) if (b[k] is Dictionary or b[k] is Array) else b[k]
+	return out
 
 
 ## Save the settings as the player's preset of their name. Returns the path.

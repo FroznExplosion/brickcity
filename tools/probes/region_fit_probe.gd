@@ -71,7 +71,10 @@ func _initialize() -> void:
 	BrickTerrain.set_gen_params(s.gen)
 
 	var areas: Array = _pick_areas()
-	var chosen := {"shapes": MIX_A, "heights": TALL10, "stagger": 0.0, "cave_stagger": 0.35, "aim": 0.3}
+	# The shipped settings (what a new world uses), the deep band left out:
+	# the surface band this probe samples is only metres deep.
+	var chosen: Dictionary = Presets.complete_bricks({})
+	chosen.erase("bands")
 	var variants: Array = [
 		{"name": "old pattern (bond_rect)", "mode": "bond"},
 		_with(chosen, {"name": "one material a brick", "mixed": false}),
@@ -80,7 +83,7 @@ func _initialize() -> void:
 		_with(chosen, {"name": "mixed, aim +60%", "aim": 0.6}),
 		_with(chosen, {"name": "chosen, caves strong too", "cave_stagger": 0.0}),
 		_with(chosen, {"name": "chosen + deep band (from %.0f m)" % DEEP_M,
-				"bands": [{"below_m": DEEP_M, "shapes": MIX_DEEP, "heights": [0.80, 0.13, 0.07]}]}),
+				"bands": [_with(Presets.DEFAULT_BRICKS.bands[0], {"below_m": DEEP_M})]}),
 		_with(chosen, {"name": "chosen, cross 0", "cross": 0.0}),
 	]
 	var t0 := Time.get_ticks_msec()
@@ -100,7 +103,7 @@ func _initialize() -> void:
 	# Shares against the targets, for the quota variants.
 	for i in res.size():
 		var v: Dictionary = variants[i]
-		if not v.has("shapes") or v.has("bands"):
+		if not v.has("shapes") or not (v.get("bands", []) as Array).is_empty():
 			_shares_plain(res[i])
 			continue
 		var r: Dictionary = res[i]
