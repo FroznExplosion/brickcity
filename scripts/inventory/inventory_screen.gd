@@ -43,11 +43,12 @@ var _storage_box: Control
 var _storage_grid: GridContainer
 var _storage_label: Label
 var _storage_n := -1
-## The 2 x 2 craft grid and its output (Docs/Inventory.md 9), on the Storage
-## page; the Recipes page lists every recipe.
+## The Craft page (Docs/Inventory.md 12): every recipe, what can be made now
+## first, then what is missing for the rest.
 var _craft_box: Control
-var _recipes_box: Control
-var _tab_recipes: Button
+var _craft_list: VBoxContainer
+var _craft_label: Label
+var _tab_craft: Button
 var _creative_box: Control
 var _creative_flow: HFlowContainer
 var _info: Label
@@ -78,11 +79,11 @@ func _build_content() -> void:
 	_tab_creative.toggle_mode = true
 	_tab_creative.pressed.connect(func() -> void: show_page("creative"))
 	header.add_child(_tab_creative)
-	_tab_recipes = Button.new()
-	_tab_recipes.text = "Recipes"
-	_tab_recipes.toggle_mode = true
-	_tab_recipes.pressed.connect(func() -> void: show_page("recipes"))
-	header.add_child(_tab_recipes)
+	_tab_craft = Button.new()
+	_tab_craft.text = "Craft"
+	_tab_craft.toggle_mode = true
+	_tab_craft.pressed.connect(func() -> void: show_page("craft"))
+	header.add_child(_tab_craft)
 
 	_chest_box = _section("Chest", _grid(&"chest", Inventory.CHEST_SIZE))
 	content.add_child(_chest_box)
@@ -96,24 +97,14 @@ func _build_content() -> void:
 	_storage_label = _storage_box.get_child(0) as Label
 	content.add_child(_storage_box)
 	_rebuild_storage()
-	# Crafting: the grid, an arrow, what it makes (take it: left click; all
-	# there are: shift).
-	var craft := HBoxContainer.new()
-	craft.add_theme_constant_override("separation", GAP * 3)
-	craft.add_child(_grid_n(&"craft", RecipeBook.GRID * RecipeBook.GRID, RecipeBook.GRID))
-	var arrow := Label.new()
-	arrow.text = "->"
-	arrow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	craft.add_child(arrow)
-	var out := VBoxContainer.new()
-	out.alignment = BoxContainer.ALIGNMENT_CENTER
-	_add_slot(out, InvSlot.make(inv, Inventory.addr(&"craft_out")))
-	craft.add_child(out)
-	_craft_box = _section("Craft  |  shift-click what it makes: as many as there are", craft)
+	# Crafting, Terraria's (Docs/Inventory.md 12): the Craft page lists the
+	# recipes, what can be made first.
+	_craft_list = VBoxContainer.new()
+	_craft_list.add_theme_constant_override("separation", GAP * 2)
+	_craft_box = _section("Craft  |  Make: one  ·  All: as many as you can  ·  stations count within 4 m",
+			_craft_list)
+	_craft_label = _craft_box.get_child(0) as Label
 	content.add_child(_craft_box)
-	_recipes_box = _section("Recipes  |  put the ingredients in the craft grid in this shape (or its mirror)",
-			_recipe_list())
-	content.add_child(_recipes_box)
 	_creative_flow = HFlowContainer.new()
 	_creative_flow.add_theme_constant_override("h_separation", GAP)
 	_creative_flow.add_theme_constant_override("v_separation", GAP)
@@ -180,44 +171,59 @@ func _section(title: String, body_node: Control) -> VBoxContainer:
 	return v
 
 
-func _grid_n(area: StringName, n: int, cols: int) -> GridContainer:
-	var g := _grid(area, n)
-	g.columns = cols
-	return g
-
-
-## One row a recipe: what it makes (its icon, how many), its name, what it
-## takes, and its shape drawn as the grid of icons.
-func _recipe_list() -> VBoxContainer:
-	var list := VBoxContainer.new()
-	list.add_theme_constant_override("separation", GAP * 2)
+## The Craft page: one row a recipe -- what it makes (its icon), its name,
+## what it takes and where -- with Make / All; the ones that can be made
+## first, the rest after with what they lack. Rebuilt when the inventory
+## changes while it shows (a few dozen rows).
+func _rebuild_craft() -> void:
+	for c in _craft_list.get_children():
+		c.queue_free()
+	var near: Array = host.stations_near() if host != null and host.has_method("stations_near") else []
+	var names := PackedStringArray()
+	for st in near:
+		names.append(str(ItemCatalog.get_def(st).get("name", st)))
+	_craft_label.text = "Craft  |  stations in reach: %s  ·  Make: one  ·  All: as many as you can" % (
+			", ".join(names) if not names.is_empty() else "none (by hand only)")
+	var can: Array = []
+	var cannot: Array = []
 	for r in RecipeBook.all():
+		(can if inv.can_craft(r, near) else cannot).append(r)
+	for r in can + cannot:
+		var ok: bool = inv.can_craft(r, near)
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", GAP * 3)
-		var shape := GridContainer.new()
-		shape.columns = RecipeBook.GRID
-		shape.add_theme_constant_override("h_separation", 2)
-		shape.add_theme_constant_override("v_separation", 2)
-		for y in RecipeBook.GRID:
-			for x in RecipeBook.GRID:
-				var cell = r.cells[y * r.w + x] if x < r.w and y < r.h else null
-				var id: StringName = &""
-				if cell != null:
-					id = cell.id if cell.id != &"" else _tag_example(cell.tag)
-				shape.add_child(_show_slot(id, 1))
-		row.add_child(shape)
-		var arrow := Label.new()
-		arrow.text = "->"
-		arrow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		row.add_child(arrow)
+		row.modulate = Color(1, 1, 1, 1.0 if ok else 0.5)
 		row.add_child(_show_slot(r.output, int(r.count)))
+		var parts := PackedStringArray()
+		for inp in r.inputs:
+			parts.append("%s (%d)" % [RecipeBook.input_name(inp), inv.count_of(inp)])
 		var l := Label.new()
-		l.text = "%s%s\n%s" % [r.name, "  x%d" % r.count if int(r.count) > 1 else "", RecipeBook.describe(r)]
+		var lack := inv.missing(r, near)
+		l.text = "%s%s  ·  %s\n%s%s" % [r.name, "  x%d" % r.count if int(r.count) > 1 else "",
+				RecipeBook.station_name(r), " + ".join(parts),
+				"" if ok else "   --  needs " + ", ".join(lack)]
 		MenuFit.fit_label(l, true)
 		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row.add_child(l)
-		list.add_child(row)
-	return list
+		for all in [false, true]:
+			var b := Button.new()
+			b.text = "All" if all else "Make"
+			b.disabled = not ok
+			# No focus: a click must not scroll the page under the mouse.
+			b.focus_mode = Control.FOCUS_NONE
+			b.set_meta("recipe", r.name)
+			b.set_meta("all", all)
+			b.pressed.connect(_make.bind(r, all))
+			row.add_child(b)
+		_craft_list.add_child(row)
+
+
+func _make(r: Dictionary, all: bool) -> void:
+	var near: Array = host.stations_near() if host != null and host.has_method("stations_near") else []
+	var res := inv.craft(r, near, all)
+	for s in res.left:
+		if host != null and host.has_method("drop_from_player"):
+			host.drop_from_player(s)
 
 
 ## A slot that only shows (the Recipes list): no clicks.
@@ -262,11 +268,10 @@ func show_page(p: String) -> void:
 	_tab_creative.visible = inv.creative
 	_tab_storage.button_pressed = page == "storage"
 	_tab_creative.button_pressed = page == "creative"
-	_tab_recipes.button_pressed = page == "recipes"
+	_tab_craft.button_pressed = page == "craft"
 	_storage_box.visible = page == "storage"
-	_craft_box.visible = page == "storage" and inv.chest_key.is_empty()
+	_craft_box.visible = page == "craft"
 	_creative_box.visible = page == "creative"
-	_recipes_box.visible = page == "recipes"
 	_refresh()
 	_relayout()            # the slot size depends on what the page shows
 
@@ -292,6 +297,8 @@ func _refresh() -> void:
 	if _info == null:
 		return
 	_rebuild_storage()
+	if page == "craft":
+		_rebuild_craft()
 	_chest_box.visible = not inv.chest_key.is_empty()
 	title_label.text = "Chest" if not inv.chest_key.is_empty() else "Inventory"
 	for s in _slots:
@@ -463,9 +470,6 @@ func _on_relayout(vp_size: Vector2) -> void:
 	var sections := 2.0
 	if chest:
 		rows += 3.0
-		sections += 1.0
-	elif page == "storage":
-		rows += 2.0             # the craft grid
 		sections += 1.0
 	var by_h := (vp_size.y - 220.0 - sections * 30.0) / (rows * 1.1)
 	_slot_px = floorf(clampf(minf(by_w, by_h), MIN_SLOT, MAX_SLOT))

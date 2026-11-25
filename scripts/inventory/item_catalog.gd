@@ -12,7 +12,7 @@ extends RefCounted
 ##   material (block: BrickTerrain material index, else -1),
 ##   fluid (1 water, 2 lava, 0 none), fluid_kind ("source" / "still").
 
-const KINDS := ["block", "fluid", "bucket", "source_bucket", "chest", "tool", "backpack", "gun", "misc"]
+const KINDS := ["block", "fluid", "bucket", "source_bucket", "chest", "station", "tool", "backpack", "gun", "misc"]
 ## Which hand an item may be in (zylanntest's HandUse).
 const HANDS := ["any", "right", "off", "two"]
 const NOT_ITEMS := ["air", "bedrock"]
@@ -164,7 +164,7 @@ static func _complete(e: Dictionary) -> Dictionary:
 			out.max_stack = BLOCK_STACK
 	# A tool's own numbers (the Mega Pickaxe): how much one break clears and
 	# how often it repeats while held (MineBuilder._break_cells/_break_repeat).
-	for k in ["break_area", "break_repeat"]:
+	for k in ["break_area", "break_repeat", "model"]:
 		if e.has(k):
 			out[k] = e[k]
 	return out

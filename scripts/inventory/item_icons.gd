@@ -201,6 +201,21 @@ static func _model(d: Dictionary) -> Node3D:
 			_part(inner, _box(Vector3(0.46, 0.32, 0.12)), dark, Vector3(0, 0.3, 0.26))
 			for x in [-0.2, 0.2]:
 				_part(inner, _box(Vector3(0.08, 0.8, 0.06)), dark, Vector3(x, 0.45, -0.24))
+		"station":
+			if str(d.get("model", "")) == "furnace":
+				# A stone box, a dark mouth with a glow in it, a chimney.
+				_part(inner, _box(Vector3(1.0, 0.9, 0.8)), _mat(col, 0.8), Vector3(0, 0.45, 0))
+				_part(inner, _box(Vector3(0.5, 0.32, 0.04)), _mat(Color(1.0, 0.45, 0.1), 0.3, 1.0, true),
+						Vector3(0, 0.3, 0.41))
+				_part(inner, _box(Vector3(0.22, 0.3, 0.22)), _mat(col.darkened(0.3), 0.8), Vector3(0.3, 1.05, -0.2))
+			else:
+				# A table: a thick top, four legs, a tool on it.
+				var m := _mat(col, 0.7)
+				_part(inner, _box(Vector3(1.0, 0.16, 0.7)), m, Vector3(0, 0.72, 0))
+				for x in [-0.42, 0.42]:
+					for z in [-0.27, 0.27]:
+						_part(inner, _box(Vector3(0.1, 0.64, 0.1)), m, Vector3(x, 0.32, z))
+				_part(inner, _box(Vector3(0.4, 0.06, 0.12)), _mat(Color(0.7, 0.72, 0.76), 0.3), Vector3(0.1, 0.83, 0))
 		"chest":
 			_part(inner, _box(Vector3(1.0, 0.6, 0.72)), _mat(col, 0.6), Vector3(0, 0.3, 0))
 			_part(inner, _box(Vector3(1.04, 0.24, 0.76)), _mat(col.darkened(0.25), 0.6), Vector3(0, 0.72, 0))
