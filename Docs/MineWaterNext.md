@@ -299,8 +299,39 @@ The user: still and source water should look the same; rain puddles too
   tiles, the biggest 4 x 4), 14 (wave at the piece's middle), 0 (still
   pieces ease as a whole); `--gate=water` pictures `water_pond.png`,
   `water_lake.png`.
-- Later: ice -- a frozen pond as the same pieces, opaque, real terrain
-  bricks to stand on and mine (with snow).
+- Ice: section 10.
+
+## 10. Snow and ice (built 2026-11-25)
+
+- **Cold** is where the generator lays snow on a column (a snowy biome's
+  top, or over the snow line): `BrickFluid.cold_at`, `cold_column` (the
+  generator's `BColumn.snow`). Snowy Plains, Snowy Taiga, the snowy peaks
+  and beaches; not Taiga (cold grass).
+- **Snow**: a storm over a cold column falls as snow (slow white flakes
+  through the whole height round the player, no splashes, no hiss) and
+  leaves no water (`rain_drop` soaks it).
+- **Freezing**: every 2 s `freeze_scan` looks at 3 random cold tiles of
+  the sim ring that hold water and gives up to 8 open tops of calm water
+  (still or source, not the sea's, under the sky); MineRain fills each with
+  terrain ice (`MAT_ICE`, the cell's water plates) -- the water there is
+  gone (ground laid into water), the lake under it stays. A pond skins over
+  in a minute or two, a lake's whole top course in longer. Ice is terrain:
+  saved as edits, drawn, mined, laid. A tile is cold by its middle column
+  (cached, `g_cold_tiles`).
+- **Ice floats**: the ground's collapse survey counts ice as held
+  (terrain_collapse.cpp, as the ring's pillars): a sheet of ice is bricks
+  side by side, bonded to nothing, over water the survey does not see.
+- **Breaking ice** gives its water back (`MineRain.melt`, called by the
+  builder's break and pickaxe): Minecraft's rule -- a source where a water
+  source is under it or beside it (the lake heals), else still water of the
+  ice's plates.
+- Checks: `fluid_probe` 17 (a pond and a lake's top freeze, the lake under
+  stays; broken, a source over the lake and still water in the pond;
+  nothing freezes where it is not cold -- `set_cold_test` for the flat test
+  floor); `--gate=water` snow-and-ice line and `mine_snow_ice.png` (the cold
+  forced on); `terrain_collapse_probe`.
+- Not done: ice never thaws (no seasons, ice laid in a warm biome stays);
+  snow does not lie on the ground (the cold biomes are snow already).
 
 Each: `fluid_probe`, `-- --gate=water`, `-- --gate=gen` where generation is
 touched. Windowed gates one at a time, heat check after each (CLAUDE.md);

@@ -480,6 +480,7 @@ func break_target() -> bool:
 	log_blocks.append("break %s" % _block_of(target.cell))
 	var at := _cell_lo(_block_of(target.cell)) + _block_size_m() * 0.5
 	host.terrain_edited(res)
+	MineRain.melt(material, c[0], c[1])
 	if host.farming != null:
 		host.farming.cells_changed(c[0], c[1])
 	target = {}
@@ -574,6 +575,8 @@ func _land_picks() -> void:
 		broken += 1
 		log_blocks.append("pick %d plates" % removed)
 		host.terrain_edited(res)
+		if res.has("box_lo"):
+			MineRain.melt(int(job[2]), res.box_lo, res.box_hi)
 		var id := ItemCatalog.block_item(int(job[2]))
 		if not inv.creative and id != &"":
 			inv.add_item(ItemStack.make(id, removed))

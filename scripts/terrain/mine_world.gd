@@ -5556,6 +5556,27 @@ func _run_water_gate() -> void:
 	print("[water-gate] rain: %s; %d drops landed (want > 0), platform water %s -> %s, worst frame %.1f ms" % [
 			rn.report(), BrickFluid.rain_landed() - landed0, pond0, _platform_fluid(o, w), rw])
 	rn.storms.clear()
+	# Snow and ice (MineWaterNext.md 10), the cold forced on: the storm falls
+	# as snow, the pond's open top freezes into ice bricks.
+	BrickFluid.set_cold_test(true)
+	look.call(pm.call(18.0, w + 6.0, 20.0), pm.call(9.0, w, 9.0))
+	rn.add_storm(Vector2((o.x + 8) * stud, (o.y + 8) * stud), 45.0, 1.0, 600.0, 200.0)
+	var frozen := 0
+	for i in 30:
+		frozen += rn.freeze_now(64, 24)
+		await _frames(4)
+	await _frames(90)
+	await _shot(dev + "mine_snow_ice.png")
+	var iced := 0
+	for px in range(o.x + 5, o.x + 13):
+		for pz in range(o.y + 5, o.y + 13):
+			var ci: Dictionary = BrickFluid.cell_info(Vector3i(px, w, pz))
+			if int(ci.fluid) == 0 and int(ci.solid) != 0:
+				iced += 1
+	print("[water-gate] snow and ice: %s; %d cells froze, pond cells ice %d of 64 (want > 0: it freezes a few at a time), platform water now %s" % [
+			rn.report(), frozen, iced, _platform_fluid(o, w)])
+	rn.storms.clear()
+	BrickFluid.set_cold_test(false)
 	# Saving (stage 7): the water written beside the edits, the world made
 	# again from its settings, the same water back.
 	water.manual = true

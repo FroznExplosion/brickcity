@@ -49,7 +49,9 @@ extends SceneTree
 ##   exactly by still pieces; a lake's pieces ride the wave at their middle;
 ## - P: water poured down one arm of a U-bend levels in both, every unit kept;
 ## - R10 rain: drops soak into open flat ground, land at the foot of walls
-##   and on water, pool in a basin and stay; on a source they are nothing.
+##   and on water, pool in a basin and stay; on a source they are nothing;
+## - ice: in the cold calm water's open top freezes into ice bricks (the
+##   lake under it stays); broken, the water comes back, a source by a lake.
 
 const FLOOR := 1000          ## floor course: plates 3000-3002
 const W := FLOOR + 1         ## the course water stands in
@@ -1041,6 +1043,69 @@ func _run() -> void:
 	var rain_out := _region_units(8100, 8108, -12, 12, W) + _region_units(8117, 8121, -12, 12, W)
 	_ok("the basin keeps its rain, flat ground dries", basin >= basin_wet / 2 and basin > 20 and rain_out == 0,
 			"basin %d units (%d after the rain), %d left outside" % [basin, basin_wet, rain_out])
+	BrickFluid.reset(20.0, false)
+	BrickTerrain.clear_terrain_edits()
+
+	# 17. ICE (MineWaterNext.md 10): in the cold, calm water's open top
+	# freezes into ice bricks (freeze_scan); broken, the ice gives its water
+	# back, and next to a lake's sources that water turns source again (R9).
+	_sec("17")
+	BrickFluid.set_centre(Vector3(0, 0, 0), 100000.0)
+	BrickFluid.set_cold_test(true)
+	var ice := BrickTerrain.material_names().find("ice")
+	_floor(8200, -10, 8230, 10)
+	# A pond one course deep, and a pool of sources two deep.
+	BrickTerrain.fill_box(Vector3i(8203, W * 3, -1), Vector3i(8208, W * 3 + 2, 4), 4, false)
+	BrickTerrain.fill_box(Vector3i(8204, W * 3, 0), Vector3i(8207, W * 3 + 2, 3), 0, false)
+	BrickTerrain.fill_box(Vector3i(8213, W * 3, -1), Vector3i(8218, W * 3 + 5, 4), 4, false)
+	BrickTerrain.fill_box(Vector3i(8214, W * 3, 0), Vector3i(8217, W * 3 + 5, 3), 0, false)
+	BrickFluid.terrain_changed(Vector3i(8200, W * 3, -10), Vector3i(8230, W * 3 + 5, 10))
+	for ix in range(8204, 8208):
+		for iz in range(0, 4):
+			BrickFluid.place(Vector3i(ix, W, iz), 1, BrickFluid.STILL, 3)
+			BrickFluid.place(Vector3i(ix + 10, W, iz), 1, BrickFluid.SOURCE, 3)
+			BrickFluid.place(Vector3i(ix + 10, W + 1, iz), 1, BrickFluid.SOURCE, 3)
+	_settle(100)
+	var froze := 0
+	for i in 20:
+		var f := BrickFluid.freeze_scan(10, 64)
+		for k in range(0, f.size(), 4):
+			var flo := Vector3i(f[k], f[k + 1], f[k + 3])
+			var fhi := Vector3i(f[k], f[k + 2], f[k + 3])
+			BrickTerrain.fill_box(flo, fhi, ice, false)
+			BrickFluid.terrain_changed(flo, fhi)
+			froze += 1
+		BrickFluid.tick_now(3)
+	var iced := 0
+	var under := 0
+	for ix in range(8204, 8208):
+		for iz in range(0, 4):
+			if int(_info(ix, W, iz).solid) == 7 and int(_info(ix, W, iz).fluid) == 0:
+				iced += 1
+			if int(_info(ix + 10, W + 1, iz).solid) == 7 and int(_info(ix + 10, W + 1, iz).fluid) == 0 					and int(_info(ix + 10, W, iz).kind) == BrickFluid.SOURCE:
+				iced += 1
+				under += 1
+	_ok("calm water freezes into ice in the cold, the lake under it stays", iced == 32 and under == 16 and froze == 32,
+			"%d of 32 tops ice (%d over sources), %d frozen" % [iced, under, froze])
+	# Broken: the ice's water back (MineRain.melt, what the builder calls).
+	var mlo := Vector3i(8215, (W + 1) * 3, 1)
+	var mhi := Vector3i(8215, (W + 1) * 3 + 2, 1)
+	BrickTerrain.fill_box(mlo, mhi, 0, false)
+	BrickFluid.terrain_changed(mlo, mhi)
+	MineRain.melt(ice, mlo, mhi)
+	var plo := Vector3i(8205, W * 3, 1)
+	var phi := Vector3i(8205, W * 3 + 2, 1)
+	BrickTerrain.fill_box(plo, phi, 0, false)
+	BrickFluid.terrain_changed(plo, phi)
+	MineRain.melt(ice, plo, phi)
+	_settle(200)
+	_ok("broken ice gives its water back, over a lake a source again", int(_info(8215, W + 1, 1).kind) == BrickFluid.SOURCE
+			and _amt(8215, W + 1, 1) == 6 and int(_info(8205, W, 1).kind) == BrickFluid.STILL and _amt(8205, W, 1) == 6,
+			"lake hole kind %d, %d units; pond hole kind %d, %d units" % [int(_info(8215, W + 1, 1).kind),
+			_amt(8215, W + 1, 1), int(_info(8205, W, 1).kind), _amt(8205, W, 1)])
+	BrickFluid.set_cold_test(false)
+	var warm := BrickFluid.freeze_scan(10, 64)
+	_ok("nothing freezes where it is not cold", warm.is_empty(), "%d cells" % (warm.size() / 4))
 	BrickFluid.reset(20.0, false)
 	BrickTerrain.clear_terrain_edits()
 

@@ -18,6 +18,14 @@ extends Node3D
 ## of still water on the open ground (BrickFluid.rain), which pool in hollows
 ## and dry on flat ground like any poured water. Storms are weather, not
 ## state: a save does not keep them (the puddles are the water's).
+##
+## SNOW AND ICE (Docs/MineWaterNext.md 10): where the generator lays snow (a
+## snowy biome's top, or over the snow line) a storm falls as snow and leaves
+## no water, and calm water freezes: every FREEZE_EVERY seconds a few open
+## tops of still water or sources (BrickFluid.freeze_scan) become ice bricks
+## (terrain, saved as edits, held up like the ground: they never fall), so a
+## pond skins over in a minute or two. Broken, ice gives its water back
+## (MineBuilder._melt).
 
 const BIRTH_EVERY := 15.0          ## s between tries
 const BIRTH_ODDS := 0.35           ## a try's odds where it is wettest
@@ -33,10 +41,15 @@ const WIND_MS := 3.0               ## m/s the storms drift
 const DROPS_PER_COLUMN_S := 1.0 / 240.0
 const DROP_EVERY := 0.5
 const STUD_M := 0.35
+const FREEZE_EVERY := 2.0
+const FREEZE_TILES := 3            ## wet cold tiles looked at a time
+const FREEZE_CELLS := 8            ## cells frozen a time, at most
 
 ## Set (0..1) to rain here at that strength whatever the storms say; -1 off.
 ## The gate's and the probes' handle. Static: a test sets it before the world.
 static var forced := -1.0
+## Freezing in a scripted pass (off there unless set, like the storms).
+static var freeze_in_gates := false
 
 var host: Node3D = null
 var storms: Array[Dictionary] = []
@@ -56,6 +69,13 @@ var _burn_in := 0.0
 var _rain: GPUParticles3D = null
 var _splash: RainSplash = null
 var _hiss: AudioStreamPlayer = null
+var _snow: GPUParticles3D = null
+## Snow, not rain, at the player (a cold column).
+var cold := false
+var frozen := 0                    ## cells turned to ice
+var _freeze_in := FREEZE_EVERY
+var _freezing := true
+var _ice := -1
 
 
 func setup(p_host: Node3D) -> void:
@@ -65,6 +85,8 @@ func setup(p_host: Node3D) -> void:
 	# add_storm still work).
 	if bool(host.get("_gate")):
 		_birth_in = INF
+		_freezing = false
+	_ice = BrickTerrain.material_names().find("ice")
 	_build()
 	set_process(true)
 
@@ -172,6 +194,51 @@ func step(delta: float) -> void:
 	if _drop_in <= 0.0:
 		_drop_in += DROP_EVERY
 		_rain_water(eye)
+	_freeze_in -= delta
+	if _freeze_in <= 0.0:
+		_freeze_in = FREEZE_EVERY
+		if (_freezing or freeze_in_gates) and _ice >= 0:
+			freeze_now(FREEZE_TILES, FREEZE_CELLS)
+
+
+## Freeze up to `cells` open tops of calm water in cold tiles into ice.
+## Returns how many froze.
+## Ice broken gives its water back (Docs/MineWaterNext.md 10) in the plates
+## it filled (plate voxels lo..hi), as Minecraft's: a source where a water
+## source is under it or beside it (a lake heals), else still water.
+## `material` the broken block's; anything but ice does nothing.
+static func melt(material: int, lo: Vector3i, hi: Vector3i) -> void:
+	if material < 0 or material != BrickTerrain.material_names().find("ice"):
+		return
+	const NB := [Vector3i(0, -1, 0), Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
+	for x in range(lo.x, hi.x + 1):
+		for z in range(lo.z, hi.z + 1):
+			for b in range(floori(lo.y / 3.0), floori(hi.y / 3.0) + 1):
+				var plates := mini(hi.y, b * 3 + 2) - maxi(lo.y, b * 3) + 1
+				if plates <= 0:
+					continue
+				var cell := Vector3i(x, b, z)
+				var src := false
+				for d in NB:
+					var ci: Dictionary = BrickFluid.cell_info(cell + d)
+					if int(ci.fluid) == 1 and int(ci.kind) == BrickFluid.SOURCE:
+						src = true
+						break
+				BrickFluid.place(cell, 1, BrickFluid.SOURCE if src else BrickFluid.STILL, plates)
+
+
+func freeze_now(tiles: int, cells: int) -> int:
+	var f := BrickFluid.freeze_scan(tiles, cells)
+	var n := 0
+	for i in range(0, f.size(), 4):
+		var res: Dictionary = BrickTerrain.fill_box(Vector3i(f[i], f[i + 1], f[i + 3]),
+				Vector3i(f[i], f[i + 2], f[i + 3]), _ice, false)
+		if int(res.get("changed", 0)) == 0:
+			continue
+		host.terrain_edited(res)
+		n += 1
+	frozen += n
+	return n
 
 
 func _try_birth(eye: Vector2) -> void:
@@ -235,14 +302,19 @@ func _draw(delta: float) -> void:
 		_sky_in = 0.5
 		var e: Vector3 = host._eye()
 		sky = clampf(BrickTerrain.sky_light_at(e) / 15.0, 0.0, 1.0) if BrickTerrain.get_sky_light() else 1.0
+		cold = BrickFluid.cold_at(floori(e.x / STUD_M), floori(e.z / STUD_M))
 	here = move_toward(here, rain_here(), delta * 0.15)
 	# Wet comes with the rain and goes over a minute after it.
 	wet = move_toward(wet, here, delta * 0.2 if here > wet else delta / 60.0)
-	var shown := here * sky
+	var shown := here * sky * (0.0 if cold else 1.0)
+	var flakes := here * sky * (1.0 if cold else 0.0)
 	var e3: Vector3 = host._eye()
 	_rain.position = e3 + Vector3.UP * 14.0
 	_rain.emitting = shown > 0.02
 	_rain.amount_ratio = shown
+	_snow.position = e3 + Vector3.UP * 4.0
+	_snow.emitting = flakes > 0.02
+	_snow.amount_ratio = flakes
 	_hiss.volume_db = linear_to_db(maxf(shown, 0.0001)) - 8.0
 	if shown > 0.02 and not _hiss.playing:
 		_hiss.play()
@@ -285,6 +357,42 @@ func _build() -> void:
 	_rain.visibility_aabb = AABB(Vector3(-40, -40, -40), Vector3(80, 60, 80))
 	add_child(_rain)
 	_splash = RainSplash.add(_rain, proc, self, Color(0.85, 0.9, 1.0, 0.8))
+	# Snow: slow white flakes drifting down, no splashes, no water.
+	var flake_mat := StandardMaterial3D.new()
+	flake_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	flake_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	flake_mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	flake_mat.albedo_color = Color(0.97, 0.98, 1.0, 0.95)
+	var flake := QuadMesh.new()
+	flake.size = Vector2(0.09, 0.09)
+	flake.material = flake_mat
+	var sp := ParticleProcessMaterial.new()
+	sp.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	# Through the whole height: slow flakes from only the top took seconds to
+	# reach the eye.
+	sp.emission_box_extents = Vector3(26.0, 9.0, 26.0)
+	sp.direction = Vector3(0.1, -1.0, 0.05)
+	sp.spread = 15.0
+	sp.initial_velocity_min = 1.6
+	sp.initial_velocity_max = 2.6
+	sp.gravity = Vector3.ZERO
+	sp.turbulence_enabled = true
+	sp.turbulence_noise_strength = 0.6
+	sp.turbulence_noise_scale = 3.0
+	sp.scale_min = 0.6
+	sp.scale_max = 1.4
+	_snow = GPUParticles3D.new()
+	_snow.name = "Snow"
+	_snow.amount = 4000
+	_snow.lifetime = 7.0
+	_snow.preprocess = 3.0
+	_snow.local_coords = false
+	_snow.emitting = false
+	_snow.amount_ratio = 0.0
+	_snow.process_material = sp
+	_snow.draw_pass_1 = flake
+	_snow.visibility_aabb = AABB(Vector3(-35, -30, -35), Vector3(70, 45, 70))
+	add_child(_snow)
 	_hiss = AudioStreamPlayer.new()
 	_hiss.name = "Hiss"
 	_hiss.stream = DisasterSounds.rain()
@@ -293,5 +401,6 @@ func _build() -> void:
 
 
 func report() -> String:
-	return "rain %.2f (sky %.2f) storms %d, %d drops landed, %d soaked in" % [here, sky, storms.size(),
-			BrickFluid.rain_landed(), BrickFluid.rain_soaked()]
+	return "%s %.2f (sky %.2f) storms %d, %d drops landed, %d soaked in, %d frozen" % [
+			"snow" if cold else "rain", here, sky, storms.size(), BrickFluid.rain_landed(),
+			BrickFluid.rain_soaked(), frozen]
