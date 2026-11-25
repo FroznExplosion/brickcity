@@ -292,6 +292,8 @@ func _ready() -> void:
 			_run_menu_gate()
 		elif "--gate=inventory" in OS.get_cmdline_user_args():
 			_run_inventory_gate()
+		elif "--gate=pbrwood" in OS.get_cmdline_user_args():
+			_run_pbrwood_gate()
 		elif "--gate=look" in OS.get_cmdline_user_args():
 			_run_look_gate()
 		elif "--gate=cave" in OS.get_cmdline_user_args():
@@ -3052,6 +3054,129 @@ func _gate_drag(pts: Array[Vector2]) -> void:
 ## -- --gate=look: the same close view of the ground four ways -- FXAA on and
 ## off, the printed lines on and off -- at render scale 1 and MSAA 2x (the
 ## user's saved video settings), to see what makes the bricks look soft.
+## -- --gate=pbrwood (Docs/PbrWood.md 8): the ground's wood and leaves in
+## the PBR sets. The tree nearest the spawn felled; beside its site a wall of
+## every wood and leaf colour, a column of three 2x2 bricks each, laid as the
+## builder lays them; shot near, mid and far (user://dev/pbr_terrain_*.png),
+## and near again with the sets off (pbr_far_range 0): the sets must change
+## the wall's pixels. Prints PBRWOOD-GATE PASS/FAIL.
+func _run_pbrwood_gate() -> void:
+	var fails: Array[String] = []
+	var check := func(what: String, ok: bool) -> void:
+		print("[pbr-gate] %s %s" % ["ok  " if ok else "FAIL", what])
+		if not ok:
+			fails.append(what)
+	var vp := get_viewport()
+	vp.scaling_3d_scale = 1.0
+	vp.use_taa = false
+	_time = 0.42
+	set_on_foot(false)
+	await _frames(40)
+	var here := _eye()
+	var best: Dictionary = {}
+	var best_d := INF
+	for c in _trees._cells:
+		for row in _trees._cells[c]:
+			var d: float = ((row.xf as Transform3D).origin - here).length()
+			if d < best_d:
+				best_d = d
+				best = row
+	check.call("a tree near the spawn (%.0f m)" % best_d, not best.is_empty())
+	if best.is_empty():
+		print("[pbr-gate] PBRWOOD-GATE FAIL (no tree)")
+		get_tree().quit(1)
+		return
+	var cell := Vector2i(best.x, best.z)
+	check.call("it is felled", not fell_tree(cell).is_empty())
+	var names := Array(BrickTerrain.material_names())
+	var cols := ["wood", "pale wood", "birch wood", "leaves", "light leaves", "autumn leaves", "red leaves"]
+	var x0 := cell.x + 4
+	var laid := 0
+	for i in cols.size():
+		var m: int = names.find(cols[i])
+		var x := x0 + i * 2
+		var base := maxi(maxi(BrickTerrain.surface_plate(x, cell.y), BrickTerrain.surface_plate(x + 1, cell.y)),
+				maxi(BrickTerrain.surface_plate(x, cell.y + 1), BrickTerrain.surface_plate(x + 1, cell.y + 1))) + 1
+		for k in 3:
+			var lo := Vector3i(x, base + k * 3, cell.y)
+			var hi := lo + Vector3i(1, 2, 1)
+			var res: Dictionary = BrickTerrain.fill_box(lo, hi, m, true)
+			BrickTerrain.mark_placed(lo, hi, m)
+			terrain_edited(res)
+		if BrickTerrain.solid_at(x, base + 8, cell.y) == m:
+			laid += 1
+	check.call("a column of each colour laid (%d of %d)" % [laid, cols.size()], laid == cols.size())
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	# The wall's near face (-z), terrain frame: what every shot looks at.
+	var y_lo := _ground_m(x0 + cols.size(), cell.y)
+	var face_lo := Vector3(x0 * stud, y_lo, cell.y * stud)
+	var face_hi := Vector3((x0 + cols.size() * 2) * stud, y_lo + 9.0 * plate, cell.y * stud)
+	var aim := (face_lo + face_hi) * 0.5
+	if _hud_layer != null:
+		_hud_layer.visible = false
+	var look := func(dist: float) -> void:
+		var eye: Vector3 = aim + Vector3(dist * 0.25, dist * 0.3, -dist)
+		_fly_to(eye - Vector3(0, 1.6, 0), Vector3(0, 0, 1))
+		await _frames(3)
+		# A little right of the wall's middle (screen right is -x looking
+		# +z): the held item covers the bottom right.
+		var dir: Vector3 = (aim - Vector3(dist * 0.12, 0, 0) - _eye()).normalized()
+		_fly_to(eye - Vector3(0, 1.6, 0), Vector3(dir.x, 0, dir.z))
+		walker.pitch = asin(clampf(dir.y, -1.0, 1.0))
+	await look.call(3.0)
+	await _frames(90)
+	await _shot(UserPaths.DEV + "pbr_terrain_near.png")
+	var near_on := vp.get_texture().get_image()
+	# Where the wall's face is in that picture.
+	var cam := _eye_camera()
+	var rect := Rect2(cam.unproject_position(to_global(face_lo)), Vector2.ZERO)
+	for corner in [Vector3(face_hi.x, face_lo.y, face_lo.z), Vector3(face_lo.x, face_hi.y, face_lo.z), face_hi]:
+		rect = rect.expand(cam.unproject_position(to_global(corner)))
+	# The same view with the sets off (the overlay copies the ground's
+	# parameters once a second); the camera has not moved.
+	_mat.set_shader_parameter("pbr_far_range", 0.0)
+	await _frames(90)
+	await _shot(UserPaths.DEV + "pbr_terrain_near_off.png")
+	var near_off := vp.get_texture().get_image()
+	_mat.set_shader_parameter("pbr_far_range", 60.0)
+	for sh in [["mid", 10.0], ["far", 40.0]]:
+		await look.call(float(sh[1]))
+		await _frames(90)
+		await _shot(UserPaths.DEV + "pbr_terrain_%s.png" % sh[0])
+	if _hud_layer != null:
+		_hud_layer.visible = true
+	# Texture detail (neighbouring pixels' difference) over the wall's part
+	# of the picture, sets on against off: the photo's figure is detail the
+	# flat colour lacks (the sea and clouds move between the two, so a plain
+	# difference is noise). Down to the picture's foot: the wall's lower
+	# courses run off it.
+	var sz := near_on.get_size()
+	rect = rect.intersection(Rect2(Vector2.ZERO, Vector2(sz)))
+	rect.end.y = sz.y
+	var detail := func(img: Image) -> float:
+		var sum := 0.0
+		var n := 0
+		for y in range(int(rect.position.y), int(rect.end.y) - 1, 2):
+			for x in range(int(rect.position.x), int(rect.end.x) - 1, 2):
+				var a := img.get_pixel(x, y)
+				var b := img.get_pixel(x + 1, y)
+				var c := img.get_pixel(x, y + 1)
+				sum += absf(a.r - b.r) + absf(a.g - b.g) + absf(a.b - b.b) 						+ absf(a.r - c.r) + absf(a.g - c.g) + absf(a.b - c.b)
+				n += 6
+		return sum / maxf(float(n), 1.0)
+	var on_d: float = detail.call(near_on)
+	var off_d: float = detail.call(near_off)
+	print("[pbr-gate] the wall on screen: %s" % rect)
+	check.call("the wall fills a good part of the near picture (%.0f px)" % rect.get_area(),
+			rect.get_area() > 40000.0)
+	check.call("the sets give the wall its figure up close (detail %.4f on, %.4f off)" % [on_d, off_d],
+			on_d > off_d * 1.5)
+	print("[pbr-gate] PBRWOOD-GATE %s (%d failed)%s" % ["PASS" if fails.is_empty() else "FAIL",
+			fails.size(), "" if fails.is_empty() else ": " + ", ".join(fails)])
+	get_tree().quit(0 if fails.is_empty() else 1)
+
+
 func _run_look_gate() -> void:
 	var vp := get_viewport()
 	vp.scaling_3d_scale = 1.0
