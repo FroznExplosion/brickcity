@@ -114,6 +114,9 @@ var _dry_ambient := 0.6
 var floaters: Node = null
 ## What lava set alight (lava_fire.gd).
 var fires: Node3D = null
+## Weather: storms born by the biomes' climate, drifting, raining water
+## (mine_rain.gd, R10).
+var rain: MineRain = null
 var _lights := {}                      ## Vector2i -> OmniLight3D
 var _burn_in := 0.0
 var _queued_meshes := {}               ## Vector2i -> a take()'s mesh entry
@@ -160,6 +163,10 @@ func setup(p_host: Node) -> void:
 	floaters.name = "Floaters"
 	add_child(floaters)
 	floaters.setup(host, self)
+	rain = MineRain.new()
+	rain.name = "Rain"
+	add_child(rain)
+	rain.setup(host)
 	reset_world(20.0, 4, false)
 	set_process(true)
 
@@ -188,6 +195,8 @@ func reset_world(sea_m: float, near_tiles: int, p_sea_on: bool, p_wave_scale := 
 	BrickFluid.set_real_sea(p_sea_on)
 	if fires != null:
 		fires.clear()
+	if rain != null:
+		rain.reset_world()
 	primed_count = 0
 	if sea != null:
 		remove_child(sea)

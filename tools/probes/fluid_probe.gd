@@ -45,7 +45,9 @@ extends SceneTree
 ## - S3: a lake's open top rides a wave (rim flat, a lone source flat), the
 ##   surface asked for is that wave, a ray through a crest hits the lake; a
 ##   brick laid in it and broken heals, in the middle and at its shore (R4);
-## - P: water poured down one arm of a U-bend levels in both, every unit kept.
+## - P: water poured down one arm of a U-bend levels in both, every unit kept;
+## - R10 rain: drops soak into open flat ground, land at the foot of walls
+##   and on water, pool in a basin and stay; on a source they are nothing.
 
 const FLOOR := 1000          ## floor course: plates 3000-3002
 const W := FLOOR + 1         ## the course water stands in
@@ -963,6 +965,50 @@ func _run() -> void:
 			and _amt(8001, W + 3, 0) == 0 and u_total == 48,
 			"arm A %d %d %d, arm B %d %d %d, %d units (want 48)" % [_amt(8001, W + 1, 0), _amt(8001, W + 2, 0),
 			_amt(8001, W + 3, 0), _amt(8005, W + 1, 0), _amt(8005, W + 2, 0), _amt(8005, W + 3, 0), u_total])
+	BrickFluid.reset(20.0, false)
+	BrickTerrain.clear_terrain_edits()
+
+	# 16. RAIN (R10, MineWaterNext.md 8): drops are still water on each
+	# column's top solid plate; a walled basin keeps what falls in it, flat
+	# ground round it dries, and rain on a source adds nothing.
+	_sec("16")
+	BrickFluid.set_centre(Vector3(0, 0, 0), 100000.0)
+	_floor(8100, -12, 8130, 12)
+	BrickTerrain.fill_box(Vector3i(8109, W * 3, -4), Vector3i(8116, W * 3 + 2, 3), 4, false)
+	BrickTerrain.fill_box(Vector3i(8110, W * 3, -3), Vector3i(8115, W * 3 + 2, 2), 0, false)
+	# A 3 x 3 pool of sources, walled to the top (rain asks a stud at least).
+	BrickTerrain.fill_box(Vector3i(8123, W * 3, -2), Vector3i(8127, W * 3 + 2, 2), 4, false)
+	BrickTerrain.fill_box(Vector3i(8124, W * 3, -1), Vector3i(8126, W * 3 + 2, 1), 0, false)
+	BrickFluid.terrain_changed(Vector3i(8100, W * 3, -12), Vector3i(8130, W * 3 + 2, 12))
+	for wx in range(8124, 8127):
+		for wz in range(-1, 2):
+			BrickFluid.place(Vector3i(wx, W, wz), 1, BrickFluid.SOURCE, 3)
+	_settle(40)
+	var landed0 := BrickFluid.rain_landed()
+	var soaked0 := BrickFluid.rain_soaked()
+	var mid := Vector3(8113.0 * 0.35, 0.0, 0.0)
+	for i in 8:
+		BrickFluid.rain(mid, 10.0 * 0.35, 90.0)
+		BrickFluid.tick_now(5)
+	var landed := BrickFluid.rain_landed() - landed0
+	var soaked := BrickFluid.rain_soaked() - soaked0
+	var basin_wet := _region_units(8110, 8115, -3, 2, W)
+	# Open flat ground soaks it in; at the walls' feet and on water it lands.
+	_ok("rain lands where it runs off, soaks into open flat ground", landed > 100 and soaked > landed
+			and basin_wet > 60, "%d drops landed, %d soaked in, %d units in the basin" % [landed, soaked, basin_wet])
+	# The well's top is a source: a drop there is nothing.
+	var well0 := BrickFluid.rain_landed()
+	for i in 4:
+		BrickFluid.rain(Vector3(8125.5 * 0.35, 0.0, 0.5 * 0.35), 0.3, 20.0)
+		BrickFluid.tick_now(1)
+	_ok("rain on a source adds nothing", BrickFluid.rain_landed() == well0
+			and _amt(8125, W + 1, 0) == 0 and int(_info(8125, W, 0).kind) == BrickFluid.SOURCE,
+			"%d landed, %d units over it" % [BrickFluid.rain_landed() - well0, _amt(8125, W + 1, 0)])
+	_settle(900)
+	var basin := _region_units(8110, 8115, -3, 2, W)
+	var rain_out := _region_units(8100, 8108, -12, 12, W) + _region_units(8117, 8121, -12, 12, W)
+	_ok("the basin keeps its rain, flat ground dries", basin >= basin_wet / 2 and basin > 20 and rain_out == 0,
+			"basin %d units (%d after the rain), %d left outside" % [basin, basin_wet, rain_out])
 	BrickFluid.reset(20.0, false)
 	BrickTerrain.clear_terrain_edits()
 
