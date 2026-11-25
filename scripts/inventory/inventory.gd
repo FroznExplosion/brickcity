@@ -103,7 +103,9 @@ func hotbar_area(which := -1) -> StringName:
 ## The starting kit: the old builder hotbar's blocks on bar 1, fluids and
 ## buckets on bar 2.
 func seed_default() -> void:
-	var blocks := ["grass", "dirt", "stone", "dark_stone", "sand", "sandstone", "gravel", "snow", "terracotta"]
+	# Materials (Docs/Inventory.md 11): soil, stone, sand and clay lay several
+	# colours each (V); the count is plate cells.
+	var blocks := ["soil", "stone", "gravel", "snow", "sand", "sandstone", "clay", "ice", "obsidian"]
 	for i in blocks.size():
 		var id := StringName(blocks[i])
 		if ItemCatalog.has(id):
@@ -751,7 +753,8 @@ func close_chest() -> void:
 
 func to_dict() -> Dictionary:
 	return {
-		"format": 1,
+		# 2: a block's count is plate cells (1: whole bricks, before stage 11).
+		"format": 2,
 		"hotbar_0": _save_array(hotbars[0]),
 		"hotbar_1": _save_array(hotbars[1]),
 		"offhand": _save_array(offhands),
@@ -769,8 +772,9 @@ func to_dict() -> Dictionary:
 ## Back from `to_dict`. Items no pack has any more are dropped. False if `d`
 ## is not an inventory.
 func from_dict(d) -> bool:
-	if not (d is Dictionary) or int(d.get("format", 0)) != 1:
+	if not (d is Dictionary) or not [1, 2].has(int(d.get("format", 0))):
 		return false
+	units_in_bricks = int(d.format) == 1
 	_load_array(hotbars[0], d.get("hotbar_0", []))
 	_load_array(hotbars[1], d.get("hotbar_1", []))
 	_load_array(offhands, d.get("offhand", []))
@@ -791,6 +795,7 @@ func from_dict(d) -> bool:
 	active_offhand = clampi(int(d.get("active_offhand", 0)), 0, OFFHAND_SIZE - 1)
 	creative = bool(d.get("creative", true))
 	cursor = null
+	units_in_bricks = false
 	changed.emit()
 	return true
 
@@ -813,9 +818,23 @@ static func _stack_dict(s: ItemStack) -> Variant:
 
 ## `s` without anything no pack has any more (in it too, a backpack's), or
 ## null if it is such a thing itself.
+## Set while a save from before stage 11 is read: its block counts were
+## whole bricks (3 plate cells each). The world's chests and drops set it
+## from their own file's format.
+static var units_in_bricks := false
+
+
 static func _keep_known(s: ItemStack) -> ItemStack:
-	if s == null or not ItemCatalog.has(s.id):
+	if s == null:
 		return null
+	if not ItemCatalog.has(s.id):
+		# A block colour folded into a material (stone's granite): the material.
+		var f := ItemCatalog.folded_into(s.id)
+		if f == &"":
+			return null
+		s.id = f
+	if units_in_bricks and ItemCatalog.kind(s.id) == "block":
+		s.count = mini(s.count * 3, ItemCatalog.max_stack(s.id))
 	for i in s.contents.size():
 		s.contents[i] = _keep_known(s.contents[i])
 	return s

@@ -282,6 +282,20 @@ and runs its own hands. Nothing here changes how a gun fires
     breaking gives them back. Wood and leaves need terrain materials of
     their own (the terrain's C++ table) and trees that break into them: a
     Terrain-area change, asked for separately.
+    **Built** (2026-11-24): materials are block items with `colours` -- the
+    pack's families soil (grass, dirt, podzol, the grasses), stone (stone,
+    dark stone, granite, diorite, road), sand (sand, red sand), clay (clay,
+    the terracottas) fold those colours' own items into them
+    (ItemCatalog._fold_families, `folded_into`); the rest stay one colour.
+    A block stack holds 999 plate cells. MineBuilder.SHAPES: 2x2, 1x1, 4x4,
+    1x2, 2x4 bricks and 1x1, 2x2, 2x4 plates (Z), R turns, V the colour,
+    MMB picks the material at the colour looked at. Survival: laying uses
+    the cells filled, breaking (and the pickaxes) gives the cells broken.
+    Saves: the inventory's format 2 and the world file's format 3 count
+    plate cells; older ones are read with bricks x 3 and folded ids moved
+    onto their family. Kit bar 1: soil, stone, gravel, snow, sand,
+    sandstone, clay, ice, obsidian. `--gate=inventory` (58 checks): V, Z x4,
+    R, a turned 2x4 dark stone brick for 24 cells.
 12. **Terraria crafting.** Recipes are ingredient lists with a station:
     `{"inputs": {"stone": 12, "#ore": 2}, "station": "workbench",
     "output": ..., "count": ...}`. Stations (workbench, furnace) are placed
