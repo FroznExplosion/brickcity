@@ -344,7 +344,10 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
     a.packed = tops.packed;
     const auto tb0 = std::chrono::steady_clock::now();
     auto add = [&](int bx, int y, int bz, int bsx, int bsz, uint8_t m) {
-        VBrick vbk{ bx, y, bz, bsx, bsz, m, m == MAT_PILLAR, y == H - 1 };
+        // Ice is held (Docs/MineWaterNext.md 10): it floats on the water it
+        // froze from, which the ground's survey does not see; a sheet of it
+        // is bricks side by side, bonded to nothing.
+        VBrick vbk{ bx, y, bz, bsx, bsz, m, m == MAT_PILLAR || m == MAT_ICE, y == H - 1 };
         const int32_t id = (int32_t)vb.size();
         for (int dz = 0; dz < bsz; ++dz) {
             for (int dx = 0; dx < bsx; ++dx) {
