@@ -5139,6 +5139,21 @@ func _run_water_gate() -> void:
 		waited += 1
 	print("[water-gate] unload: platform tile water gone far away %s, drawn on bare ground %d (want 0), %d parked; back again %s" % [
 			gone, bare, water.parked_count(), water.has_tile_drawn(pt)])
+	# Rain (R10, mine_rain.gd): a storm over the platform -- drawn round the
+	# player, its drops landing as still water that pools in the pond.
+	var rn: MineRain = water.rain
+	var landed0 := BrickFluid.rain_landed()
+	var pond0 := _platform_fluid(o, w)
+	rn.add_storm(Vector2((o.x + 8) * stud, (o.y + 8) * stud), 45.0, 1.0, 600.0, 200.0)
+	var rw := 0.0
+	for f in 360:
+		var f0 := Time.get_ticks_usec()
+		await get_tree().process_frame
+		rw = maxf(rw, float(Time.get_ticks_usec() - f0) / 1000.0)
+	await _shot(dev + "mine_rain.png")
+	print("[water-gate] rain: %s; %d drops landed (want > 0), platform water %s -> %s, worst frame %.1f ms" % [
+			rn.report(), BrickFluid.rain_landed() - landed0, pond0, _platform_fluid(o, w), rw])
+	rn.storms.clear()
 	# Saving (stage 7): the water written beside the edits, the world made
 	# again from its settings, the same water back.
 	water.manual = true

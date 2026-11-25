@@ -303,7 +303,7 @@ bool g_simulate = true;
 int g_mask_version = 0;
 
 struct Cmd {
-    int type = 0;     // 0 terrain, 1 place, 2 remove, 3 raw, 4 mesh request, 5 reset frozen
+    int type = 0;     // 0 terrain, 1 place, 2 remove, 3 raw, 4 mesh request, 5 reset frozen, 12 rain
     Vector3i a, b;
     int fluid = 0, kind = 0, amount = 0;
     uint8_t st = 0, amt = 0, aux = 0;
@@ -1183,7 +1183,105 @@ bool box_near_water(int x0, int x1, int b0, int b1, int z0, int z1) {
     return false;
 }
 
+/// RAIN (R10, Docs/MineWaterNext.md 8): a drop is a tile of still water on
+/// a column's top solid plate -- the ground, a roof, whatever is open to the
+/// sky (brick::packed_tops, the tiles the player sees: edits and buildings
+/// in). On still water it adds to it; on the sea, a lake, a river or lava it
+/// is nothing (infinite or burning). It pools as poured water does: runs off
+/// a rim into the hollow, and a lone tile on flat ground dries (4.2.3).
+///
+/// SOAKING IN: a drop on dry ground with nothing higher beside it -- the
+/// open flat, a hilltop -- soaks in (the ground is drawn wet, WeatherFx);
+/// only water that would run somewhere lands: at the foot of anything
+/// higher (a step, a wall, a hollow's side), where it runs down to the
+/// hollows, or on water already there. Every drop landed meshes its tile
+/// again: a storm landing everywhere kept ~50 tiles meshing every tick
+/// (23 ms a tick, 16 ms a frame drawing them, the water gate 2026-11-25),
+/// and those lone tiles only dried again.
+int64_t g_rain_landed = 0;
+int64_t g_rain_soaked = 0;
+uint32_t g_rain_seq = 0;
+
+/// A column's top solid plate (packed_tops), or INT_MIN.
+int rain_top(int x, int z) {
+    const int tx = fdiv(x, SX), tz = fdiv(z, SX);
+    const std::shared_ptr<const TilePack> pk = packed_tops(tx, tz);
+    if (!pk || pk->top.size() < (size_t)(SX * SX)) return INT_MIN;
+    return pk->top[(size_t)(x - tx * SX) + (size_t)SX * (size_t)(z - tz * SX)];
+}
+
+void rain_drop(int x, int z) {
+    const int tp = rain_top(x, z);
+    if (tp == INT_MIN) return;
+    int b = fdiv(tp + 1, 3);
+    {
+        const Cell q = wcell(x, b, z);
+        if (!c_wet(q)) {
+            static const int DX[4] = { 1, -1, 0, 0 }, DZ[4] = { 0, 0, 1, -1 };
+            bool foot = false;
+            for (int i = 0; i < 4 && !foot; ++i) foot = rain_top(x + DX[i], z + DZ[i]) > tp;
+            if (!foot) { ++g_rain_soaked; return; }
+        }
+    }
+    for (int up = 0; up < 24; ++up, ++b) {
+        const Cell q = wcell(x, b, z);
+        const int cap = c_cap(q);
+        if (cap <= 0) return;
+        if (c_wet(q)) {
+            if (c_fluid(q) != F_WATER || c_kind(q) != K_STILL) return;
+            if ((int)q.amt >= cap) continue;          // a full cell: on top of it
+        }
+        std::lock_guard<std::recursive_mutex> lk(g_state);
+        const int have = c_wet(q) ? (int)q.amt : 0;
+        Cell n = q;
+        n.st = mk_st(F_WATER, K_STILL, false);
+        n.amt = (uint8_t)std::min(cap, have + U);
+        n.aux = c_wet(q) ? (uint8_t)c_edge(q) : E_NONE;
+        write_cell(x, b, z, n);
+        wake_around(x, b, z);
+        ++g_rain_landed;
+        return;
+    }
+}
+
+/// A shower over the disc (a.x, a.z) studs, b.x studs across (radius), of
+/// `amount` drops: only the part inside the sim radius is rained on, so a
+/// storm far wider than it samples the sim disc at its own density.
+void rain_cmd(const Cmd &c) {
+    const double r_st = std::max(1, c.b.x);
+    const double sim_st = g_sim_r / STUD_M;
+    const double cx_st = g_cx / STUD_M - 0.5, cz_st = g_cz / STUD_M - 0.5;
+    double ox = c.a.x, oz = c.a.z, rr = r_st, n = (double)c.amount;
+    const double gap = std::hypot(ox - cx_st, oz - cz_st);
+    if (gap > r_st + sim_st) return;
+    if (sim_st < r_st) {
+        // Sample the sim disc, at the storm's density.
+        n *= (sim_st * sim_st) / (r_st * r_st);
+        ox = cx_st;
+        oz = cz_st;
+        rr = sim_st;
+    }
+    int drops = (int)n;
+    if ((double)(hmix(++g_rain_seq * 0x9E3779B1U) % 1000) < (n - drops) * 1000.0) ++drops;
+    drops = std::min(drops, 4000);
+    for (int i = 0; i < drops; ++i) {
+        const uint32_t h1 = hmix(++g_rain_seq * 0x85EBCA77U ^ g_tick);
+        const uint32_t h2 = hmix(h1 ^ 0xC2B2AE3DU);
+        const double a = (double)(h1 & 0xFFFF) / 65536.0 * Math_TAU;
+        const double d = std::sqrt((double)(h2 & 0xFFFF) / 65536.0) * rr;
+        const int x = (int)std::floor(ox + std::cos(a) * d + 0.5);
+        const int z = (int)std::floor(oz + std::sin(a) * d + 0.5);
+        if (std::hypot(x - (double)c.a.x, z - (double)c.a.z) > r_st) continue;   // outside the storm
+        if (dist2_centre(x, z) > g_sim_r * g_sim_r) continue;
+        rain_drop(x, z);
+    }
+}
+
 void apply_cmd(const Cmd &c) {
+    if (c.type == 12) {
+        rain_cmd(c);
+        return;
+    }
     if (c.type == 0) {
         const int b0 = fdiv(c.a.y, 3), b1 = fdiv(c.b.y, 3);
         if (!box_near_water(c.a.x - 1, c.b.x + 1, b0 - 1, b1 + 1, c.a.z - 1, c.b.z + 1)) return;
@@ -2638,6 +2736,20 @@ void BrickFluid::set_centre(Vector3 at, double sim_radius_m) {
 
 void BrickFluid::set_wave_clock(double t) { g_wave_t = t; }
 
+void BrickFluid::rain(Vector3 centre, double radius_m, double drops) {
+    if (drops <= 0.0 || radius_m <= 0.0) return;
+    Cmd c;
+    c.type = 12;
+    c.a = Vector3i((int)std::floor(centre.x / STUD_M), 0, (int)std::floor(centre.z / STUD_M));
+    c.b = Vector3i((int)std::ceil(radius_m / STUD_M), 0, 0);
+    c.amount = (int)std::min(drops, 1.0e9);
+    push_cmd(c);
+}
+
+int64_t BrickFluid::rain_landed() { return g_rain_landed; }
+
+int64_t BrickFluid::rain_soaked() { return g_rain_soaked; }
+
 void BrickFluid::set_keep_inland(double metres) {
     g_keep_inland_m = std::max(0.0, metres);
 }
@@ -3355,6 +3467,9 @@ void BrickFluid::_bind_methods() {
     ClassDB::bind_static_method("BrickFluid", D_METHOD("ease_seconds"), &BrickFluid::ease_seconds);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("set_keep_inland", "metres"), &BrickFluid::set_keep_inland);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("set_wave_clock", "t"), &BrickFluid::set_wave_clock);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("rain", "centre", "radius_m", "drops"), &BrickFluid::rain);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("rain_landed"), &BrickFluid::rain_landed);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("rain_soaked"), &BrickFluid::rain_soaked);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("request_mesh", "tx", "tz"), &BrickFluid::request_mesh);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("drawn_tiles"), &BrickFluid::drawn_tiles);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("cell_info", "cell"), &BrickFluid::cell_info);
