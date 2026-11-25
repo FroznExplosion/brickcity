@@ -501,6 +501,7 @@ func generate(s: Dictionary) -> void:
 
 
 func _teardown() -> void:
+	MineBuildings.registry.clear()
 	fast_hold = false
 	_speed = 0.0
 	_speed_from = Vector3.INF
@@ -870,6 +871,8 @@ func _wait_breaks() -> void:
 ## names behind the old ones, and the far blocks over them.
 func terrain_edited(res: Dictionary) -> void:
 	water.terrain_changed(res)
+	# A stamped building undermined on one side tips (Docs/TerrainBuildings.md 4b).
+	MineBuildings.after_edit(self, res)
 	if chests != null:
 		chests.check()
 	if drops != null:
@@ -6200,7 +6203,8 @@ func _run_buildings_gate() -> void:
 	var bricks0: int = collapse.bricks_let_go
 	var g_lo := Vector3i(lo.x - 2, int(info.ground) - 12, lo.z - 2)
 	# `--dig-all`: the whole footprint, so nothing but its own bricks hold it.
-	var g_hi := Vector3i((hi.x + 2) if "--dig-all" in OS.get_cmdline_user_args() else (lo.x + 9), base - 1, hi.z + 2)
+	var g_hi := Vector3i((hi.x + 2) if "--dig-all" in OS.get_cmdline_user_args() else (lo.x + 11), base - 1, hi.z + 2)
+	var tipped0 := MineBuildings.toppled
 	terrain_edited(BrickTerrain.fill_box(g_lo, g_hi, 0, false))
 	_flush_edits()
 	cam.global_transform = Transform3D(Basis(), to_global(centre + Vector3(-34.0, 8.0, -26.0))).looking_at(
@@ -6217,11 +6221,15 @@ func _run_buildings_gate() -> void:
 	var fell := collapse.bricks_let_go - bricks0
 	print("[mine-buildings] dug under %s: %d piece(s), %d brick(s) let go; %s" % ["all of it" if "--dig-all" in OS.get_cmdline_user_args()
 			else "its west half", let, fell, collapse.readout()])
-	# Dug out from under all of it, it falls. Half: a report -- held by its
-	# other half's studs (no tipping yet, Docs/TerrainBuildings.md 4b).
-	if "--dig-all" in OS.get_cmdline_user_args():
-		ok = let > 0 and fell > 0
-		check.call(ok, "cut loose, it falls (%d pieces, %d bricks)" % [let, fell])
+	# Dug out from under all of it, it falls; past half, its middle is off
+	# what holds it and it tips (MineBuildings.after_edit, Docs/
+	# TerrainBuildings.md 4b).
+	ok = let > 0 and fell > 0
+	check.call(ok, "cut loose, it falls (%d pieces, %d bricks)" % [let, fell])
+	fails += 0 if ok else 1
+	if not "--dig-all" in OS.get_cmdline_user_args():
+		ok = MineBuildings.toppled == tipped0 + 1
+		check.call(ok, "undermined past its middle, it tips (%d balance checks)" % MineBuildings.checks)
 		fails += 0 if ok else 1
 	print("[mine-buildings] %s" % ["PASS" if fails == 0 else "%d FAILED" % fails])
 	get_tree().quit()
