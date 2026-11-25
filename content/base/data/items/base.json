@@ -32,6 +32,10 @@
 			"colour": "#654321", "glyph": "B", "description": "Worn in the backpack slot: 18 storage slots. What is in it goes where it goes." },
 		"large_backpack": { "name": "Large Backpack", "kind": "backpack", "slots": 27, "max_stack": 1, "hand": "right",
 			"colour": "#3a2a1a", "glyph": "B", "description": "Worn in the backpack slot: 27 storage slots. What is in it goes where it goes." },
+		"workbench": { "name": "Workbench", "kind": "station", "model": "table", "hand": "right", "colour": "#9a7448", "glyph": "W",
+			"description": "Place it: recipes marked \"at a workbench\" can be made within 4 m of it (E, the Craft tab)." },
+		"furnace": { "name": "Furnace", "kind": "station", "model": "furnace", "hand": "right", "colour": "#6b6b70", "glyph": "F",
+			"description": "Place it: recipes marked \"at a furnace\" (ore into tools) can be made within 4 m of it." },
 		"chest": { "name": "Chest", "kind": "chest", "hand": "right", "colour": "#8a5a2b", "glyph": "C",
 			"description": "Holds 27 stacks. Place it, then right-click it to open." }
 	}

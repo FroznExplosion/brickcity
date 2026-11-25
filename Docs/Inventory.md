@@ -4,7 +4,7 @@ Ported from zylanntest's `game/inventory/` (its README is the design this
 follows), shaped to brickcity: content packs, MenuScreen, no renderer
 read-backs, and the arsenal left alone.
 
-Status: stages 1-9 built; round three (10-12: guns as items, materials and shapes, Terraria crafting) in progress.
+Status: stages 1-12 built (round three, 2026-11-24: guns as items, materials and shapes, Terraria crafting).
 
 ## 1. Two systems, one pair of hands
 
@@ -303,6 +303,19 @@ and runs its own hands. Nothing here changes how a gun fires
     what you carry and the stations within 4 m (click: one, shift: as many
     as you can), then the ones you nearly can, greyed, with what is missing.
     It replaces the 2 x 2 grid and the Recipes tab.
+    **Built** (2026-11-24): RecipeBook reads `inputs` / `station` (no
+    shapes); 14 base recipes (workbench by hand from stone and clay, furnace
+    at a workbench, gravel and the small backpack by hand, sandstone, ice,
+    chest, pickaxe, the backpack upgrades at a workbench, bucket, source
+    bucket, Mega Pickaxe at a furnace, obsidian). Inventory `count_of`,
+    `can_craft`, `missing`, `craft` (from the hotbars, off-hand and storage;
+    All: up to 64 times; a backpack keeps its contents); an old save's grid
+    items go into storage. Workbench and furnace are `kind: station` items,
+    placed, saved and broken through MineChests (each placed block now has
+    an `item`; `stations_near`, 4 m); RMB on one opens the Craft tab. The
+    kit has both at the end of the storage. `--gate=inventory` (63 checks):
+    gravel by hand with a real click, sandstone greyed, a workbench placed,
+    RMB opens the Craft tab, sandstone made; the Craft tab at 640x400.
 
 Later: placing a backpack as a container (zylanntest), multiplayer authority.
 

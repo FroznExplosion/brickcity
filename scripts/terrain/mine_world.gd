@@ -1552,8 +1552,22 @@ func open_chest(key: String) -> void:
 		return
 	if _inv_screen != null:
 		_inv_screen.close_screen()
+	if not MineChests.is_container(chests.item_of(key)):
+		# A station: the screen opens on what can be made (Docs/Inventory.md 12).
+		toggle_inventory()
+		if _inv_screen != null:
+			_inv_screen.show_page("craft")
+		return
 	builder.inv.open_chest(key, chests.slots_of(key))
 	toggle_inventory()
+
+
+## The stations in reach of the player (the crafting list's).
+func stations_near() -> Array:
+	var feet := player_feet_local()
+	if chests == null or feet == Vector3.INF:
+		return []
+	return chests.stations_near(feet + Vector3(0, 0.8, 0))
 
 
 ## Where the player stands, in the terrain frame (dropped items, chests).
@@ -1825,6 +1839,10 @@ func how_kit_added(inv: Inventory) -> bool:
 	if inv.ensure_item(&"chest", &"mega_pickaxe"):
 		print("[mine] chests added to the inventory")
 		added = true
+	for st in [&"workbench", &"furnace"]:
+		if inv.ensure_item(st):
+			print("[mine] %s added to the inventory" % st)
+			added = true
 	return added
 
 
@@ -2307,37 +2325,34 @@ func _run_inventory_gate() -> void:
 			inv.backpack != null and inv.backpack.id == &"large_backpack" and int(scr.get("_storage_n")) == 27
 			and inv.main[5] != null and inv.main[5].id == &"obsidian"
 			and inv.hotbars[1][8] != null and inv.hotbars[1][8].id == &"small_backpack" and inv.cursor == null)
-	# Stage 9: crafting, real clicks. The sand stack picked up, one put in each
-	# craft cell (right click), sandstone taken from the output, the rest put
-	# back; the Recipes tab.
-	var sand_at := Inventory.addr(&"hotbar_0", 4)
-	await _click(_inv_slot(scr, sand_at).get_global_rect().get_center())
-	for i in 4:
-		await _click_button(_inv_slot(scr, Inventory.addr(&"craft", i)).get_global_rect().get_center(),
-				MOUSE_BUTTON_RIGHT)
-	var made_out := inv.get_slot(Inventory.addr(&"craft_out"))
-	check.call("one sand right-clicked into each craft cell: the output is sandstone",
-			made_out != null and made_out.id == &"sandstone")
-	await _click(_inv_slot(scr, sand_at).get_global_rect().get_center())
-	await _shot(UserPaths.DEV + "inv_craft.png")
-	await _click(_inv_slot(scr, Inventory.addr(&"craft_out")).get_global_rect().get_center())
-	check.call("clicking the output: sandstone on the cursor, the grid used up",
-			inv.cursor != null and inv.cursor.id == &"sandstone" and inv.craft.all(func(s): return s == null))
-	await _click(_inv_slot(scr, Inventory.addr(&"main", 10)).get_global_rect().get_center())
-	check.call("... put into storage", inv.main[10] != null and inv.main[10].id == &"sandstone" and inv.cursor == null)
-	var tab_r: Button = scr.get("_tab_recipes")
-	await _click(tab_r.get_global_rect().get_center())
+	# Stage 12: crafting, Terraria's. The Craft tab; gravel made by hand with
+	# a real click on Make; sandstone greyed out until a workbench is near.
+	var tab_c: Button = scr.get("_tab_craft")
+	await _click(tab_c.get_global_rect().get_center())
 	await _frames(3)
-	check.call("the Recipes tab", scr.page == "recipes")
-	await _shot(UserPaths.DEV + "inv_recipes.png")
+	check.call("the Craft tab", scr.page == "craft")
+	var gravel0 := _carried_count(inv, &"gravel")
+	var stone0 := _carried_count(inv, &"stone")
+	var mk := _craft_button(scr, "Gravel", false)
+	check.call("Gravel can be made by hand: its Make is live", mk != null and not mk.disabled)
+	if mk != null:
+		scr.body.ensure_control_visible(mk)
+		await _frames(3)
+		await _click(mk.get_global_rect().get_center())
+		await _frames(3)
+	check.call("Make: 12 stone -> 12 gravel (gravel %d -> %d, stone %d -> %d)" % [gravel0,
+			_carried_count(inv, &"gravel"), stone0, _carried_count(inv, &"stone")],
+			_carried_count(inv, &"gravel") == gravel0 + 12 and _carried_count(inv, &"stone") == stone0 - 12)
+	var sb := _craft_button(scr, "Sandstone", false)
+	check.call("Sandstone needs a workbench: greyed out", sb != null and sb.disabled)
+	await _shot(UserPaths.DEV + "inv_craft.png")
 	var winr := get_window()
 	var sizer := winr.size
 	winr.size = Vector2i(640, 400)
 	await _frames(10)
 	var cutr: Array = MenuFit.audit(scr, get_viewport().get_visible_rect())
-	check.call("the Recipes tab at 640x400: nothing cut off (%d)%s" % [cutr.size(),
-			"" if cutr.is_empty() else "
-" + MenuFit.describe(cutr)], cutr.is_empty())
+	check.call("the Craft tab at 640x400: nothing cut off (%d)%s" % [cutr.size(),
+			"" if cutr.is_empty() else "\n" + MenuFit.describe(cutr)], cutr.is_empty())
 	winr.size = sizer
 	await _frames(10)
 	await _click(tab_s.get_global_rect().get_center())
@@ -2459,6 +2474,51 @@ func _run_inventory_gate() -> void:
 		await _frames(10)
 		await _key(KEY_E)
 	check.call("E closes the chest", not inventory_open() and inv.chest_key == "")
+	# Stage 12: a workbench from storage put down beside the chest; RMB on it
+	# opens the Craft tab, where sandstone can now be made.
+	var wb_at := -1
+	for i in inv.main.size():
+		if inv.main[i] != null and inv.main[i].id == &"workbench":
+			wb_at = i
+	check.call("the kit has a workbench in storage", wb_at >= 0)
+	if wb_at >= 0:
+		var held0 := inv.hand()
+		inv.hotbars[inv.active_hotbar][inv.active_slot] = inv.main[wb_at]
+		inv.main[wb_at] = held0
+		inv.changed.emit()
+		_fly_to(_eye() - Vector3(0, 1.6, 0) + Vector3(1.6, 0, 0), Vector3(0, 0, -1))
+		walker.pitch = -1.45
+		await _frames(10)
+		var n0 := chests.count()
+		builder.update_target()
+		builder.place_target()
+		await _frames(5)
+		check.call("RMB with a workbench puts one down (%s near)" % str(stations_near()),
+				chests.count() == n0 + 1 and stations_near().has(&"workbench"))
+		builder.update_target()
+		builder.place_target()
+		await _frames(5)
+		check.call("RMB on the workbench opens the Craft tab", inventory_open() and _inv_screen.page == "craft")
+		if inventory_open():
+			var sand0 := _carried_count(inv, &"sandstone")
+			var sb2 := _craft_button(_inv_screen, "Sandstone", false)
+			check.call("at the workbench Sandstone can be made", sb2 != null and not sb2.disabled)
+			if sb2 != null:
+				_inv_screen.body.ensure_control_visible(sb2)
+				await _frames(3)
+				await _click(sb2.get_global_rect().get_center())
+				await _frames(3)
+			check.call("Make: 12 sand -> 12 sandstone (%d -> %d)" % [sand0, _carried_count(inv, &"sandstone")],
+					_carried_count(inv, &"sandstone") == sand0 + 12)
+			await _shot(UserPaths.DEV + "inv_workbench.png")
+			await _key(KEY_E)
+		# The workbench back into storage (the checks after count the chests).
+		for key in chests.chests.keys():
+			if chests.item_of(key) == &"workbench":
+				chests.break_chest(key, false)
+		inv.main[wb_at] = ItemStack.make(&"workbench", 1)
+		inv.hotbars[inv.active_hotbar][inv.active_slot] = held0
+		inv.changed.emit()
 	await _shot(UserPaths.DEV + "inv_chest_world.png")
 	# Saved with the world, back after generating it again.
 	_edits_dirty = true
@@ -2618,6 +2678,21 @@ func _inv_slot(scr: InventoryScreen, a: Dictionary, item := &"") -> InvSlot:
 		if not a.is_empty() and not slot.addr.is_empty() and slot.addr.area == a.area \
 				and slot.addr.index == a.index:
 			return slot
+	return null
+
+
+## How many of item `id` the inventory carries (the gate's crafting checks).
+func _carried_count(inv: Inventory, id: StringName) -> int:
+	return inv.count_of({"id": id, "tag": "", "count": 1})
+
+
+## The Craft page's Make (or All) button of recipe `name`, or null.
+func _craft_button(scr: InventoryScreen, name: String, all: bool) -> Button:
+	for b in scr.find_children("*", "Button", true, false):
+		var btn := b as Button
+		if btn.has_meta("recipe") and str(btn.get_meta("recipe")) == name and bool(btn.get_meta("all")) == all \
+				and not btn.is_queued_for_deletion():
+			return btn
 	return null
 
 

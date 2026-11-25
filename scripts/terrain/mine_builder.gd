@@ -529,8 +529,8 @@ func place_target() -> bool:
 		return true
 	var d := hand_def()
 	var k := str(d.get("kind", ""))
-	if k == "chest":
-		return _place_chest()
+	if k == "chest" or k == "station":
+		return _place_chest()          # a workbench or furnace stands like a chest
 	var b := _block_of(target.cell)
 	var n: Vector3i = target.normal
 	var to := b + n
@@ -655,7 +655,7 @@ func pick_target() -> void:
 	if target.is_empty():
 		return
 	if target.has("chest"):
-		inv.pick(&"chest")
+		inv.pick(host.chests.item_of(target.chest))
 		return
 	# The material that lays it, set to that colour.
 	var m := int(target.material)
@@ -672,7 +672,7 @@ func pick_target() -> void:
 func _place_chest() -> bool:
 	var cell: Vector3i = target.cell + Vector3i(target.normal)
 	var blk := MineChests.block_of(cell)
-	if _box_hits_player(host.chests.box_of(blk)) or not host.chests.place(blk):
+	if _box_hits_player(host.chests.box_of(blk)) or not host.chests.place(blk, [], false, inv.hand().id):
 		return false
 	inv.consume_hand(1)
 	placed += 1

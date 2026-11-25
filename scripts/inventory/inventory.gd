@@ -12,9 +12,8 @@ extends RefCounted
 ##   main                 the worn backpack's own slots (its `contents`): no
 ##                        backpack, no storage -- zylanntest's rule
 ##   chest                the open chest's slots (borrowed array, see open_chest)
-##   craft                the 2 x 2 craft grid (Docs/Inventory.md 9)
-##   craft_out            what the grid makes now (RecipeBook), read only:
-##                        taking it uses the grid up (take_craft)
+## Crafting (Docs/Inventory.md 12) is Terraria's: a recipe takes what you
+## carry (can_craft / craft), no grid.
 ## All the rules go through get_slot / set_slot / slot_accepts, so the UI only
 ## sends addresses and redraws on `changed`.
 ##
@@ -36,8 +35,9 @@ var hotbars: Array = [[], []]
 var offhands: Array = [null, null]
 ## The backpack worn, or null; its `contents` are the storage.
 var backpack: ItemStack = null
-## The 2 x 2 craft grid, row-major (stacks or null).
-var craft: Array = []
+## The old 2 x 2 craft grid's contents (stage 9), only to give them back from
+## an old save (from_dict empties it into storage).
+var old_craft: Array = []
 ## The storage: the worn backpack's slots, or none.
 var main: Array:
 	get:
@@ -65,7 +65,7 @@ var _drag_touched: Array = []
 func _init() -> void:
 	hotbars[0] = _empty(HOTBAR_SIZE)
 	hotbars[1] = _empty(HOTBAR_SIZE)
-	craft = _empty(RecipeBook.GRID * RecipeBook.GRID)
+	old_craft = _empty(4)
 	backpack = make_backpack(KIT_BACKPACK)
 
 
@@ -116,6 +116,11 @@ func seed_default() -> void:
 		var id := StringName(bar2[i])
 		if ItemCatalog.has(id):
 			hotbars[1][i] = ItemStack.make(id, ItemCatalog.max_stack(id))
+	# The crafting stations (stage 12), at the end of the storage.
+	for k in 2:
+		var st := [&"workbench", &"furnace"][k] as StringName
+		if ItemCatalog.has(st) and main.size() > 24:
+			main[23 + k] = ItemStack.make(st, 1)
 	changed.emit()
 
 
@@ -125,16 +130,12 @@ func seed_default() -> void:
 func get_slot(a: Dictionary) -> ItemStack:
 	if a.area == &"backpack":
 		return backpack
-	if a.area == &"craft_out":
-		return craft_result()
 	var arr := _array(a.area)
 	var i: int = a.index
 	return arr[i] if i >= 0 and i < arr.size() else null
 
 
 func set_slot(a: Dictionary, s: ItemStack) -> void:
-	if a.area == &"craft_out":
-		return
 	if a.area == &"backpack":
 		backpack = null if s == null or s.is_empty() else s
 		if backpack != null:
@@ -153,12 +154,11 @@ func _array(area: StringName) -> Array:
 		&"offhand": return offhands
 		&"main": return main
 		&"chest": return chest_slots
-		&"craft": return craft
 	return []
 
 
 func area_size(area: StringName) -> int:
-	if area == &"backpack" or area == &"craft_out":
+	if area == &"backpack":
 		return 1
 	return _array(area).size()
 
@@ -182,8 +182,6 @@ func slot_accepts(a: Dictionary, s: ItemStack) -> bool:
 		return false
 	if a.area == &"backpack":
 		return d.kind == "backpack"
-	if a.area == &"craft_out":
-		return false
 	match a.area:
 		&"offhand":
 			return d.hand == "any" or d.hand == "off"
@@ -209,9 +207,6 @@ func _merge_into(dst: ItemStack, src: ItemStack) -> ItemStack:
 
 ## Pick up, put down, merge or swap with the cursor.
 func left_click(a: Dictionary) -> void:
-	if a.area == &"craft_out":
-		take_craft(false)
-		return
 	var s := get_slot(a)
 	if cursor == null and s == null:
 		return
@@ -235,9 +230,6 @@ func left_click(a: Dictionary) -> void:
 
 ## Cursor full: put one down. Cursor empty: pick up half (rounded up).
 func right_click(a: Dictionary) -> void:
-	if a.area == &"craft_out":
-		take_craft(false)
-		return
 	var s := get_slot(a)
 	if cursor != null:
 		if s == null:
@@ -266,9 +258,6 @@ func right_click(a: Dictionary) -> void:
 ## To the other side: a chest <-> the player; else main -> hotbars, off-hand;
 ## the hands -> main. Same items first, then the first empty slot.
 func shift_click(a: Dictionary) -> void:
-	if a.area == &"craft_out":
-		take_craft(true)
-		return
 	var s := get_slot(a)
 	if s == null:
 		return
@@ -297,9 +286,6 @@ func shift_click(a: Dictionary) -> void:
 
 ## Gather every stack like the cursor's into it, smallest first, to a full stack.
 func double_click(a: Dictionary) -> void:
-	if a.area == &"craft_out":
-		take_craft(false)
-		return
 	if cursor == null:
 		var s := get_slot(a)
 		if s == null:
@@ -356,7 +342,7 @@ func ensure_item(id: StringName, after: StringName = &"") -> bool:
 
 func all_addrs() -> Array:
 	var out: Array = []
-	for area in [&"hotbar_0", &"hotbar_1", &"offhand", &"backpack", &"main", &"chest", &"craft"]:
+	for area in [&"hotbar_0", &"hotbar_1", &"offhand", &"backpack", &"main", &"chest"]:
 		for i in area_size(area):
 			out.append(addr(area, i))
 	return out
@@ -495,8 +481,6 @@ func _insert(s: ItemStack, areas: Array) -> ItemStack:
 
 ## Take one (or the whole stack) out of slot `a`, for dropping into the world.
 func take_from(a: Dictionary, whole: bool) -> ItemStack:
-	if a.area == &"craft_out":
-		return null          # only take_craft makes it (or it would be free)
 	var s := get_slot(a)
 	if s == null:
 		return null
@@ -560,8 +544,6 @@ func swap_hand_offhand() -> void:
 ## 1-9 over a slot in the screen: that slot and slot `i` of the active hotbar
 ## change places (if each may hold the other's item).
 func swap_with_hotbar(a: Dictionary, i: int) -> void:
-	if a.area == &"craft_out":
-		return
 	var h := addr(hotbar_area(), clampi(i, 0, HOTBAR_SIZE - 1))
 	if a.area == h.area and a.index == h.index:
 		return
@@ -642,60 +624,92 @@ func pick(id: StringName) -> bool:
 # ---------------------------------------------------------------------------
 # Crafting (Docs/Inventory.md 9; zylanntest's 2 x 2 grid)
 
-## What the craft grid makes now, or null. A backpack made from a backpack
-## keeps that one's contents (`keep_contents`).
-func craft_result() -> ItemStack:
-	var m := RecipeBook.find_match(craft)
-	if m.is_empty():
-		return null
-	var r: Dictionary = m.recipe
-	var out := ItemStack.make(r.output, int(r.count))
-	if r.keep_contents:
-		for u in RecipeBook.uses(m):
-			var s: ItemStack = craft[u[0]]
-			if s != null and not s.contents.is_empty():
-				out.contents = s.contents
-				break
-	if is_backpack(out):
-		if out.contents.is_empty():
-			out = make_backpack(out.id)
-		else:
-			_fit_backpack(out)
+## Where crafting takes from: the hotbars, the off-hand, the storage (the
+## worn backpack's slots) -- not the backpack worn itself, nor an open chest.
+func _carried() -> Array:
+	var out: Array = []
+	for area in [&"main", hotbar_area(), hotbar_area(1 - active_hotbar), &"offhand"]:
+		for i in area_size(area):
+			out.append(addr(area, i))
 	return out
 
 
-## Take what the grid makes: onto the cursor (the same item there: added,
-## up to a full stack); `all` (shift): as many as there are, into the
-## inventory, while they fit. Each one uses the grid's cells up. True if
-## anything was made.
-func take_craft(all := false) -> bool:
-	var made := false
-	for n in 64:
-		var m := RecipeBook.find_match(craft)
-		if m.is_empty():
+## How many of recipe input `inp` are carried.
+func count_of(inp: Dictionary) -> int:
+	var n := 0
+	for a in _carried():
+		var s := get_slot(a)
+		if RecipeBook.takes(inp, s):
+			n += s.count
+	return n
+
+
+## Can recipe `r` be made now, with the stations `near` (item ids) in reach?
+func can_craft(r: Dictionary, near: Array) -> bool:
+	if r.station != &"" and not near.has(r.station):
+		return false
+	for inp in r.inputs:
+		if count_of(inp) < int(inp.count):
+			return false
+	return true
+
+
+## What `r` still needs, in words ("12 more Iron Ore", "a furnace near").
+func missing(r: Dictionary, near: Array) -> PackedStringArray:
+	var out := PackedStringArray()
+	for inp in r.inputs:
+		var lack := int(inp.count) - count_of(inp)
+		if lack > 0:
+			var what: String = ("any " + inp.tag) if inp.tag != "" else str(ItemCatalog.get_def(inp.id).get("name", inp.id))
+			out.append("%d more %s" % [lack, what])
+	if r.station != &"" and not near.has(r.station):
+		out.append("a %s near" % str(ItemCatalog.get_def(r.station).get("name", r.station)).to_lower())
+	return out
+
+
+## Make `r` (once, or `all`: as many as can be, up to 64 times): its inputs
+## taken from what is carried, its output into the inventory. A backpack made
+## from a backpack (`keep_contents`) keeps that one's contents. What did not
+## fit is returned, for the caller to drop. {"made": n, "left": [stacks]}.
+func craft(r: Dictionary, near: Array, all := false) -> Dictionary:
+	var made := 0
+	var left: Array = []
+	for n in (64 if all else 1):
+		if not can_craft(r, near):
 			break
-		var out := craft_result()
-		if all:
-			if not _can_fit(out, [hotbar_area(), hotbar_area(1 - active_hotbar), &"offhand", &"main"]):
-				break
-			_insert(out, [hotbar_area(), hotbar_area(1 - active_hotbar), &"offhand", &"main"])
-		elif cursor == null:
-			cursor = out
-		elif cursor.same_kind(out) and cursor.count + out.count <= ItemCatalog.max_stack(out.id):
-			cursor.count += out.count
-		else:
+		var kept: Array = []
+		for inp in r.inputs:
+			var need := int(inp.count)
+			for a in _carried():
+				if need <= 0:
+					break
+				var s := get_slot(a)
+				if not RecipeBook.takes(inp, s):
+					continue
+				var take := mini(need, s.count)
+				if not s.contents.is_empty() and kept.is_empty():
+					kept = s.contents
+				s.count -= take
+				need -= take
+				if s.count <= 0:
+					set_slot(a, null)
+		var out := ItemStack.make(r.output, int(r.count))
+		if is_backpack(out):
+			out = make_backpack(r.output)
+			if r.keep_contents and not kept.is_empty():
+				out.contents = kept
+				_fit_backpack(out)
+		made += 1
+		var l := _insert(out, [hotbar_area(), hotbar_area(1 - active_hotbar), &"offhand", &"main"])
+		if is_backpack(out) and l != null and backpack == null:
+			set_slot(addr(&"backpack"), l)
+			l = null
+		if l != null:
+			left.append(l)
 			break
-		for u in RecipeBook.uses(m):
-			var s: ItemStack = craft[u[0]]
-			s.count -= int(u[1])
-			if s.count <= 0 or not s.contents.is_empty():
-				craft[u[0]] = null
-		made = true
-		if not all:
-			break
-	if made:
+	if made > 0:
 		changed.emit()
-	return made
+	return {"made": made, "left": left}
 
 
 ## Would all of `s` fit into `areas`?
@@ -720,9 +734,9 @@ func _can_fit(s: ItemStack, areas: Array) -> bool:
 ## What did not fit, for the caller to drop.
 func clear_craft() -> Array:
 	var left := []
-	for i in craft.size():
-		var s: ItemStack = craft[i]
-		craft[i] = null
+	for i in old_craft.size():
+		var s: ItemStack = old_craft[i]
+		old_craft[i] = null
 		if s != null:
 			var l := _insert(s, [&"main", hotbar_area(), hotbar_area(1 - active_hotbar), &"offhand"])
 			if l != null:
@@ -761,7 +775,6 @@ func to_dict() -> Dictionary:
 		# The backpack carries the storage (its contents); "main" was the
 		# storage before backpacks (stage 8).
 		"backpack": _stack_dict(backpack),
-		"craft": _save_array(craft),
 		"active_hotbar": active_hotbar,
 		"active_slot": active_slot,
 		"active_offhand": active_offhand,
@@ -778,7 +791,7 @@ func from_dict(d) -> bool:
 	_load_array(hotbars[0], d.get("hotbar_0", []))
 	_load_array(hotbars[1], d.get("hotbar_1", []))
 	_load_array(offhands, d.get("offhand", []))
-	_load_array(craft, d.get("craft", []))
+	_load_array(old_craft, d.get("craft", []))
 	if d.has("backpack"):
 		backpack = _keep_known(ItemStack.from_dict(d.backpack))
 		if backpack != null and not is_backpack(backpack):
@@ -796,6 +809,11 @@ func from_dict(d) -> bool:
 	creative = bool(d.get("creative", true))
 	cursor = null
 	units_in_bricks = false
+	# Items left in the old craft grid (stage 9) go into storage.
+	for i in old_craft.size():
+		if old_craft[i] != null:
+			_insert(old_craft[i], [&"main", hotbar_area(), hotbar_area(1 - active_hotbar)])
+			old_craft[i] = null
 	changed.emit()
 	return true
 
