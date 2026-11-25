@@ -166,6 +166,11 @@ have needed work before.
   a tile changing every tick is re-meshed every `MESH_GAP` (2) ticks -- its corners ease
   over 0.2 s, two ticks -- except round the player or when asked. Spill bench: 14,150 ->
   10,867 meshes, mean busy tick 34.9 -> 22.3 ms (part of it a cooler machine).
+  2026-11-25, a tile meshed 200 times with no sim running (one tile, ~5,000 vertices):
+  the easing's corner lookups and writes were half the cell loop; a flat open-addressing
+  table (`EaseMap`) for them: 0.57 -> ~0.45 ms a mesh. Not the cost: Godot's packed
+  arrays' push_back (MeshBuf now builds in std::vector and copies once anyway) and
+  `wcell` reads (a same-section fast path, kept, changed nothing measurable).
 - **W3 -- done 2026-11-24.** Past 1.5 x the sim radius plus a tile (~112 m;
   was 2 x), with nothing queued: a section never written -- dry, or only the
   generated sea, lakes, pools -- is let go (sampled afresh if asked); a written

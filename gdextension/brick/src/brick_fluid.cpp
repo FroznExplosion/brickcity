@@ -17,6 +17,7 @@
 #include <chrono>
 #include <climits>
 #include <cstdint>
+#include <cstring>
 #include <cmath>
 #include <map>
 #include <memory>
@@ -1353,13 +1354,16 @@ void apply_cmd(const Cmd &c) {
 // --- the mesher (MineWater.md 7.1) ------------------------------------------------
 
 struct MeshBuf {
-    PackedVector3Array v, n;
-    PackedColorArray col;
-    PackedInt32Array idx;
+    // Plain vectors while building, copied into Godot's packed arrays once
+    // (arrays()): a packed array's push_back a value was a large part of a
+    // mesh's time (W2, 2026-11-25).
+    std::vector<Vector3> v, n;
+    std::vector<Color> col;
+    std::vector<int32_t> idx;
     /// CUSTOM0 (RGBA float a vertex): x = how far below (+ above) its last
     /// mesh's place the vertex was, metres -- the shader eases from there to
     /// here over a tick, so water glides instead of jumping (no slide show).
-    PackedFloat32Array cus;
+    std::vector<float> cus;
     void quad(const Vector3 &a, const Vector3 &b, const Vector3 &c, const Vector3 &d,
             const Vector3 &nrm, const Color &cc, float da = 0.0f, float db = 0.0f,
             float dc = 0.0f, float dd = 0.0f) {
@@ -1407,15 +1411,32 @@ struct MeshBuf {
         idx.push_back(base); idx.push_back(base + 1); idx.push_back(base + 2);
         idx.push_back(base); idx.push_back(base + 2); idx.push_back(base + 3);
     }
-    Array arrays() const {
+    /// The mesh arrays; `sky`: each vertex's sky light into COLOR.b first
+    /// (brick::sky_levels_into, the mine world's water_fluid reads it).
+    Array arrays(bool sky = false) const {
         Array a;
-        if (v.is_empty()) return a;
+        if (v.empty()) return a;
+        PackedVector3Array pv, pn;
+        PackedColorArray pc;
+        PackedInt32Array pi;
+        PackedFloat32Array pf;
+        pv.resize((int64_t)v.size());
+        std::memcpy(pv.ptrw(), v.data(), v.size() * sizeof(Vector3));
+        pn.resize((int64_t)n.size());
+        std::memcpy(pn.ptrw(), n.data(), n.size() * sizeof(Vector3));
+        pc.resize((int64_t)col.size());
+        std::memcpy(pc.ptrw(), col.data(), col.size() * sizeof(Color));
+        pi.resize((int64_t)idx.size());
+        std::memcpy(pi.ptrw(), idx.data(), idx.size() * sizeof(int32_t));
+        pf.resize((int64_t)cus.size());
+        std::memcpy(pf.ptrw(), cus.data(), cus.size() * sizeof(float));
+        if (sky) brick::sky_levels_into(pv, pn, pc);
         a.resize(Mesh::ARRAY_MAX);
-        a[Mesh::ARRAY_VERTEX] = v;
-        a[Mesh::ARRAY_NORMAL] = n;
-        a[Mesh::ARRAY_COLOR] = col;
-        a[Mesh::ARRAY_CUSTOM0] = cus;
-        a[Mesh::ARRAY_INDEX] = idx;
+        a[Mesh::ARRAY_VERTEX] = pv;
+        a[Mesh::ARRAY_NORMAL] = pn;
+        a[Mesh::ARRAY_COLOR] = pc;
+        a[Mesh::ARRAY_CUSTOM0] = pf;
+        a[Mesh::ARRAY_INDEX] = pi;
         return a;
     }
 };
@@ -1507,10 +1528,49 @@ inline float lake_amp(Get get, int x, int b, int z) {
 /// snapped every rising cell to its full height -- the "jump" (the user,
 /// 2026-11-23).
 struct Ease { float y; float off; double t; };
-/// A tile's corners, sorted by key: appended while meshing and sorted once
-/// (a node-based hash map insert a corner was most of a mesh's time).
-using EaseList = std::vector<std::pair<int64_t, Ease>>;
-std::unordered_map<int64_t, EaseList> g_prev_tops;
+/// A tile's corners: a flat open-addressing table (linear probing, a power of
+/// two, at most half full). The easing's lookups and writes were half a
+/// mesh's time as a node-based map, then as a sorted list (2026-11-25).
+struct EaseMap {
+    static constexpr int64_t EMPTY = INT64_MIN;
+    std::vector<int64_t> keys;
+    std::vector<Ease> vals;
+    size_t count = 0;
+    static size_t slot(int64_t k, size_t mask) {
+        uint64_t h = (uint64_t)k * 0x9E3779B97F4A7C15ULL;
+        return (size_t)(h ^ (h >> 29)) & mask;
+    }
+    void reserve(size_t n) {
+        size_t cap = 64;
+        while (cap < n * 2) cap <<= 1;
+        if (cap <= keys.size()) return;
+        std::vector<int64_t> ok = std::move(keys);
+        std::vector<Ease> ov = std::move(vals);
+        keys.assign(cap, EMPTY);
+        vals.assign(cap, Ease{});
+        count = 0;
+        for (size_t i = 0; i < ok.size(); ++i) {
+            if (ok[i] != EMPTY) put(ok[i], ov[i]);
+        }
+    }
+    const Ease *find(int64_t k) const {
+        if (keys.empty()) return nullptr;
+        const size_t mask = keys.size() - 1;
+        for (size_t i = slot(k, mask);; i = (i + 1) & mask) {
+            if (keys[i] == k) return &vals[i];
+            if (keys[i] == EMPTY) return nullptr;
+        }
+    }
+    void put(int64_t k, const Ease &e) {
+        if ((count + 1) * 2 > keys.size()) reserve(count + 1);
+        const size_t mask = keys.size() - 1;
+        for (size_t i = slot(k, mask);; i = (i + 1) & mask) {
+            if (keys[i] == k) { vals[i] = e; return; }
+            if (keys[i] == EMPTY) { keys[i] = k; vals[i] = e; ++count; return; }
+        }
+    }
+};
+std::unordered_map<int64_t, EaseMap> g_prev_tops;
 /// How long a corner takes to reach a new height (water_fluid.gdshader
 /// `ease_s`, set from ease_seconds()): about a tick of each fluid's, so a
 /// running front creeps on instead of stepping (lava ticks every 5th).
@@ -1620,14 +1680,10 @@ bool clear_real_marks(int tx, int tz) {
 
 double mesh_tile(int tx, int tz, Array &water, Array &lava) {
     MeshBuf buf[3];
-    EaseList &prev = g_prev_tops[tkey(tx, tz)];
-    EaseList now;
-    now.reserve(prev.size() + 64);
-    auto find_prev = [&](int64_t k) -> const Ease * {
-        auto it = std::lower_bound(prev.begin(), prev.end(), k,
-                [](const std::pair<int64_t, Ease> &e, int64_t key) { return e.first < key; });
-        return (it != prev.end() && it->first == k) ? &it->second : nullptr;
-    };
+    EaseMap &prev = g_prev_tops[tkey(tx, tz)];
+    EaseMap now;
+    now.reserve(prev.count + 64);
+    auto find_prev = [&](int64_t k) -> const Ease * { return prev.find(k); };
     const double t_now = clock_s();
     // Where a corner last meshed is drawn now (the shader's easing).
     auto shown = [&](const Ease &e, int f) -> float {
@@ -1649,7 +1705,7 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
         const int64_t k = ckey(x, b, z, ox, oz, f);
         const Ease *e = find_prev(k);
         const float off = e != nullptr ? shown(*e, f) - y : 0.0f;
-        now.push_back({ k, Ease{ y, off, t_now } });
+        now.put(k, Ease{ y, off, t_now });
         return off;
     };
     // Where a neighbour's corner was last mesh (its side's foot follows it),
@@ -1676,6 +1732,21 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
                 Top flat[SX * SX];
                 for (int i = 0; i < SX * SX; ++i) flat[i].on = false;
                 bool any_flat = false;
+                // Neighbours read from this section directly where they are in
+                // it (a wcell a read was most of a mesh, 2026-11-25).
+                auto cell = [&](int cx, int cb, int cz) -> const Cell & {
+                    const int qx = cx - tx * SX, qz = cz - tz * SX, qb = cb - sb * SB;
+                    if ((unsigned)qx < (unsigned)SX && (unsigned)qz < (unsigned)SX && (unsigned)qb < (unsigned)SB
+                            && s->ready[qx + SX * qz]) {
+                        return s->c[Section::idx(qx, qb, qz)];
+                    }
+                    return wcell(cx, cb, cz);
+                };
+                auto top_of = [&](int cx, int cb, int cz, const Cell &cc0) -> int {
+                    const Cell &a = cell(cx, cb + 1, cz);
+                    if (c_wet(a) && c_fluid(a) == c_fluid(cc0)) return (cb + 1) * CU;
+                    return cb * CU + floor_u(cc0.solid) + cc0.amt;
+                };
                 for (int lz = 0; lz < SX; ++lz) {
                     for (int lx = 0; lx < SX; ++lx) {
                         if (!s->ready[lx + SX * lz]) continue;
@@ -1684,7 +1755,7 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
                         const int x = tx * SX + lx, z = tz * SX + lz, b = sb * SB + lb;
                         const int f = c_fluid(c);
                         MeshBuf &m = buf[f];
-                        const int own = top_units(x, b, z, c);
+                        const int own = top_of(x, b, z, c);
                         const int bottom = b * CU + floor_u(c.solid);
                         // Corner heights, plates: (x,z) (x+1,z) (x+1,z+1) (x,z+1).
                         const float h00 = corner_h(x, b, z, x, z, f, own);
@@ -1694,14 +1765,14 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
                         // Colour: depth, kind, flow direction.
                         int depth = c.amt;
                         for (int k = 1; k <= 3; ++k) {
-                            const Cell &d = wcell(x, b - k, z);
+                            const Cell &d = cell(x, b - k, z);
                             if (!c_wet(d) || c_fluid(d) != f) break;
                             depth += d.amt;
                         }
                         float fx = 0.0f, fz = 0.0f;
                         if (c_kind(c) == K_FLOW) {
                             for (int i = 0; i < 4; ++i) {
-                                const Cell &n = wcell(x + DX[i], b, z + DZ[i]);
+                                const Cell &n = cell(x + DX[i], b, z + DZ[i]);
                                 int nd;
                                 if (c_wet(n) && c_fluid(n) == f) nd = c_fed(n) ? c_dist(n) : c_dist(c) + 1;
                                 else if (c_cap(n) > 0) nd = c_dist(c) + 2;
@@ -1717,7 +1788,7 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
                         const float x0 = (float)x * STUD_M, x1 = (float)(x + 1) * STUD_M;
                         const float z0 = (float)z * STUD_M, z1 = (float)(z + 1) * STUD_M;
                         const float P = UNIT_M;
-                        const Cell &above = wcell(x, b + 1, z);
+                        const Cell &above = cell(x, b + 1, z);
                         const bool top_open = !(c_wet(above) && c_fluid(above) == f);
                         // Only an open top sinks under the course; a side under
                         // more water meets the course above (no seam in a fall).
@@ -1729,7 +1800,7 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
                             sea_ocean[lx + SX * lz] = c_ocean(c);
                             any_sea = true;
                         } else if (top_open && f == F_WATER && c_kind(c) == K_SOURCE && !c_ocean(c)
-                                && (lake_a = lake_amp(wcell, x, b, z)) > 0.0f) {
+                                && (lake_a = lake_amp(cell, x, b, z)) > 0.0f) {
                             // A lake or river piece (S3): a flat top riding the
                             // wave at its middle (the shader), sides deep enough
                             // for the piece beside it at the other end of it.
@@ -1766,12 +1837,12 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
                         const float ch[4][2] = { { h10, h11 }, { h00, h01 }, { h01, h11 }, { h00, h10 } };
                         for (int i = 0; i < 4; ++i) {
                             const int nx = x + DX[i], nz = z + DZ[i];
-                            const Cell &n = wcell(nx, b, nz);
+                            const Cell &n = cell(nx, b, nz);
                             int cover;
                             if (c_cap(n) <= 0) continue;
                             const bool wet_n = c_wet(n) && c_fluid(n) == f
-                                    && !(c_wet(wcell(nx, b + 1, nz)) && c_fluid(wcell(nx, b + 1, nz)) == f);
-                            if (c_wet(n) && c_fluid(n) == f) cover = top_units(nx, b, nz, n);
+                                    && !(c_wet(cell(nx, b + 1, nz)) && c_fluid(cell(nx, b + 1, nz)) == f);
+                            if (c_wet(n) && c_fluid(n) == f) cover = top_of(nx, b, nz, n);
                             else cover = b * CU + floor_u(n.solid);
                             const float lo = (float)std::max(cover, bottom);
                             const float t0 = ch[i][0], t1 = ch[i][1];
@@ -1800,7 +1871,7 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
                         }
                         // Bottom over open air (a fall seen from under it).
                         if (floor_of(c.solid) == 0) {
-                            const Cell &d = wcell(x, b - 1, z);
+                            const Cell &d = cell(x, b - 1, z);
                             if (!(c_wet(d) && c_fluid(d) == f) && !(d.solid & 4)) {
                                 const float y = (float)(b * CU) * P;
                                 m.quad(Vector3(x0, y, z0), Vector3(x1, y, z0), Vector3(x1, y, z1),
@@ -1851,19 +1922,9 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
     }
     // Its sky light per vertex into COLOR.b (the mine world's water_fluid
     // reads it, Docs/MineWorld.md 19): a cave pool as dark as its cave.
-    brick::sky_levels_into(buf[F_WATER].v, buf[F_WATER].n, buf[F_WATER].col);
-    water = buf[F_WATER].arrays();
+    water = buf[F_WATER].arrays(true);
     lava = buf[F_LAVA].arrays();
-    // Sorted, the LAST record of a corner kept (as the map's overwrite did).
-    std::stable_sort(now.begin(), now.end(),
-            [](const std::pair<int64_t, Ease> &a, const std::pair<int64_t, Ease> &b) { return a.first < b.first; });
-    size_t w = 0;
-    for (size_t i = 0; i < now.size(); ++i) {
-        if (w > 0 && now[w - 1].first == now[i].first) now[w - 1] = now[i];
-        else now[w++] = now[i];
-    }
-    now.resize(w);
-    prev.swap(now);
+    std::swap(prev, now);
     return t_now;
 }
 
