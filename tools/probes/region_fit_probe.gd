@@ -26,6 +26,8 @@ extends SceneTree
 
 const Presets := preload("res://scripts/terrain/worldgen_presets.gd")
 
+var failures := 0
+
 const MIX_A := {
 	"2x4": 0.20, "2x2": 0.20, "1x3": 0.03, "1x4": 0.03, "1x5": 0.02, "1x6": 0.02,
 	"2x3": 0.04, "2x5": 0.02, "2x6": 0.03, "3x3": 0.02, "3x4": 0.02, "3x5": 0.01, "3x6": 0.01,
@@ -118,6 +120,7 @@ func _initialize() -> void:
 				off += 1
 			line += "  %s %.0f->%.0f/%.0f%s" % [k, 100 * t, 100 * a, 100 * vis, "!" if bad else ""]
 		print(line + "   (target->all/visible %%, ! = off by over 5; %d off)" % off)
+	_check_lookup(areas)
 	DirAccess.make_dir_recursive_absolute(UserPaths.DEV + "region_fit")
 	for i in res.size():
 		var r: Dictionary = res[i]
@@ -128,7 +131,7 @@ func _initialize() -> void:
 	BrickTerrain.set_generator(0)
 	BrickTerrain.set_bond_top(false)
 	BrickTerrain.set_deep_tier(false)
-	quit(0)
+	quit(1 if failures > 0 else 0)
 
 
 ## Three 5 x 5 tile areas worth fitting, from a scan of 120 x 120 tiles
@@ -161,6 +164,22 @@ func _pick_areas() -> Array:
 					best[i] = t
 	print("[fit] areas: steepest %s (%.0f plates of relief), grassy %s, highest %s (mean %.0f)" % [best[0], score[0], best[1], best[2], score[2]])
 	return best
+
+
+## THE LOOKUP (Docs/TerrainRegions.md 12) the game will ask: each tile and
+## one round fitted together, cached by tile. It must give exactly the
+## batch fit's bricks, asked from 4 threads in any tile order: a brick that
+## crosses a tile edge is fitted from both sides and must agree.
+func _check_lookup(areas: Array) -> void:
+	TerrainFit.configure(Presets.complete_bricks({}))
+	for a: Vector2i in areas:
+		var r: Dictionary = TerrainFit.check_lookup(a, 4)
+		var st: Dictionary = r.stats
+		print("[fit] lookup %s: %d cells checked, %d wrong, %d not answered (band bottom); %d tiles fitted, %.1f ms a tile, %.0f KB a tile" % [
+				a, r.checked, r.wrong, r.missing, st.made, st.ms_each, st.bytes / 1024.0 / maxf(1.0, float(st.kept))])
+		if int(r.wrong) > 0:
+			failures += 1
+	print("[fit] lookup %s" % ("PASS" if failures == 0 else "FAIL (%d areas disagree)" % failures))
 
 
 func _with(base: Dictionary, over: Dictionary) -> Dictionary:

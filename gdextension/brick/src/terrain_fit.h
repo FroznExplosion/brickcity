@@ -3,8 +3,25 @@
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
+#include <godot_cpp/variant/vector2i.hpp>
 
 using namespace godot;
+
+namespace brick {
+/// A fitted brick: its min corner (studs), bottom course, size in studs and
+/// courses, the material of most of its cells; loose = sand/gravel 1x1.
+struct FitBrick {
+    int x = 0, z = 0, c = 0, sx = 1, sz = 1, h = 1, mat = 0;
+    bool loose = false;
+};
+/// THE LOOKUP (Docs/TerrainRegions.md 12): the fitted brick a generated cell
+/// is in. Any thread; a tile's first ask fits it (ms), later ones are a
+/// lookup. False where nothing is fitted (air, the deep tier, not yet
+/// configured). Generated cells only: edits are the caller's.
+bool fitted_brick(int x, int course, int z, FitBrick &out);
+/// Drops every kept tile (new settings, a new world).
+void fitted_clear();
+} // namespace brick
 
 /// THE REGION FIT (Docs/TerrainRegions.md 3, 11): bricks of random sizes,
 /// fitted per region from the GENERATED cells, staggered by a score.
@@ -36,4 +53,10 @@ public:
     /// WorldgenPresets.DEFAULT_BRICKS' keys). Held for the game's bricks.
     static void configure(const Dictionary &settings);
     static Dictionary get_configured();
+    /// fitted_brick for scripts: {x, z, c, sx, sz, h, mat, loose}, or empty.
+    static Dictionary brick_at(int x, int course, int z);
+    static Dictionary lookup_stats();
+    /// The lookup against the batch fit (region_fit_probe): counts of cells
+    /// checked, wrong and missing, from `threads` threads.
+    static Dictionary check_lookup(Vector2i tile, int threads = 4);
 };
