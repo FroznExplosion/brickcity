@@ -1252,3 +1252,21 @@ same, up to its 2 s `WAIT_MAX_MS`, and held the tiles' swaps meanwhile.
 What is left, ~47 ms at best, is the frame finding the brick and the bake
 (items 1 and 3). Not measured: the same in a cave (the deep tier's change
 passed `--gate=deep` and `--gate=handover`), and fire into falling sand.
+**Status of items 1-6 (2026-11-24).**
+- 1 DONE: tiles and deep sections keep their generated cells (GenStore, 64
+  each, by the field's serial); a sample copies them and lays the edits over
+  from the deepest edit near the tile up. find_brick 5.1 -> 0.2 ms, a rebuild
+  10 -> 5 ms; terrain_audit_probe checks kept == fresh, byte for byte.
+- 3 moot: the brick overlay (Docs/BrickOverlay.md) turned the chamfered bake
+  off.
+- 4 done another way: mask_faces scans only the plates where solid can meet
+  open air (face_band), not all ~140 of a sample in six directions; output
+  byte for byte the same, a rebuild with behind faces 7.2 -> 3.5 ms.
+- 6, measured first (`--gate=gpu`, its new rows): the far tier costs
+  1.2-2.0 ms GPU, but a plain material on it saves only 0.1-0.6: it is its
+  draws and triangles, not its lighting. 257 of its 335 meshes were one-tile
+  blocks along the far rim (the fill ran one row past the blocks' square):
+  gone, 78 meshes, ~100 fewer draws a frame. Left, if wanted: the ~70 4-tile
+  blocks never under the detail merged into one mesh, and a coarser step
+  for ring 0 (fewer triangles at 45-180 m; a look change). The GPU numbers
+  here were taken with other chats' runs and low RAM: rough.
