@@ -282,6 +282,7 @@ names still open; rotation later.
 Small stages, each with a probe and a gate, each merged:
 
 1. Cable tile layer (store, nets on a worker, own mesh, saved) + lever + lamp.
+   **Built 2026-11-25** (section 13).
 2. Button, pressure tile, trip string; gates, delay, pulse; the view tool
    (also the wrench: look, turn, take; section 12); first Ponder-style dioramas.
 3. Door, trapdoor, gate tile; observer (from `terrain_edited`); sequencer
@@ -426,6 +427,53 @@ What carries over, what changes, what does not:
 Create's warnings worth keeping: contraptions are entities and each costs,
 so cap how many move at once (as PlanetPieces caps pieces); and its size
 limit is a config number, as our push limit is.
+
+## 13. Stage 1, built (2026-11-25)
+
+`scripts/wiring/mine_wiring.gd` (`MineWiring`, a child of the mine world,
+terrain frame, like the chests), items in `content/base/data/items/wiring.json`.
+
+- **Cable tile** (`cable`, kind `wire`): RMB on the ground's top lays one in
+  the plate cell over it (air, ground under). Drawn as a dark smooth tile
+  with a cable on top, arms toward its linked neighbours; a powered net's
+  cable glows orange, an unpowered one is dull copper. Two MultiMeshes for
+  every cable, one small shader (instance colour, its alpha the glow);
+  rebuilt whole when anything changes (fine at stage 1's counts; per terrain
+  tile when big builds need it). No collider.
+- **Links**: four sides, up or down a step of up to 3 plates (a brick), so a
+  run climbs a placed block. Devices never join nets.
+- **Lever** (`lever`, kind `device`): 1 stud x 1 brick, stands on ground;
+  RMB turns it (whatever is in the hand); on, it drives 15. **Lamp**: lit
+  while a net beside it is above 0 or a lever touches it; a clear brick that
+  glows, an OmniLight (4.5 m, no shadow) while lit, a collider on WORLD.
+- **The tick**: 10 Hz in `_process`, and only does work when something
+  changed: changed cables re-flood only the nets they touched
+  (`last_flooded`), then levels, then the drawing. Main thread for now: the
+  flood is small; a worker when a large build shows a cost.
+- **Breaking**: LMB on a cable (the builder aims at a cable lying on the top
+  it looks at, and LMB takes it, not the ground) or a device; a shot at a
+  cable's spot cuts it (`MineWorld._mine` asks the wiring after the chests); a
+  grenade's blast clears its radius; `terrain_edited` runs `check` over the
+  edit's box (a cell filled, or the ground under it gone). Survival drops
+  the item. A block is not placed into a device; placed over a cable, the
+  cable breaks.
+- **Saved** in the world file beside the chests: `"wiring": {"cables": [x, y,
+  z, ...], "devices": {"x,y,z": {"item", "on"}}}`.
+- **The kit**: not added automatically (the kit's storage must start empty
+  for `--gate=inventory`); in creative take them from the catalog (E,
+  Storage).
+- **Not yet**: the view tool, conductive bricks, sky light on the cables and
+  devices in caves (they are lit as outdoors), lamps' lights are one
+  OmniLight each (fine for tens, not hundreds).
+
+Tests: `tools/probes/wiring_probe.gd` (headless, its own ground: nets,
+climbing, devices not conducting, power, a cut, support, shots, blasts, the
+partial re-flood, save round trip, items) -- 39 ok. `-- --gate=wiring`
+(`scripts/wiring/wiring_gate.gd`): laid with the builder's RMB, aimed and
+taken with LMB, the lever lights both lamps (one up a climb), a real shot
+cuts a run (its lamp dark, the other branch lit), dug-out ground breaks a
+cable, generated again: all back. Pictures `user://dev/wiring_on.png`,
+`wiring_cut.png`.
 
 ## Sources
 

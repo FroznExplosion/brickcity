@@ -95,6 +95,8 @@ var _inv_prev_mouse := Input.MOUSE_MODE_VISIBLE
 var _inv_walker_frozen := false
 ## Chests and the items lying in the world (Docs/Inventory.md 4, stage 5).
 var chests: MineChests = null
+## Cable tiles, levers, lamps (Docs/MineWiring.md).
+var wiring: MineWiring = null
 var drops: DroppedItems = null
 ## Farming (Docs/MineFarming.md): tilled plots, crops on the world clock.
 var farming: MineFarming = null
@@ -268,6 +270,10 @@ func _ready() -> void:
 	add_child(chests)
 	chests.setup(self, builder.inv, drops)
 	chests.sky = sky_lit
+	wiring = MineWiring.new()
+	wiring.name = "Wiring"
+	add_child(wiring)
+	wiring.setup(self, drops)
 	farming = MineFarming.new()
 	farming.name = "Farming"
 	add_child(farming)
@@ -308,6 +314,10 @@ func _ready() -> void:
 		elif "--gate=farm" in OS.get_cmdline_user_args():
 			# Farming (Docs/MineFarming.md): scripts/farming/farm_gate.gd.
 			_farm_gate = preload("res://scripts/farming/farm_gate.gd").new()
+			_farm_gate.run(self)
+		elif "--gate=wiring" in OS.get_cmdline_user_args():
+			# Wiring (Docs/MineWiring.md): scripts/wiring/wiring_gate.gd.
+			_farm_gate = preload("res://scripts/wiring/wiring_gate.gd").new()
 			_farm_gate.run(self)
 		elif "--gate=inventory" in OS.get_cmdline_user_args():
 			_run_inventory_gate()
@@ -803,6 +813,8 @@ func blast(point: Vector3, radius: float) -> void:
 		for key in chests.chests.keys():
 			if chests.box_of(chests.chests[key].block).get_center().distance_to(c) <= radius + 0.3:
 				chests.break_chest(key, builder != null and not builder.inv.creative)
+	if wiring != null:
+		wiring.blast(c, radius)
 	if _break_jobs.size() >= MAX_BREAK_JOBS:
 		return
 	var stud := BrickWorld.get_stud_metres()
@@ -868,6 +880,8 @@ var grenades_thrown := 0
 ## regenerated rather than broken.
 func _mine(point: Vector3, dir: Vector3, _info) -> void:
 	if chests != null and chests.shot(to_local(point)):
+		return
+	if wiring != null and wiring.shot(to_local(point)):
 		return
 	if collapse != null and collapse.shoot(point, dir, _info):
 		return
@@ -1016,6 +1030,11 @@ func terrain_edited(res: Dictionary) -> void:
 	MineBuildings.after_edit(self, res)
 	if chests != null:
 		chests.check()
+	if wiring != null:
+		if res.has("box_lo"):
+			wiring.check(res.box_lo, res.box_hi)
+		else:
+			wiring.check()
 	if drops != null:
 		drops.wake()
 	if sky_lit != null and res.has("box_lo"):
@@ -2033,6 +2052,8 @@ func _load_inventory() -> void:
 	if chests != null:
 		chests.inv = inv
 		chests.restore(world.get("chests", {}))
+	if wiring != null:
+		wiring.restore(world.get("wiring", {}))
 	if drops != null:
 		drops.inv = inv
 		drops.restore(world.get("drops", []))
@@ -2058,6 +2079,9 @@ func how_kit_added(inv: Inventory) -> bool:
 			print("[mine] %s added to the inventory" % st)
 			added = true
 	# Farming (Docs/MineFarming.md): a hoe and every crop's seed.
+	# Wiring (Docs/MineWiring.md): cable tiles, levers and lamps are in the
+	# creative catalog, not the kit -- the kit's storage starts empty
+	# (--gate=inventory counts on it).
 	for it in [&"hoe", &"wheat_seeds", &"carrot", &"potato", &"beans", &"pumpkin_seeds", &"berries"]:
 		if ItemCatalog.has(it) and inv.ensure_item(it):
 			print("[mine] %s added to the inventory" % it)
@@ -2127,6 +2151,8 @@ func save_edits(wait := false) -> void:
 	var farm_regions: Array = farming.store.take_dirty() if farming != null else []
 	if chests != null:
 		inv_save["chests"] = chests.to_save()
+	if wiring != null:
+		inv_save["wiring"] = wiring.to_save()
 	if drops != null:
 		inv_save["drops"] = drops.to_save()
 	var inv_text := JSON.stringify(inv_save, "\t")

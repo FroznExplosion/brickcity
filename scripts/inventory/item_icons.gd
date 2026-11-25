@@ -246,6 +246,21 @@ static func _model(d: Dictionary) -> Node3D:
 			_part(inner, _box(Vector3(1.04, 0.24, 0.76)), _mat(col.darkened(0.25), 0.6), Vector3(0, 0.72, 0))
 			_part(inner, _box(Vector3(0.14, 0.18, 0.06)), _mat(Color(0.95, 0.78, 0.3), 0.2),
 					Vector3(0, 0.6, 0.39))
+		"wire":
+			# A smooth grey tile with a cable along it (Docs/MineWiring.md 3.3).
+			_part(inner, _box(Vector3(1.0, 0.3, 1.0)), _mat(Color(0.24, 0.25, 0.27), 0.5), Vector3(0, 0.15, 0))
+			_part(inner, _box(Vector3(1.0, 0.12, 0.26)), _mat(col, 0.35), Vector3(0, 0.36, 0))
+			_part(inner, _box(Vector3(0.26, 0.12, 0.5)), _mat(col, 0.35), Vector3(0, 0.36, 0.25))
+		"device":
+			if str(d.get("model", "")) == "lamp":
+				_part(inner, _box(Vector3(0.6, 0.85, 0.6)), _mat(col, 0.2, 1.0, true), Vector3(0, 0.425, 0))
+				_part(inner, _cyl(0.18, 0.18, 0.12), _mat(col, 0.2, 1.0, true), Vector3(0, 0.91, 0))
+			else:
+				# A lever: a stone plate, a stick leaning, a red knob.
+				_part(inner, _box(Vector3(0.8, 0.25, 0.8)), _mat(col, 0.6), Vector3(0, 0.125, 0))
+				var lean := Basis(Vector3.BACK, deg_to_rad(-30.0))
+				_part(inner, _box(Vector3(0.12, 0.7, 0.12)), _mat(Color(0.45, 0.3, 0.16), 0.7), Vector3(0.15, 0.55, 0), lean)
+				_part(inner, _box(Vector3(0.22, 0.22, 0.22)), _mat(Color(0.75, 0.1, 0.08), 0.4), Vector3(0.33, 0.86, 0))
 		_:
 			_part(inner, _box(Vector3(0.8, 0.8, 0.8)), _mat(col, 0.5), Vector3.ZERO)
 	# Fit: the biggest extent 1.0, the middle on the origin.
