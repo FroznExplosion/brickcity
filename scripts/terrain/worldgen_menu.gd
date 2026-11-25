@@ -107,6 +107,7 @@ func _build() -> void:
 	_build_ores_tab()
 	_build_biomes_tab()
 	_build_underground_tab()
+	_build_bricks_tab()
 
 	# --- the map, beside the tabs (under them on a narrow window)
 	var side := VBoxContainer.new()
@@ -398,6 +399,44 @@ func _fill_bands(list: VBoxContainer) -> void:
 
 # ---------------------------------------------------------------------------
 # Rows
+
+## The ground's brick fill (Docs/TerrainRegions.md 11). Shares by count;
+## the fill lands within about 5 points of them (the ground's gaps go to
+## 1x2 and 1x1). Not drawn yet: the bricks switch over in stage B.
+func _build_bricks_tab() -> void:
+	var p := _page("Bricks")
+	if not s.has("bricks"):
+		s["bricks"] = Presets.complete_bricks({})
+	var b: Dictionary = s.bricks
+	_note_line(p, "Sand, red sand and gravel are always 1x1. A brick may hold several materials (stone with coal) and takes the main one's strength.")
+	_section(p, "Sizes (share of bricks, 0-1)")
+	var shapes: Dictionary = b.shapes
+	for k in ["1x1", "1x2", "1x3", "1x4", "1x5", "1x6", "2x2", "2x3", "2x4", "2x5", "2x6", "3x3", "3x4", "3x5", "3x6"]:
+		if not shapes.has(k):
+			shapes[k] = 0.0
+		_float_slider(p, k, shapes, k, 0, 0.6, 0.01)
+	_float_slider(p, "Aim higher on 2- and 3-wide (x)", b, "aim", 0, 1, 0.05)
+	_section(p, "Tall bricks (share)")
+	_float_slider(p, "Two courses tall", b, "tall2", 0, 0.3, 0.01)
+	_float_slider(p, "Three courses tall", b, "tall3", 0, 0.3, 0.01)
+	_section(p, "Strength")
+	_float_slider(p, "Stagger (0 strongest)", b, "stagger", 0, 1, 0.05)
+	_float_slider(p, "Stagger near cave air (more = weaker caves)", b, "cave_stagger", 0, 1, 0.05)
+	_float_slider(p, "Bricks across chunk edges (chance)", b, "cross", 0, 1, 0.05)
+	_check(p, "Bricks may hold several materials", b, "mixed")
+	var bands: Array = b.get("bands", [])
+	if not bands.is_empty():
+		_section(p, "Deep caves (own sizes from the preset)")
+		var d: Dictionary = bands[0]
+		_float_slider(p, "From (m under the surface)", d, "below_m", 1, 60, 0.5)
+		_float_slider(p, "Two courses tall", d, "tall2", 0, 0.4, 0.01)
+		_float_slider(p, "Three courses tall", d, "tall3", 0, 0.4, 0.01)
+
+
+func _note_line(p: Control, t: String) -> void:
+	var l := _note(t)
+	p.add_child(l)
+
 
 func _label(t: String) -> Label:
 	var l := Label.new()

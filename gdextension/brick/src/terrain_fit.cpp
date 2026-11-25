@@ -858,13 +858,22 @@ FitParams parse(const Dictionary &d) {
         double h[3];
     };
     std::vector<Raw> raw;
-    auto read_heights = [](const Array &hs, double *h) {
-        if (hs.is_empty()) return;
-        for (int i = 0; i < 3; ++i) h[i] = i < hs.size() ? (double)hs[i] : 0.0;
+    // "heights": [one, two, three courses], or the settings' "tall2"/"tall3".
+    auto read_heights = [](const Dictionary &dd, double *h) {
+        const Array hs = dd.get("heights", Array());
+        if (!hs.is_empty()) {
+            for (int i = 0; i < 3; ++i) h[i] = i < hs.size() ? (double)hs[i] : 0.0;
+            return;
+        }
+        if (dd.has("tall2") || dd.has("tall3")) {
+            h[1] = (double)dd.get("tall2", 0.0);
+            h[2] = (double)dd.get("tall3", 0.0);
+            h[0] = std::max(0.0, 1.0 - h[1] - h[2]);
+        }
     };
     Raw top{ 0.0, {}, { 1.0, 0.0, 0.0 } };
     parse_mix(d.get("shapes", Dictionary()), top.mix);
-    read_heights(d.get("heights", Array()), top.h);
+    read_heights(d, top.h);
     raw.push_back(top);
     const Array bands = d.get("bands", Array());
     for (int i = 0; i < bands.size(); ++i) {
@@ -872,7 +881,7 @@ FitParams parse(const Dictionary &d) {
         Raw r{ (double)bd.get("below_m", 0.0), {}, { top.h[0], top.h[1], top.h[2] } };
         parse_mix(bd.get("shapes", Dictionary()), r.mix);
         if (r.mix.empty()) r.mix = top.mix;
-        read_heights(bd.get("heights", Array()), r.h);
+        read_heights(bd, r.h);
         raw.push_back(r);
     }
     std::sort(raw.begin() + 1, raw.end(), [](const Raw &x, const Raw &y) { return x.below < y.below; });
@@ -905,6 +914,27 @@ FitParams parse(const Dictionary &d) {
 }
 
 } // namespace
+
+namespace {
+/// The world's fill (TerrainFit.configure), what the game's bricks will use.
+/// Made on first use: a Godot Variant built when the library loads (before
+/// Godot's interface is there) fails the DLL's initialisation.
+struct World {
+    FitParams params;
+    Dictionary settings;
+};
+std::unique_ptr<World> g_world;
+} // namespace
+
+void TerrainFit::configure(const Dictionary &settings) {
+    if (!g_world) g_world = std::make_unique<World>();
+    g_world->settings = settings.duplicate(true);
+    g_world->params = parse(settings);
+}
+
+Dictionary TerrainFit::get_configured() {
+    return g_world ? g_world->settings.duplicate(true) : Dictionary();
+}
 
 Array TerrainFit::run(const Array &areas, const Array &variants) {
     std::vector<Area> as(areas.size());
@@ -986,4 +1016,6 @@ Array TerrainFit::run(const Array &areas, const Array &variants) {
 
 void TerrainFit::_bind_methods() {
     ClassDB::bind_static_method("TerrainFit", D_METHOD("run", "areas", "variants"), &TerrainFit::run);
+    ClassDB::bind_static_method("TerrainFit", D_METHOD("configure", "settings"), &TerrainFit::configure);
+    ClassDB::bind_static_method("TerrainFit", D_METHOD("get_configured"), &TerrainFit::get_configured);
 }
