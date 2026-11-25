@@ -373,6 +373,40 @@ private:
         return a_.in(lx, lz, lc) ? a_.idx(lx, lz, lc) : -1;
     }
 
+    /// The region being fitted's free cells, a 16-bit row a square row a
+    /// course (bit u: square cell u of that row is in the area, not taken,
+    /// medium or strong): fits() reads a row, not each cell. Mixed fills
+    /// only (one material a brick checks materials too).
+    uint16_t free_[3][SQ];
+    int fr_rx_ = 0, fr_rz_ = 0, fr_L_ = INT_MIN;
+    bool fr_on_ = false;
+
+    void build_free(int rx, int rz, int L) {
+        fr_rx_ = rx; fr_rz_ = rz; fr_L_ = L;
+        fr_on_ = p_.mixed;
+        if (!fr_on_) return;
+        for (int k = 0; k < 3; ++k) {
+            const int c = L * 3 + k, o = course_off(c, p_.offset);
+            for (int v = 0; v < SQ; ++v) {
+                uint16_t row = 0;
+                for (int u = 0; u < SQ; ++u) {
+                    const int i = at(rx * SQ + o + u, rz * SQ + o + v, c);
+                    if (i >= 0 && f_.id[(size_t)i] < 0 && a_.kind[(size_t)i] >= K_MEDIUM) row |= (uint16_t)(1u << u);
+                }
+                free_[k][v] = row;
+            }
+        }
+    }
+
+    /// A cell taken: its bit off, if it is in the region's squares.
+    void take_free(int x, int z, int c) {
+        if (!fr_on_ || fdiv(c, 3) != fr_L_) return;
+        const int k = c - fr_L_ * 3, o = course_off(c, p_.offset);
+        const int u = x - fr_rx_ * SQ - o, v = z - fr_rz_ * SQ - o;
+        if (u < 0 || v < 0 || u >= SQ || v >= SQ) return;
+        free_[k][v] = (uint16_t)(free_[k][v] & ~(1u << u));
+    }
+
     int place(int x, int z, int c, int sx, int sz, int h, int mat, int layer, int64_t reg, bool loose) {
         if (!loose && (sx * sz * h) > 1) {
             // The material of most of its cells (its strength, its item).
@@ -391,6 +425,7 @@ private:
             for (int zz = z; zz < z + sz; ++zz) {
                 for (int xx = x; xx < x + sx; ++xx) {
                     f_.id[(size_t)at(xx, zz, cc)] = id;
+                    take_free(xx, zz, cc);
                 }
             }
         }
@@ -452,12 +487,21 @@ private:
     /// bricks. `units` counts the edges it could see.
     int seams_along(int x0, int x1, int z0, int z1, int cb, int L, int64_t reg, int &units) const {
         int n = 0;
+        const int lc = cb - a_.c0;
+        if (lc < 0 || lc >= a_.nc) return 0;
+        const int32_t *ids = f_.id.data() + (size_t)a_.w * a_.d * lc;
+        const int W = a_.w, D = a_.d, ox = a_.ox, oz = a_.oz;
+        const bool odd = (L & 1) != 0;
+        auto kn = [&](int id) {
+            const Brick &b = f_.bricks[(size_t)id];
+            return b.layer == L ? b.region == reg : odd;
+        };
         auto edge = [&](int ax, int az, int bx, int bz) {
-            const int i = at(ax, az, cb), j = at(bx, bz, cb);
-            if (i < 0 || j < 0) return;
-            const int A = f_.id[(size_t)i], B = f_.id[(size_t)j];
+            ax -= ox; bx -= ox; az -= oz; bz -= oz;
+            if (ax < 0 || az < 0 || bx < 0 || bz < 0 || ax >= W || bx >= W || az >= D || bz >= D) return;
+            const int A = ids[ax + W * az], B = ids[bx + W * bz];
             if (A < 0 || B < 0) return;
-            if (!known(A, L, reg) || !known(B, L, reg)) return;
+            if (!kn(A) || !kn(B)) return;
             ++units;
             if (A != B) ++n;
         };
@@ -525,6 +569,7 @@ private:
     void region_once(int rx, int rz, int L) {
         const int64_t reg = region_key(rx, rz, L);
         const size_t first = f_.bricks.size();
+        build_free(rx, rz, L);
         cnt_.assign(p_.shapes.size(), 0);
         hcnt_[0] = hcnt_[1] = hcnt_[2] = 0;
         n_ = 0;
@@ -563,6 +608,8 @@ private:
                             const int sx = orient ? sh.b : sh.a, sz = orient ? sh.a : sh.b;
                             const int x0 = flip_x ? x - sx + 1 : x, z0 = flip_z ? z - sz + 1 : z;
                             const int x1 = x0 + sx - 1, z1 = z0 + sz - 1;
+                            // The course under is the same for every height: counted once.
+                            int below_sm = -1, below_units = 0;
                             for (int h = 1; h <= 3 - k; ++h) {
                                 // fits() checks only the new course: a height left out ends the taller ones.
                                 if (h > 1 && heights_[h - 1] <= 0.0) break;
@@ -571,9 +618,9 @@ private:
                                 const double w = qw * hw;
                                 double frac = 0.0;
                                 if (p_.stagger >= 0.0) {
-                                    int units = 0;
-                                    int sm = seams_along(x0, x1, z0, z1, c - 1, L, reg, units);
-                                    sm += seams_along(x0, x1, z0, z1, c + h, L, reg, units);
+                                    if (below_sm < 0) below_sm = seams_along(x0, x1, z0, z1, c - 1, L, reg, below_units);
+                                    int units = below_units;
+                                    const int sm = below_sm + seams_along(x0, x1, z0, z1, c + h, L, reg, units);
                                     if (units > 0) frac = (double)sm / (double)units;
                                 }
                                 cand.push_back(Cand{ x0, z0, sx, sz, h, (int)si, w, frac });
@@ -647,9 +694,11 @@ private:
         }
         std::vector<int> order(SQ * SQ);
         for (int q = 0; q < SQ * SQ; ++q) order[(size_t)q] = q;
-        std::sort(order.begin(), order.end(), [&](int x, int y) {
-            return brick::bond_hash(x, rx * 31 + rz, c ^ seed_) < brick::bond_hash(y, rx * 31 + rz, c ^ seed_);
-        });
+        // Keys once (the comparator hashed both sides on every compare):
+        // the same comparisons, the same order.
+        uint32_t okey[SQ * SQ];
+        for (int q = 0; q < SQ * SQ; ++q) okey[q] = brick::bond_hash(q, rx * 31 + rz, c ^ seed_);
+        std::sort(order.begin(), order.end(), [&](int x, int y) { return okey[x] < okey[y]; });
         // The most wanted wide shape first (a rare big one placed first took
         // the common ones' room), each to its share.
         std::vector<size_t> by_share;
@@ -764,6 +813,17 @@ private:
         if (fdiv(x0, TILE) != fdiv(x1, TILE) && !gate(fdiv(x1, TILE), 0, cc, reg)) return false;
         if (fdiv(z0, TILE) != fdiv(z1, TILE) && !gate(fdiv(z1, TILE), 1, cc, reg)) return false;
         if (h > 1 && fdiv(c, SECTION_COURSES) != fdiv(cc, SECTION_COURSES) && !gate(fdiv(cc, SECTION_COURSES), 2, 0, reg)) return false;
+        if (fr_on_ && rx == fr_rx_ && rz == fr_rz_ && fdiv(cc, 3) == fr_L_) {
+            // Inside the square (checked above): a row's bits.
+            const int o = course_off(cc, p_.offset);
+            const int u0 = x0 - rx * SQ - o, v0 = z0 - rz * SQ - o;
+            const uint16_t want = (uint16_t)(((1u << (x1 - x0 + 1)) - 1u) << u0);
+            const uint16_t *rows = free_[cc - fr_L_ * 3];
+            for (int v = v0; v <= v0 + (z1 - z0); ++v) {
+                if ((rows[v] & want) != want) return false;
+            }
+            return true;
+        }
         for (int zz = z0; zz <= z1; ++zz) {
             for (int xx = x0; xx <= x1; ++xx) {
                 const int i = at(xx, zz, cc);
@@ -1393,6 +1453,9 @@ void brick::fitted_clear() {
     std::lock_guard<std::mutex> lk(rc.lock);
     rc.regions.clear();
     ++rc.gen;
+    // lookup_stats counts from here
+    rc.fitted = rc.jobs = rc.sampled_cells = 0;
+    rc.fit_ms = rc.sample_ms = 0.0;
 }
 
 Dictionary TerrainFit::brick_at(int x, int course, int z) {
