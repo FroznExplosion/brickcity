@@ -53,6 +53,14 @@ public:
     /// The lakes' wave clock (seconds, the shader's now_s): surface_at and
     /// ray_cell ride the same wave the mesh is drawn with (S3).
     static void set_wave_clock(double t);
+    /// RAIN (R10): `drops` tiles of still water over the disc round `centre`
+    /// (metres, the water's frame), each on a column's top solid plate; only
+    /// the part inside the sim radius is rained on, at the same density.
+    static void rain(Vector3 centre, double radius_m, double drops);
+    /// Drops landed since the world was made (probes).
+    static int64_t rain_landed();
+    /// Drops that soaked into dry open ground instead (nothing higher beside).
+    static int64_t rain_soaked();
     /// Minecraft's sloped tops (corners averaged) or flat plate steps.
     static void set_sloped(bool on);
     static bool get_sloped();
