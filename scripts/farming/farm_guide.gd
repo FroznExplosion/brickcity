@@ -24,7 +24,7 @@ static func ripe_seconds(crop: Dictionary, wet: bool, fert := 70.0) -> float:
 	var plot := FarmPlant.new_plot(Vector3i.ZERO, 0.0, fert, -1)
 	plot.wet = wet
 	var soil := FarmPlant.soil_factor(plot, crop)
-	var water := FarmPlant.water_factor(plot, crop)
+	var water := FarmPlant.water_factor(crop, wet)
 	var stages := int(crop.stages) - 1
 	return float(crop.stage_hours) * FarmPlant.HOUR * stages / (soil * water * FarmPlant.mean_light(plot))
 

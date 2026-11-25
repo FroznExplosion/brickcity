@@ -13,7 +13,7 @@ extends RefCounted
 ##   fluid (1 water, 2 lava, 0 none), fluid_kind ("source" / "still").
 
 const KINDS := ["block", "fluid", "bucket", "source_bucket", "chest", "station", "tool", "backpack", "gun", "grenade",
-		"hoe", "seed", "misc"]
+		"hoe", "seed", "scythe", "can", "misc"]
 ## Which hand an item may be in (zylanntest's HandUse).
 const HANDS := ["any", "right", "off", "two"]
 ## Tilled soil is made with a hoe, never laid; breaking it gives soil
@@ -220,4 +220,6 @@ static func label(s: ItemStack) -> String:
 			return "%s %d/%d tiles" % [n, int(s.data.get("tiles", 0)), BUCKET_TILES]
 		"source_bucket":
 			return "%s (%s)" % [n, ["empty", "water", "lava"][clampi(int(s.data.get("fluid", 0)), 0, 2)]]
+		"can":
+			return "%s %d/%d" % [n, int(s.data.get("water", 0)), MineFarming.CAN_WATER]
 	return n

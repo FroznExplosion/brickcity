@@ -2018,7 +2018,7 @@ func how_kit_added(inv: Inventory) -> bool:
 			print("[mine] %s added to the inventory" % st)
 			added = true
 	# Farming (Docs/MineFarming.md): a hoe and every crop's seed.
-	for it in [&"hoe", &"wheat_seeds", &"carrot", &"potato", &"beans", &"pumpkin_seeds", &"berries"]:
+	for it in [&"hoe", &"scythe", &"watering_can", &"wheat_seeds", &"carrot", &"potato", &"beans", &"pumpkin_seeds", &"berries"]:
 		if ItemCatalog.has(it) and inv.ensure_item(it):
 			print("[mine] %s added to the inventory" % it)
 			added = true

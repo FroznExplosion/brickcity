@@ -134,7 +134,7 @@ func _light() -> void:
 	var dark := _plot(&"wheat", true, 70.0, 0.0)
 	FarmPlant.settle(dark, float(dark.t) + d * 4.0)
 	_ok("no sky, no lamp: no growth", int(dark.stage) == 0 and float(dark.p) == 0.0)
-	_ok("its time to ripe is never", FarmPlant.eta(dark) == INF)
+	_ok("its time to ripe is never", FarmPlant.eta(dark, float(dark.t)) == INF)
 	var lamp := _plot(&"wheat", true, 70.0, 0.0)
 	lamp.lamp = 1.0
 	FarmPlant.settle(lamp, float(lamp.t) + d * 4.0)
