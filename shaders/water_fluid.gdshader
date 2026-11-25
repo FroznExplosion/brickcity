@@ -98,6 +98,14 @@ varying float v_h01;
 // darker than the sea next to it.
 varying vec3 v_nrm;
 varying float v_depth;
+// BRICK PIECES (W4, Docs/MineWaterNext.md 9): calm tops are flat brick
+// tiles. CUSTOM0.xw is the way to the piece's middle in studs, so here the
+// fragment's place in its piece (v_piece) and the piece's half size
+// (v_half, the same at every corner): joints where they meet.
+varying vec2 v_piece;
+varying vec2 v_half;
+uniform float joint_width = 0.012;     // m, each side of a joint
+uniform float joint_darken = 0.55;
 
 #include "res://shaders/sea_wave.gdshaderinc"
 
@@ -135,9 +143,19 @@ void vertex() {
 	v_nrm = (MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz;
 	// COLOR.r: the water's depth over 12 plates (0.14 m each), from the mesher.
 	v_depth = COLOR.r * 12.0 * 0.14;
-	if (CUSTOM0.y > 1.5) {
+	v_piece = vec2(0.0);
+	v_half = vec2(0.0);
+	if (CUSTOM0.y > 2.5) {
+		// A still piece (a pond, a puddle): eases as a whole.
+		v_piece = CUSTOM0.xw;
+		v_half = abs(CUSTOM0.xw);
+		float k = clamp((now_s - swap_s) / max(ease_s, 0.001), 0.0, 1.0);
+		VERTEX.y += CUSTOM0.z * (1.0 - k);
+	} else if (CUSTOM0.y > 1.5) {
 		// A lake piece: the whole piece rides the lake's wave at its middle.
-		vec2 mid = VERTEX.xz + vec2(CUSTOM0.x, CUSTOM0.w) * stud * 0.5;
+		v_piece = CUSTOM0.xw;
+		v_half = abs(CUSTOM0.xw);
+		vec2 mid = VERTEX.xz + CUSTOM0.xw * stud;
 		VERTEX.y += CUSTOM0.z * lake_wave(mid, now_s);
 	} else if (CUSTOM0.y > 0.5) {
 		// A real sea piece (MineWater.md 11.9): the whole piece rides the
@@ -253,7 +271,21 @@ void fragment() {
 		vec3 c = mix(trough_colour.rgb, crest_colour.rgb, v_h01);
 		c = mix(c, deep_tint.rgb, clamp(v_depth / absorption_depth, 0.0, 0.75));
 		c = mix(c, c * 1.12, smoothstep(0.55, 0.95, r) * 0.35);
-		if (!side) {
+		bool piece = v_half.x > 0.01;
+		if (!side && piece) {
+			// A brick tile: smooth, its joints dark, a little lighter just
+			// inside them (the tile's edge catching the light), each tile a
+			// shade of its own.
+			vec2 d2 = (v_half - abs(v_piece)) * stud;
+			float dm = min(d2.x, d2.y);
+			float fw = max(fwidth(dm), 1e-5);
+			float joint = 1.0 - smoothstep(joint_width, joint_width + fw * 1.5, dm);
+			float rim = 1.0 - smoothstep(joint_width, joint_width * 4.0 + fw, dm);
+			float fade = 1.0 - smoothstep(0.02, 0.08, fw);
+			c *= mix(1.0, 1.06, (rim - joint) * fade);
+			c *= mix(1.0, joint_darken, joint * fade);
+			c *= 0.97 + 0.06 * hash(floor((wpos.xz / stud + v_piece) * 2.0 + 0.5));
+		} else if (!side) {
 			vec2 g = abs(fract(uv) - 0.5);
 			float line = 1.0 - smoothstep(0.5 - grid_line, 0.5, max(g.x, g.y));
 			c *= mix(0.88, 1.0, line);

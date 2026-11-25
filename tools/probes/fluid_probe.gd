@@ -45,6 +45,8 @@ extends SceneTree
 ## - S3: a lake's open top rides a wave (rim flat, a lone source flat), the
 ##   surface asked for is that wave, a ray through a crest hits the lake; a
 ##   brick laid in it and broken heals, in the middle and at its shore (R4);
+## - W4: calm tops are brick tiles: a pond off the 4-stud grid covered
+##   exactly by still pieces; a lake's pieces ride the wave at their middle;
 ## - P: water poured down one arm of a U-bend levels in both, every unit kept;
 ## - R10 rain: drops soak into open flat ground, land at the foot of walls
 ##   and on water, pool in a basin and stay; on a source they are nothing.
@@ -103,18 +105,24 @@ func _ease_run(ticks: int) -> Dictionary:
 		var n: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
 		var c: PackedFloat32Array = arr[Mesh.ARRAY_CUSTOM0]
 		r.falling = 0
+		# How far a vertex moved: CUSTOM0.x, z on a still brick piece (W4); a
+		# lake piece (a source's top) does not ease, it rides the wave.
+		var off := func(i: int) -> float:
+			var y := c[i * 4 + 1]
+			return c[i * 4 + 2] if y > 2.5 else (0.0 if y > 1.5 else c[i * 4])
 		for q in range(0, v.size(), 4):
 			if n[q].y < 0.9:
 				continue
 			r.tops += 1
-			if absf(c[q * 4]) > 0.001:
+			var o0: float = off.call(q)
+			if absf(o0) > 0.001:
 				r.moved += 1
-			if c[q * 4] > 0.01:
+			if o0 > 0.01:
 				r.falling += 1
-			r.worst_up = maxf(r.worst_up, -c[q * 4])
-			var s0 := v[q].y + c[q * 4]
+			r.worst_up = maxf(r.worst_up, -o0)
+			var s0 := v[q].y + o0
 			for k in range(1, 4):
-				if absf(v[q + k].y + c[(q + k) * 4] - s0) > 0.001:
+				if absf(v[q + k].y + float(off.call(q + k)) - s0) > 0.001:
 					r.tilted += 1
 					break
 	return r
@@ -293,8 +301,9 @@ func _run() -> void:
 	_ok("a pond in a pit keeps its tiles", _region_units(2172, 2173, 17, 18, W) == 18,
 			str(_region_units(2172, 2173, 17, 18, W)))
 
-	# 4d. A calm pond's top is merged (stage 8): an 8 x 8 pond two plates
-	# deep in walls is one flat quad on top, not 64.
+	# 4d. A calm pond's top is brick tiles (W4; was one merged quad, stage
+	# 8): an 8 x 8 pond two plates deep in walls, off the 4-stud grid, is
+	# covered exactly by still pieces of 1 to 4 x 4, far fewer than 64.
 	_floor(2760, -10, 2800, 30)
 	for wall in [[2770, 0, 2779, 0], [2770, 9, 2779, 9], [2770, 0, 2770, 9], [2779, 0, 2779, 9]]:
 		BrickTerrain.fill_box(Vector3i(wall[0], W * 3, wall[1]), Vector3i(wall[2], W * 3 + 2, wall[3]), 4, false)
@@ -304,12 +313,31 @@ func _run() -> void:
 			BrickFluid.place(Vector3i(x, W, z), 1, BrickFluid.STILL, 2)
 	_settle(50)
 	var pm: Dictionary = BrickFluid.build_tile_mesh(floori(2771 / 32.0), 0)
-	var ups := 0
 	var nrm: PackedVector3Array = pm.water[Mesh.ARRAY_NORMAL]
-	for n in nrm:
-		if n.y > 0.99:
-			ups += 1
-	_ok("a calm pond's top is one quad", ups == 4, "%d top vertices" % ups)
+	var pv: PackedVector3Array = pm.water[Mesh.ARRAY_VERTEX]
+	var pcus: PackedFloat32Array = pm.water[Mesh.ARRAY_CUSTOM0]
+	var tiles := 0
+	var not_piece := 0
+	var area := 0.0
+	var biggest := 0.0
+	for q in range(0, pv.size(), 4):
+		if nrm[q].y < 0.99:
+			continue
+		if pcus[q * 4 + 1] < 2.5:
+			not_piece += 1
+			continue
+		tiles += 1
+		var lo := Vector2(INF, INF)
+		var hi := Vector2(-INF, -INF)
+		for k in 4:
+			lo = lo.min(Vector2(pv[q + k].x, pv[q + k].z))
+			hi = hi.max(Vector2(pv[q + k].x, pv[q + k].z))
+		var a := (hi.x - lo.x) * (hi.y - lo.y) / (0.35 * 0.35)
+		area += a
+		biggest = maxf(biggest, a)
+	_ok("a calm pond's top is brick tiles", not_piece == 0 and absf(area - 64.0) < 0.01 and tiles <= 32
+			and biggest > 15.9, "%d tiles over %.1f studs (want 64), biggest %.0f, %d tops not pieces" % [
+			tiles, area, biggest, not_piece])
 
 	# 4e. A fall into a pit never fills it (R6, Docs/MineWaterNext.md: water
 	# running from a source adds water nowhere; the pit rule 4.5 went
@@ -889,19 +917,23 @@ func _run() -> void:
 			pieces += 1
 			amp_max = maxf(amp_max, lcus[i + 2])
 			var vx := floori(lverts[i / 4].x / 0.35 + 0.01)
-			if vx == lx0:
+			if vx == lx0 and lcus[i + 2] > 0.05:
 				rim_piece = true
-	_ok("a lake's open top rides a wave, its rim flat", pieces > 50 and absf(amp_max - 0.09) < 0.001 and not rim_piece,
-			"%d piece faces, amplitude %.3f m, rim piece %s" % [pieces, amp_max, rim_piece])
+	# W4: the rim's pieces reach a stud or two in, and ride a small wave.
+	_ok("a lake's open top rides a wave, small at its rim", pieces > 20 and absf(amp_max - 0.09) < 0.001 and not rim_piece,
+			"%d piece faces, amplitude %.3f m, rim piece over 0.05 m %s" % [pieces, amp_max, rim_piece])
 	var stud := 0.35
 	var mx := lx0 + 7
 	var top := float((W + 1) * 3) * 0.14
 	var ask := Vector3((mx + 0.5) * stud, top - 0.05, 0.5 * stud)
+	# (mx, 0)'s piece (W4): the 4 x 4 block x 7004-7007, z 0-3, all lake;
+	# its middle (7006, 2), its middle cell well inside (full amplitude).
+	var pmid := Vector2(7006.0 * stud, 2.0 * stud)
 	var tw := 0.0
-	while _lake_wave((mx + 0.5) * stud, 0.5 * stud, tw) < 0.6:
+	while _lake_wave(pmid.x, pmid.y, tw) < 0.6:
 		tw += 0.05
 	BrickFluid.set_wave_clock(tw)
-	var want := top + 0.09 * _lake_wave((mx + 0.5) * stud, 0.5 * stud, tw)
+	var want := top + 0.09 * _lake_wave(pmid.x, pmid.y, tw)
 	var got := BrickFluid.surface_at(ask)
 	var got_air := BrickFluid.surface_at(ask + Vector3(0, 0.1, 0))
 	_ok("the lake's surface is its wave, from the water or the crest over it", absf(got - want) < 0.001 and absf(got_air - want) < 0.001,
@@ -915,9 +947,9 @@ func _run() -> void:
 	var lc2: PackedFloat32Array = lone.water[Mesh.ARRAY_CUSTOM0] if not (lone.water as Array).is_empty() else PackedFloat32Array()
 	var lv2: PackedVector3Array = lone.water[Mesh.ARRAY_VERTEX] if not (lone.water as Array).is_empty() else PackedVector3Array()
 	for i in range(0, lc2.size(), 16):
-		if lc2[i + 1] > 1.5 and floori(lv2[i / 4].z / 0.35) >= 10:
+		if lc2[i + 1] > 1.5 and lc2[i + 2] > 0.0 and floori(lv2[i / 4].z / 0.35) >= 10:
 			lone_pieces += 1
-	_ok("a lone source stays flat", lone_pieces == 0, "%d piece faces" % lone_pieces)
+	_ok("a lone source stays flat", lone_pieces == 0, "%d piece faces with a wave" % lone_pieces)
 	# A brick laid in the lake and broken again: the body heals (R4), in the
 	# middle and against its shore.
 	for hx in [lx0 + 7, lx0]:

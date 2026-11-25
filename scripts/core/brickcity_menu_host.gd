@@ -183,6 +183,9 @@ func _apply_setting(id: StringName, value: Variant) -> void:
 			BrickGridLight.near_shadowed = [0, 1, 2, 4][clampi(int(value), 0, 3)]
 		&"near_lamps":
 			BrickGridLight.near_max = [0, 2, 4, 8][clampi(int(value), 0, 3)]
+		&"rain_water":
+			# Read by the mine world's rain (mine_rain.gd, MineRain.water_mul).
+			Engine.set_meta(&"rain_water", [0.0, 0.4, 1.0, 2.5, 5.0][clampi(int(value), 0, 4)])
 		&"water_lod":
 			# Read by the mine world's water (mine_water.gd, MineWater.drop_lod);
 			# a flag, so the menu loads none of the mine world's scripts.
@@ -307,6 +310,13 @@ func _setting_defs() -> Array:
 			"min": 0.0, "max": 120.0, "step": 5.0, "suffix": " m",
 			"hint": "How far the tops of buildings still show studs, as flat cards. Past it they "
 			+ "are smooth. Under Real Studs: no cards."},
+		{"id": &"rain_water", "tab": "gameplay", "type": MENU_SETTINGS.T_ENUM,
+			"label": "Rain Water", "default": 2,
+			"choices": ["Off (soaks in)", "Low", "Normal", "High", "Very High"],
+			"hint": "How much of the mine world's rain stays as water. Off: rain only wets "
+			+ "the ground. Higher: puddles and ponds fill faster in hollows; rainy biomes "
+			+ "grow their own ponds. A hollow fills to its brim and no further: the rest "
+			+ "runs off and dries."},
 		{"id": &"water_lod", "tab": "video", "type": MENU_SETTINGS.T_ENUM,
 			"label": "Water Drops At", "default": 1,
 			"choices": ["LOD 1 (detailed ground only)", "LOD 2", "LOD 3"],

@@ -266,8 +266,41 @@ drifts and may fall in any biome; even deserts get rain, rarely.
   storms of their own (`MineRain.forced`, `add_storm` for tests).
 - Checks: `fluid_probe` 16 (soaks in on the flat, pools in a basin and stays,
   nothing on a source); `--gate=water` rain line and `mine_rain.png`.
-- Open: snow (rain falls as rain in snowy biomes too); a rain setting in
-  Options (off / rare / normal) if it costs on slower machines.
+- **Options > Gameplay > Rain Water** (the user, 2026-11-25): how much rain
+  stays as water -- Off (soaks in, only wets the ground), Low 0.4x, Normal,
+  High 2.5x, Very High 5x (Engine meta `rain_water`, `MineRain.water_mul`).
+  Not a water world in time: a hollow fills to its brim and no further, the
+  rest runs off as thin water that dries.
+- Open: snow (rain falls as rain in snowy biomes too).
+
+## 9. Packed brick tops (W4, built 2026-11-25)
+
+The user: still and source water should look the same; rain puddles too
+(rainy biomes then grow their own ponds).
+
+- Every calm water top -- still (ponds, puddles, rain pools), sources, lakes,
+  rivers -- is drawn as flat brick TILES (no studs) with joints; running
+  water (flow, falls) stays smooth and keeps its stud grid. Lava unchanged.
+- **Layout fixed by world position** (`piece_rect`): a 4 x 4 block of studs
+  is one tile when its whole top is alike (same kind, height, and easing);
+  else it splits in two -- 4 x 2 or 2 x 4 by the block's parity -- each half
+  into 2 x 2, each into 2 x 1 or 1 x 2 (parity), then 1 x 1. A cell's piece
+  is the first alike rect of its nested chain, so all its cells agree and a
+  piece changes only when its own cells do.
+- **Lakes**: each tile rides the wave at its own middle with its amplitude
+  there (bobbing tiles, skirts under the edges); `surface_at` and the
+  bucket's ray ask the same piece (`lake_piece`). Rim tiles reach a stud or
+  two in, so they bob a little (0.036 m) where 1 x 1 rim pieces were flat.
+- **Encoding**: CUSTOM0 x, w = the way to the piece's middle in studs; y 2
+  lake (z amplitude), 3 still (z the easing offset). The shader takes the
+  joint from that: dark line, a lighter rim inside, a shade per tile
+  (`joint_width`, `joint_darken`).
+- Checks: `fluid_probe` 4d (an off-grid 8 x 8 pond is covered exactly by 27
+  tiles, the biggest 4 x 4), 14 (wave at the piece's middle), 0 (still
+  pieces ease as a whole); `--gate=water` pictures `water_pond.png`,
+  `water_lake.png`.
+- Later: ice -- a frozen pond as the same pieces, opaque, real terrain
+  bricks to stand on and mine (with snow).
 
 Each: `fluid_probe`, `-- --gate=water`, `-- --gate=gen` where generation is
 touched. Windowed gates one at a time, heat check after each (CLAUDE.md);
