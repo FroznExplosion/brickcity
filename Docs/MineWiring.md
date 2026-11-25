@@ -1,6 +1,11 @@
 # Wiring, pistons and traps in the mine world -- theory
 
 Written 2026-11-25. Design only: nothing here is built.
+
+**Decided 2026-11-25 (the user): the mix of section 3.3** -- visible cable
+tiles, conductive bricks, a view tool, wireless bricks by antenna colour.
+**Hydraulics** (water pressure through pipes) is part of the same system:
+section 11. Defaults for the open questions: section 9.
 Scene: `scenes/terrain_test.tscn` (the mine world, Docs/MineWorld.md).
 
 ## 0. What the user asked
@@ -252,6 +257,12 @@ the wire is a brick.
 
 ## 9. Open questions for the user
 
+**Defaults taken until the user says otherwise (2026-11-25):** the wire is
+the section 3.3 mix (decided); nets carry a **level 0-15** (hydraulic
+pressure needs one, section 11); pistons **hop** over studs, slide on tiles;
+an electric piston pushes **12 bricks**, a hydraulic one by its pressure;
+names still open; rotation later.
+
 1. **Wire: visible part (section 3.3) or invisible links?** The recommendation
    is visible cable tiles + conductive bricks + a view tool + coloured
    wireless bricks.
@@ -266,7 +277,7 @@ the wire is a brick.
 6. Rotation (Technic axles, gears) as a second power later, for windmills
    and conveyors? It suits LEGO and Vintage Story/Create show it plays well.
 
-## 10. A build order, if it goes ahead
+## 10. Build order (decided; hydraulics added as stage 6b)
 
 Small stages, each with a probe and a gate, each merged:
 
@@ -276,9 +287,102 @@ Small stages, each with a probe and a gate, each merged:
 4. Piston: up first (unclutch + group + limit), then sideways with the hop,
    the stand-in slide, the kinematic shove; sticky piston.
 5. Dispenser and dropper (items, arrows, grenades, gun rounds, buckets).
-6. Release brick (collapse), valve (water/lava), alarm (AI).
+6. Release brick (collapse), alarm (AI).
+6b. Hydraulics (section 11): pipes as a second medium of the same nets,
+   intake, pump, valve, outlet, pressure sensor, hydraulic piston.
 7. Transmitter/receiver by colour; conductive brick variants.
 8. Later: traps the world generates (dungeons, towers stamped into the field).
+
+## 11. Hydraulics: water pressure as part of the wiring
+
+### 11.1 What the water system gives today
+
+- `BrickFluid` (MineWater.md) is cells of 1 stud x 1 brick with a level in
+  half tiles, kinds source / flowing / falling / still. **Still water is a
+  conserved volume** (whole units, never made or lost except by drying);
+  sources are infinite (the sea, lakes, rivers, springs).
+- It has **no pressure**: water does not rise up the far side of a U-bend
+  (MineWater.md 4.5, "STA's compression term could add it later").
+- From outside it offers what a hydraulic part needs, all CPU side and
+  thread-safe: `cell_info(cell)` (fluid, kind, amount, capacity),
+  `surface_at(p)`, `fluid_at(p)`, `place(cell, fluid, kind, amount)`,
+  `remove(cell, amount)`, and `terrain_changed` when bricks move. Commands
+  are applied with the next tick; queries read the last applied state.
+
+So hydraulics do **not** need pressure inside the water sim. They need it in
+the pipes, and the pipes are a wiring net.
+
+### 11.2 The idea: a pipe is a wire whose level is pressure
+
+- **Pipe parts** are a second medium in the same sparse layer and the same
+  net code as cable tiles: a 1x1 hose tile laid on studs, a pipe brick that
+  carries through a wall (as a conductive brick does), bends and T's. LEGO's
+  own Technic pneumatics (pump, switch valve, cylinder, hose) are the look:
+  real parts, seen and shot. A pipe never joins a cable: they are two nets.
+- A pipe net's level is its **pressure, 0-15**, the same number a wire net
+  carries, so every device that reads a level reads either.
+- **Pressure comes from head**, read from the water, not simulated in the
+  pipe: an **intake** brick under water reads its cell and the surface above
+  it; pressure = the water's depth over the intake in bricks (0.42 m), capped
+  at 15 (6.3 m). A sea, lake or river intake is steady (sources); a pond
+  intake falls as the pond drains. A net with several intakes takes the
+  highest. A reservoir built up a hill is a **battery you can see**: the dam
+  is the charge, and a shot that breaches it empties it (the water runs out
+  by its own rules).
+- **A pump** is the bridge from the electric side: powered by a wire, it
+  gives full pressure from any water touching it, whatever the head.
+- **A valve** (a gate brick on a pipe, opened by a wire) joins or cuts two
+  pipe nets. A **pressure sensor** turns pressure into a wire signal of the
+  same level (hydraulic to electric).
+- **Closed parts use no water.** A hydraulic piston or ram only reads the
+  pressure (Technic cylinders are a closed system). Its push limit is its
+  pressure: 1 brick per level (a 6 m head pushes 15 bricks, a puddle pushes
+  none). Hydraulic pistons are the strong ones; electric ones push 12.
+- **Open parts move real water.** An **outlet** brick on a pressured net
+  `place`s water in front of it and the net `remove`s the same amount from
+  an intake's cell, so still water is conserved: draining a pond into a room
+  floods it by exactly the pond's volume. From a source the water is
+  infinite (as a source bucket). A **jet** is an outlet with force: it pushes
+  bodies along its line (fountains, a trap that blows the player off a ledge).
+- **A broken pipe leaks.** When a shot, a grenade or a collapse breaks a
+  pipe cell of a pressured net, the break becomes an outlet: water sprays
+  out until the net is valved off or the source is dry. Shooting a pipe is
+  how you stop (or start) a hydraulic machine.
+- **Lava pipes:** same rules, lava's tick (2 Hz). Lava burns wooden pipes
+  (`material_burns`).
+
+### 11.3 Why not real pressure in the water sim
+
+Water rising through a U-bend, communicating vessels and pressure pushing
+through gaps would need a pressure term in every cell (STA's compression),
+woken over whole bodies. That is a change to the water's core rules, its
+cost (a lake would never sleep) and its saves, for an effect players mostly
+meet inside pipes. Pipes as nets read the water's state once a tick at
+their intakes and cost nothing while still. If one day the water gets real
+pressure, the intake reads it instead of the head; nothing else changes.
+
+### 11.4 How it runs
+
+- In the wiring tick (10 Hz): each pipe net whose intakes' cells changed is
+  read again (`cell_info` at the intake, the water's last applied state);
+  its pressure changes the devices on it as any level does.
+- Outlets and leaks hand `place` / `remove` commands to the water for its
+  next tick, at most a few units an outlet a tick (so a burst pipe gushes but
+  cannot empty a lake in a frame), conserving still water.
+- A pipe placed or broken rebuilds its net like a wire.
+- Saved with the wire layer; the water saves its own cells as now.
+
+### 11.5 Traps and machines it adds
+
+| | Built from |
+|---|---|
+| Flood room | pressure plate -> valve -> outlets from a lake intake |
+| Lava chute | trip string -> valve on a lava pipe -> outlet over a corridor |
+| Water jet | motion sensor -> pump -> jet: blows the player off a bridge |
+| Hydraulic crusher / gate | a reservoir's pressure drives rams that push 15 bricks; drain the reservoir (shoot the dam) to stop them |
+| Drain trap | a valve opens a pipe under a pool: the water runs out and what floated sinks |
+| Fountain, irrigation | outlets on a source net (farming: Docs/MineFarming.md) |
+| Leak sabotage | shoot an enemy base's pipe: it sprays and its machines lose pressure |
 
 ## Sources
 
@@ -292,6 +396,8 @@ Small stages, each with a probe and a gate, each merged:
 - Hytale: launch post <https://hytale.com/news/2026/1/hytale-is-finally-here>, no official roadmap
   <https://hytalesl.io/wiki/hytale-roadmap/>, fan list <https://www.hyguilds.com/hytale-future-roadmap>,
   Logica mod <https://www.curseforge.com/hytale/mods/logica>
+- LEGO Technic pneumatics (pump, switch valve, cylinder, hose) are the
+  look for pipes; no source needed.
 - Vintage Story mechanical power: <https://wiki.vintagestory.at/Special:MyLanguage/Mechanical_Power>
 - Scrap Mechanic logic: <https://www.gamewatcher.com/scrap-mechanic-logic-gates-what-are-how>,
   connect tools mod <https://steamcommunity.com/sharedfiles/filedetails/changelog/2289714402>
