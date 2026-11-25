@@ -209,7 +209,13 @@ func _rain_water(eye: Vector2) -> void:
 
 static func _drops(r_m: float, st: float) -> float:
 	var r_st := r_m / STUD_M
-	return PI * r_st * r_st * DROPS_PER_COLUMN_S * st * DROP_EVERY
+	return PI * r_st * r_st * DROPS_PER_COLUMN_S * st * DROP_EVERY * water_mul()
+
+
+## Options > Gameplay > Rain Water: how much of the rain stays as water
+## (0 off .. 5), the menu's Engine meta `rain_water`; 1 when unset.
+static func water_mul() -> float:
+	return float(Engine.get_meta(&"rain_water", 1.0))
 
 
 ## Rain at the player, 0..1, before easing.
