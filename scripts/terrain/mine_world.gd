@@ -1334,7 +1334,8 @@ func _follow_far(eye: Vector3) -> void:
 	var t := _tile_of(eye)
 	if _far_next == null:
 		var d := t - _far.anchor
-		if maxi(absi(d.x), absi(d.y)) >= REANCHOR_TILES:
+		# Re-laid as well when Distant Ground Detail changed (TerrainCoarse.detail).
+		if maxi(absi(d.x), absi(d.y)) >= REANCHOR_TILES or _far.built_detail != TerrainCoarse.detail:
 			_far_next = _new_far(t)
 			_far_next.hold = fast_hold
 			_far_next.visible = false
@@ -3836,6 +3837,16 @@ func _gpu_view(view_name: String) -> void:
 
 func _run_gpu_gate() -> void:
 	await _frames(60)
+	# Distant Ground Detail for this pass: -- --far-detail=0..2 (a test window
+	# runs on the settings' defaults, put in after the scene is up): the far
+	# tier is laid out again at it and swapped in before anything is measured.
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--far-detail="):
+			TerrainCoarse.detail = clampi(int(arg.split("=")[1]), 0, 2)
+	for w in 600:
+		if _far.built_detail == TerrainCoarse.detail and _far_next == null:
+			break
+		await get_tree().process_frame
 	_time = 0.42
 	var menu_settings := get_node_or_null(^"/root/MenuSettings")
 	if menu_settings != null:
@@ -3844,8 +3855,24 @@ func _run_gpu_gate() -> void:
 	var vp := get_viewport()
 	var size := vp.get_visible_rect().size
 	print("[gpu] trees: real bricks to %.0f m, cards past it" % _trees.near_m)
-	print("[gpu] far tier: %d meshes (%d hidden), %d blocks, %d rings, %d tris, blocks a node up to %d tiles" % [_far.mesh_count(), _far.hidden_count(), _far.block_count(), _far.ring_count(), _far.triangle_count(), _far._split_to])
+	print("[gpu] far tier: %d meshes (%d hidden), %d blocks, %d rings, %d tris, blocks a node up to %d tiles, detail %d (built at %d)" % [_far.mesh_count(), _far.hidden_count(), _far.block_count(), _far.ring_count(), _far.triangle_count(), _far._split_to, TerrainCoarse.detail, _far.built_detail])
 	if "--header-only" in OS.get_cmdline_user_args():
+		# A look at the far ground from just over the trees, across where the
+		# detail hands over to it (Distant Ground Detail's pictures).
+		_hud_layer.visible = false
+		var eye_g := _eye_render()
+		var look := Camera3D.new()
+		add_child(look)
+		look.attributes = get_viewport().get_camera_3d().attributes
+		look.far = 3000.0
+		look.global_position = eye_g + Vector3(0, 14, 0)
+		look.look_at(eye_g + Vector3(60, -6, 25))
+		look.current = true
+		await _frames(30)
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png(UserPaths.DEV + "mine_far_detail_%d.png" % TerrainCoarse.detail)
+		get_tree().quit()
+		return
 		var hist := {}
 		var eye_t := _tile_of(_eye())
 		var far_d := {}

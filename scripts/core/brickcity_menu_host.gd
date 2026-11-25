@@ -119,6 +119,8 @@ func _apply_setting(id: StringName, value: Variant) -> void:
 	match id:
 		&"fov":
 			PlayerView.hfov = float(value)
+		&"far_ground_detail":
+			TerrainCoarse.detail = clampi(int(value), 0, 2)
 		&"mouse_sensitivity":
 			PlayerCamera.look_mult = float(value)
 		&"ads_sensitivity":
@@ -266,6 +268,13 @@ func _setting_defs() -> Array:
 			"hint": "How far a floor reaches past what holds it up before it gives way: a floor "
 			+ "over a gap, an overhang, wreckage lying across two stubs. Stone reaches 2.5 times "
 			+ "as far, metal 4. Asked once a building has stopped coming apart."},
+		# The far ground's detail (TerrainCoarse.detail, Docs/MineWorld.md 21 item 6):
+		# measured 2026-11-25 the far tier is ~0.8 ms GPU on foot, its draws and
+		# triangles, not its lighting.
+		{"id": &"far_ground_detail", "tab": "video", "type": MENU_SETTINGS.T_ENUM,
+			"label": "Distant Ground Detail", "default": 0, "choices": ["High", "Medium", "Low"],
+			"hint": "How finely the ground past the nearby bricks is shaped. Medium and Low draw "
+			+ "a quarter and a sixteenth of its triangles; hills further out get blockier."},
 		# The near tier's cap (BrickNear): how much close-up brick detail at once.
 		{"id": &"near_cap", "tab": "video", "type": MENU_SETTINGS.T_BOOL,
 			"label": "Near Detail Cap", "default": true,
