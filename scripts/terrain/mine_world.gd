@@ -1865,7 +1865,7 @@ func how_kit_added(inv: Inventory) -> bool:
 	if inv.ensure_item(&"chest", &"mega_pickaxe"):
 		print("[mine] chests added to the inventory")
 		added = true
-	for st in [&"workbench", &"furnace", &"wood", &"leaves"]:
+	for st in [&"workbench", &"furnace"]:
 		if inv.ensure_item(st):
 			print("[mine] %s added to the inventory" % st)
 			added = true
@@ -2238,6 +2238,9 @@ func _run_inventory_gate() -> void:
 	walker.pitch = -0.75
 	await _frames(20)
 	builder.gate_keys = true
+	# The tree beside the spawn is not what these checks aim at: trees are
+	# looked at again for section 13 (_gate_fell_tree).
+	builder.aim_trees = false
 	var inv: Inventory = builder.inv
 	var waited := 0
 	while not ItemIcons.ready and waited < 120:
@@ -2707,6 +2710,7 @@ func _run_inventory_gate() -> void:
 ## Returns the felled trunk cell, or Vector2i.MAX.
 func _gate_fell_tree(check: Callable) -> Vector2i:
 	var inv: Inventory = builder.inv
+	builder.aim_trees = true
 	var here := _eye()
 	var best: Dictionary = {}
 	var best_d := INF
@@ -2764,8 +2768,18 @@ func _gate_fell_tree(check: Callable) -> Vector2i:
 	builder.update_target()
 	check.call("the tree is no longer looked at", builder.target.get("tree", Vector2i.MAX) != cell)
 	await _shot(UserPaths.DEV + "inv_tree_felled.png")
-	# A wood brick laid from the stack: a 2x2 brick, on the ground below.
-	inv.select_item(&"wood")
+	# A wood brick laid from the stack: a 2x2 brick, on the ground below. The
+	# hotbars are full, so the wood went to storage: onto hotbar 1 slot 1 with it.
+	for a in inv.all_addrs():
+		var s := inv.get_slot(a)
+		if s != null and s.id == &"wood" and not String(a.area).begins_with("hotbar"):
+			var bar_a := Inventory.addr(inv.hotbar_area(), 0)
+			var was := inv.get_slot(bar_a)
+			inv.set_slot(bar_a, s)
+			inv.set_slot(a, was)
+			inv.changed.emit()
+			break
+	check.call("the wood can be put in the hand", inv.select_item(&"wood"))
 	builder.size_i = 0
 	walker.pitch = -0.9
 	await _frames(5)

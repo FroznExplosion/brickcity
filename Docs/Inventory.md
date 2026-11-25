@@ -375,8 +375,9 @@ a PBR look for terrain wood is later work).
 
 **Items.** `wood` and `leaves` in content/base/data/items/base.json with
 `colours`: material families (section 11), so Z shapes, R turns, V picks the
-colour and the cost is plate cells, as for stone. Creative kits get a full
-stack of each once (`how_kit_added`).
+colour and the cost is plate cells, as for stone. The starting kit has a
+full stack of each at the end of the storage (before the stations); an older
+character takes them from the Creative tab.
 
 **Trees break whole.** A mine world tree stays a TerrainTrees row (a brick
 recipe drawn by ImpostorLod), not terrain cells: stamping trees into the field

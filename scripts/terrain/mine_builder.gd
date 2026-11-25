@@ -90,6 +90,9 @@ var _x_down := -1
 var _x_held_used := false
 ## A gate that tests the keys the player's way (--gate=inventory) turns this on.
 var gate_keys := false
+## Trees are looked at (Docs/Inventory.md 13); a gate aiming at the ground
+## beside one turns it off.
+var aim_trees := true
 
 
 func setup(p_host: Node, hud_layer: CanvasLayer) -> void:
@@ -327,7 +330,7 @@ func update_target() -> void:
 		return
 	# A tree nearer than the ground (Docs/Inventory.md 13): its trunk or its
 	# canopy, outlined; LMB fells it.
-	var tr: Dictionary = host.tree_ray(from, dir, REACH)
+	var tr: Dictionary = host.tree_ray(from, dir, REACH) if aim_trees else {}
 	if not tr.is_empty() and (target.is_empty() or float(tr.dist) < from.distance_to(target.position)):
 		target = {"tree": tr.cell, "position": tr.point}
 		var tbox: AABB = tr.box
