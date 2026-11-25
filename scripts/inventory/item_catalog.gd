@@ -16,6 +16,8 @@ const KINDS := ["block", "fluid", "bucket", "source_bucket", "chest", "station",
 ## Which hand an item may be in (zylanntest's HandUse).
 const HANDS := ["any", "right", "off", "two"]
 const NOT_ITEMS := ["air", "bedrock"]
+## brick_terrain.h MAT_FIL_BASE: the building materials start here.
+const BUILDING_MATERIAL_BASE := 64
 ## A bucket holds this many tiles of water: 3 bricks (Docs/MineWater.md 10).
 const BUCKET_TILES := 9
 
@@ -65,6 +67,17 @@ static func load_all(force := false) -> void:
 				var e: Dictionary = raw.duplicate(true)
 				e["id"] = StringName(k)
 				_add(e)
+	# PLASTIC BRICKS (Docs/TerrainBuildings.md 4c): one material for every
+	# building colour (brick_terrain.h MAT_FIL_BASE + a filament), so a brick
+	# mined out of a stamped building is one of these, in its colour, and
+	# lays that colour again.
+	if not _items.has(&"plastic_bricks"):
+		var cols := PackedInt32Array()
+		for f in BrickWorld.get_filament_count():
+			cols.append(BUILDING_MATERIAL_BASE + f)
+		_add({"id": &"plastic_bricks", "name": "Plastic bricks", "kind": "block", "hand": "right",
+				"colours": cols, "max_stack": BLOCK_STACK,
+				"description": "Bricks out of a building, any colour."})
 	_fold_families(names)
 
 
@@ -80,6 +93,8 @@ static func _fold_families(names: PackedStringArray) -> void:
 			continue
 		for m in e.colours:
 			_by_material[int(m)] = id
+			if int(m) >= names.size():
+				continue   # a building colour: no block item of its own
 			var other := block_id_for(names[int(m)])
 			if other != id and _items.has(other) and not bool(_items[other].get("family", false)):
 				_items.erase(other)

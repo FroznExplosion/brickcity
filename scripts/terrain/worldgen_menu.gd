@@ -227,6 +227,8 @@ func _build_world_tab() -> void:
 	_int_slider(p, "Cave view distance (tiles)", s, "cave_tiles", 2, 8)
 	# The geometry chamfer on the ground near the camera (TerrainTile).
 	_check(p, "Chamfered brick edges", s, "chamfer")
+	# Towns: city towers stamped into the ground (Docs/TerrainBuildings.md 8).
+	_check(p, "Towns (city buildings)", s, "towns")
 	_int_slider(p, "View distance (tiles of far rings)", s, "far_tiles", 16, 192)
 	_float_slider(p, "World height scale", s.gen, "height_scale", 0.2, 3.0, 0.05)
 	_section(p, "Game mode")

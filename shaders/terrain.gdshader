@@ -195,6 +195,13 @@ group_uniforms materials;
 //
 // Each entry is (roughness multiplier, specular multiplier, rim multiplier).
 uniform bool materials_enabled = true;
+// GLASS (Docs/TerrainBuildings.md 5): brick_terrain.h MAT_GLASS, a solid
+// cell drawn see-through. The terrain is one opaque pass, so glass is a
+// screen-door: a fixed 4x4 pattern of its pixels discarded (shadows too),
+// the rest tinted and glossy. No overlay brick is laid over it, so it is
+// never sunk (the recess is for faces under a real brick).
+const int TERRAIN_GLASS = 39;
+const float GLASS_OPEN = 0.55;
 const vec3 MATERIAL_TABLE[7] = {
     vec3(1.0, 1.0, 1.0),    // air, never drawn
     vec3(1.35, 0.55, 0.8),  // grass: matte, almost no highlight
@@ -353,7 +360,10 @@ void vertex() {
     // reach, where a brick can be shot out; collapsed past it (and with no
     // overlay), sunk like a boxed face inside it.
     bool behind = abs(CUSTOM0.b * 255.0 - 96.0) < 0.5;
-    if (behind && (overlay_reach <= 0.0
+    bool glass = int(round(CUSTOM0.r * 255.0)) == TERRAIN_GLASS;
+    if (glass) {
+        // Never under a brick: as it lies.
+    } else if (behind && (overlay_reach <= 0.0
             || distance(v_world, INV_VIEW_MATRIX[3].xyz) >= overlay_reach)) {
         VERTEX = vec3(0.0);
     } else if ((overlay_reach > 0.0 || (overlay_holes > 0 && !behind))
@@ -456,6 +466,14 @@ vec3 lod_colour(float lod) {
 }
 
 void fragment() {
+    if (int(round(v_material * 255.0)) == TERRAIN_GLASS) {
+        // 4x4 ordered dither: the same pixels every frame, so it does not crawl.
+        ivec2 q = ivec2(FRAGCOORD.xy) & ivec2(3);
+        int bayer[16] = int[](0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
+        if ((float(bayer[q.y * 4 + q.x]) + 0.5) / 16.0 < GLASS_OPEN) {
+            discard;
+        }
+    }
     vec3 albedo = COLOR.rgb;
     float dist = length(VERTEX);
     float surface_gloss = 1.0;

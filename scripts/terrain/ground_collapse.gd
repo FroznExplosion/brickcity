@@ -42,6 +42,9 @@ const MAX_LOADED := 100
 ## detail tiles, or over the cap); a bigger one is unloaded to a record and
 ## laid again when near.
 const SMALL_MAX := 3
+## A settled piece of more bricks than this is never put away for the cap
+## (_tend): only when its tile leaves the near tiles.
+const KEEP_LAID_BRICKS := 200
 ## A put-away piece is laid again in place of a laid one only when it is this
 ## much nearer (m): no swapping back and forth at the edge of the cap.
 const SWAP_MARGIN := 8.0
@@ -164,6 +167,7 @@ func reset() -> void:
 		WorkerThreadPool.wait_for_task_completion(_job)
 		_job = -1
 	_boxes.clear()
+	_tipping.clear()
 	for w in _waiting:
 		if w.has("owner"):
 			world.unhold_ground(w.rect, w.owner)
@@ -244,11 +248,36 @@ func _process_body(delta: float) -> void:
 		if _survey_in <= 0.0:
 			_start_survey()
 	_release()
+	_keep_tipping()
 	_fall_sand(delta)
 	_tend_in -= delta
 	if _tend_in <= 0.0:
 		_tend_in = TEND_EVERY
 		_tend()
+
+
+## Toppled buildings let go in the last TIP_AWAKE_MS: [piece, born ms].
+var _tipping: Array = []
+## A toppled building may not settle this soon: let go before the tiles
+## under it are rebuilt without the ground dug from under it, it lies on the
+## old ground's collision, still, and settling froze it there for good.
+const TIP_AWAKE_MS := 5000
+
+
+func _keep_tipping() -> void:
+	var now := Time.get_ticks_msec()
+	var i := _tipping.size() - 1
+	while i >= 0:
+		var p: PlanetPieces.Piece = _tipping[i][0]
+		if now - int(_tipping[i][1]) > TIP_AWAKE_MS or p.fading_since != 0 or not is_instance_valid(p.body):
+			_tipping.remove_at(i)
+		else:
+			if p.settled:
+				pieces._wake(p)
+			# Nor anything settled in its way: a frozen brick is immovable,
+			# and one lying on it or let go inside it held it up.
+			pieces.support_gone(pieces.world_box(p), p)
+		i -= 1
 
 
 ## One stud drawn for a few frames, tiny, in front of the camera, when the
@@ -548,7 +577,10 @@ static func _colour(m: int) -> Color:
 
 ## One loose group: its cells cleared, its bricks laid in a chunk of ours,
 ## its mesh begun; it falls once the tiles over it are rebuilt without it.
-func _let_group_go(g: PackedInt32Array) -> void:
+## `times`: its joints' strength, x the city's (the ground's TERRAIN_TIMES; a
+## toppled building's 1.0, so it breaks where it lands as a city one does).
+## `spin`: its angular velocity once it falls (a toppled building's lean).
+func _let_group_go(g: PackedInt32Array, times := TERRAIN_TIMES, spin := Vector3.ZERO) -> void:
 	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
 	var hi := -lo
 	var runs := PackedInt32Array()
@@ -585,11 +617,11 @@ func _let_group_go(g: PackedInt32Array) -> void:
 		archs[b] = int(palette.get(_part(g[i + 3], g[i + 4]), palette.get("brick_1x1", 0)))
 		cols[b] = BrickTerrain.material_filament_index(g[i + 5])
 	bricks.place_blocks(chunk, Vector3i.ZERO, cells, archs, cols)
-	bricks.set_tension_per_stud(chunk, BrickStrength.tension() * TERRAIN_TIMES)
+	bricks.set_tension_per_stud(chunk, BrickStrength.tension() * times)
 	bricks.bake_chunk_async(chunk)
 	groups_let_go += 1
 	bricks_let_go += n
-	_wait({"kind": "piece", "chunk": chunk, "job": []}, res)
+	_wait({"kind": "piece", "chunk": chunk, "job": [], "spin": spin}, res)
 
 
 ## Wait for the ground: `w` holds the tiles and sections its cells were
@@ -640,6 +672,14 @@ func _release() -> void:
 		else:
 			var p := pieces.adopt(int(w.chunk), null)
 			pieces.toppled -= 1
+			var spin: Vector3 = w.get("spin", Vector3.ZERO)
+			if spin != Vector3.ZERO and is_instance_valid(p.body):
+				# A toppled building starts at rest on the edge of what held
+				# it: asleep there, the physics never turns it (its weight is
+				# a constant force, which does not wake a body).
+				p.body.can_sleep = false
+				p.body.angular_velocity = spin
+				_tipping.append([p, Time.get_ticks_msec()])
 			var mi: MeshInstance3D = w.get("mesh")
 			if mi == null:
 				pieces._start_mesh(p)
@@ -774,6 +814,12 @@ func _tend() -> void:
 		var far := _settled_by_distance(eye)
 		var k := far.size() - 1
 		while laid.size() > max_loaded and k >= 0:
+			# Not a big one (a toppled building lying in sight): the cap is
+			# for rubble, and a building vanishing in view was worse than a
+			# few pieces over it.
+			if (far[k][1] as PlanetPieces.Piece).bricks > KEEP_LAID_BRICKS:
+				k -= 1
+				continue
 			_put_away(far[k][1], true)
 			laid.erase(far[k][1])
 			k -= 1

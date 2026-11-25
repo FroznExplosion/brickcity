@@ -143,8 +143,15 @@ enum Material {
     MAT_LIGHT_LEAVES,
     MAT_AUTUMN_LEAVES,
     MAT_RED_LEAVES,
+    /// GLASS (Docs/TerrainBuildings.md 5): a building's windows, and a block
+    /// item. Solid to everything that edits, collapses and collides; light
+    /// passes it (the sky and block light fills), the overlay lays no brick
+    /// of it, and the terrain shader draws it see-through (TERRAIN_GLASS).
+    MAT_GLASS,
     MATERIAL_COUNT
 };
+
+inline bool material_is_glass(int m) { return m == MAT_GLASS; }
 
 /// Wood or leaves, any colour: what lava sets alight and water floats.
 inline bool material_is_wood(int m) {
@@ -224,13 +231,14 @@ inline int material_filament(int m) {
         case MAT_LIGHT_LEAVES: return 36;  // lime
         case MAT_AUTUMN_LEAVES: return FIL_ORANGE;
         case MAT_RED_LEAVES: return FIL_RED;
+        case MAT_GLASS: return 44;         // sky blue
         default: return FIL_GREY;
     }
 }
 
 /// Road is paved: no studs. Everything natural takes them.
 inline bool material_studded(int m) {
-    return m != MAT_ROAD && m != MAT_AIR;
+    return m != MAT_ROAD && m != MAT_AIR && m != MAT_GLASS;
 }
 
 // --- hashing ---------------------------------------------------------------
