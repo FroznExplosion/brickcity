@@ -74,6 +74,17 @@ bricks. 6 floors: 18.1 m. Half dug, nothing lets go now -- whole bricks
 bridge the gap (no tipping, 3b); dug out from under all of it, the tower
 falls as ONE piece of 964 bricks (--gate=buildings --dig-all).
 
+**Stage 4b done 2026-11-25 (tipping):** MineBuildings keeps a registry of
+stamped buildings (box, base, weight by column). After any edit reaching a
+building's base (`after_edit`, from terrain_edited), its weight's middle is
+tested against the convex hull of the columns whose bottom brick still
+stands on solid ground (at least a quarter stud inside). Off it, the whole
+building is let go as ONE piece (ground_collapse._let_group_go): resting on
+what is left of its support, it leans over the edge and falls. Gate: dug
+past its middle (11 of 20 columns), it tips -- one piece, 8,492 bricks, lying
+on its side (mine_building_fallen.png). Damage to the building itself does
+not move its middle yet (the weights are the stamp's).
+
 2. **Building materials.** (done, above) Append terrain materials for the building
    palette's colours (or a colour byte per edited cell, if the edit table can
    carry one): walls the city's colours. Each material its own strength
@@ -88,8 +99,8 @@ falls as ONE piece of 964 bricks (--gate=buildings --dig-all).
    rects, so the mesher draws the building's own bricks, and the overlay's
    boxes are its bricks. Needs placed bricks at PLATE offsets, not only on
    the ground's courses (a storey is 20 plates, the ground's course 3).
-4b. **Tipping.** A building whose support is cut on one side leans and falls
-   over (balance about its remaining support), as the city's storey units do.
+4b. **Tipping.** (done, above) Next: weights that follow damage, and a
+   building that breaks as it lands rather than lying whole.
 4c. **Items.** A mined building brick gives a block item of its colour.
 5. **Glass.** A translucent terrain material (the brick shader's glass
    pass); windows glazed again.
