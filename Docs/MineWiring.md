@@ -282,15 +282,21 @@ names still open; rotation later.
 Small stages, each with a probe and a gate, each merged:
 
 1. Cable tile layer (store, nets on a worker, own mesh, saved) + lever + lamp.
-2. Button, pressure tile, trip string; gates, delay, pulse; the view tool.
-3. Door, trapdoor, gate tile; observer (from `terrain_edited`).
+2. Button, pressure tile, trip string; gates, delay, pulse; the view tool
+   (also the wrench: look, turn, take; section 12); first Ponder-style dioramas.
+3. Door, trapdoor, gate tile; observer (from `terrain_edited`); sequencer
+   brick; number tile.
 4. Piston: up first (unclutch + group + limit), then sideways with the hop,
-   the stand-in slide, the kinematic shove; sticky piston.
+   the stand-in slide, the kinematic shove; sticky piston. Moving groups are
+   contraptions (section 12): one body, riders carried by contact.
+4b. Turntable brick and winch (the same contraption mover).
 5. Dispenser and dropper (items, arrows, grenades, gun rounds, buckets).
+5b. Placer and breaker bricks.
 6. Release brick (collapse), alarm (AI).
-6b. Hydraulics (section 11): pipes as a second medium of the same nets,
+6b. Hydraulics (section 11), finite water only: pipes as a second medium of
+   the same nets, hydraulic budget (12), hose reel,
    intake, pump, valve, outlet, pressure sensor, hydraulic piston.
-7. Transmitter/receiver by colour; conductive brick variants.
+7. Transmitter/receiver, channel = two antenna colours; conductive brick variants.
 8. Later: traps the world generates (dungeons, towers stamped into the field).
 
 ## 11. Hydraulics: water pressure as part of the wiring
@@ -324,13 +330,20 @@ the pipes, and the pipes are a wiring net.
 - **Pressure comes from head**, read from the water, not simulated in the
   pipe: an **intake** brick under water reads its cell and the surface above
   it; pressure = the water's depth over the intake in bricks (0.42 m), capped
-  at 15 (6.3 m). A sea, lake or river intake is steady (sources); a pond
-  intake falls as the pond drains. A net with several intakes takes the
+  at 15 (6.3 m).
+- **Only finite water has pressure** (the user, 2026-11-25). An intake counts
+  only STILL water (MineWater.md 4.2: a conserved volume). Sources -- the sea,
+  lakes, rivers, springs, a source bucket's water -- give **0**: an intake
+  dropped in the ocean does nothing. Pressure is something the player
+  gathers: buckets carried up a hill, rain caught in a cistern (rain lands as
+  still water, MineWater.md R10), a pond dug and filled. It falls as the
+  water is used, and a pond's intake falls as the pond drains. A net with several intakes takes the
   highest. A reservoir built up a hill is a **battery you can see**: the dam
   is the charge, and a shot that breaches it empties it (the water runs out
   by its own rules).
 - **A pump** is the bridge from the electric side: powered by a wire, it
-  gives full pressure from any water touching it, whatever the head.
+  gives full pressure from any STILL water touching it, whatever the head
+  (it moves a finite volume; next to a source it does nothing).
 - **A valve** (a gate brick on a pipe, opened by a wire) joins or cuts two
   pipe nets. A **pressure sensor** turns pressure into a wire signal of the
   same level (hydraulic to electric).
@@ -341,8 +354,8 @@ the pipes, and the pipes are a wiring net.
 - **Open parts move real water.** An **outlet** brick on a pressured net
   `place`s water in front of it and the net `remove`s the same amount from
   an intake's cell, so still water is conserved: draining a pond into a room
-  floods it by exactly the pond's volume. From a source the water is
-  infinite (as a source bucket). A **jet** is an outlet with force: it pushes
+  floods it by exactly the pond's volume. There is no infinite outlet: a
+  pipe never carries source water. A **jet** is an outlet with force: it pushes
   bodies along its line (fountains, a trap that blows the player off a ledge).
 - **A broken pipe leaks.** When a shot, a grenade or a collapse breaks a
   pipe cell of a pressured net, the break becomes an outlet: water sprays
@@ -376,13 +389,43 @@ pressure, the intake reads it instead of the head; nothing else changes.
 
 | | Built from |
 |---|---|
-| Flood room | pressure plate -> valve -> outlets from a lake intake |
+| Flood room | pressure plate -> valve -> outlets from a cistern's intake (the room fills by the cistern's volume) |
 | Lava chute | trip string -> valve on a lava pipe -> outlet over a corridor |
 | Water jet | motion sensor -> pump -> jet: blows the player off a bridge |
 | Hydraulic crusher / gate | a reservoir's pressure drives rams that push 15 bricks; drain the reservoir (shoot the dam) to stop them |
 | Drain trap | a valve opens a pipe under a pool: the water runs out and what floated sinks |
-| Fountain, irrigation | outlets on a source net (farming: Docs/MineFarming.md) |
+| Fountain, irrigation | outlets on a cistern net, refilled by rain (farming: Docs/MineFarming.md) |
 | Leak sabotage | shoot an enemy base's pipe: it sprays and its machines lose pressure |
+
+## 12. What Create (the Minecraft mod) teaches this plan (2026-11-25)
+
+The user asked what in Create would help. Create's power is rotation
+(axles, cogs) measured in stress units; its big idea is the **contraption**.
+What carries over, what changes, what does not:
+
+| Create | What it is there | Here | Stage |
+|---|---|---|---|
+| **Contraptions** | a mover (piston, bearing, rope pulley, gantry) turns a group of blocks into ONE moving entity, places them back as blocks when it stops; size has a limit | exactly section 6.1's stand-in, made general: the moving group is laid into a chunk (as the collapse's pieces are) and drawn and collided as one body, then written back into the field. One mover type gives pistons, lifts, gantries and turntables | 4 |
+| **Super glue, chassis** | say which blocks move together | not needed: **stud clutch picks the group** (6.3). The inverse is the builder's tool: **a smooth tile does not clutch**, so a course of tiles is where a moving part ends (a door on a tile sill comes away from the frame) | 4 |
+| **Mechanical bearing** | rotates a contraption: windmills, doors, drawbridges | a **turntable brick** (LEGO has turntables and hinges) turning a group in 90-degree steps on the stud grid, animated between. Drawbridge trap, rotating wall, revolving secret door | 4b |
+| **Rope pulley, elevator** | lifts a group on a rope | a **winch**: a lift, a dropping cage, a portcullis | 4b |
+| **Riding contraptions** | players stand on moving ones | the project's carried-by-contact rule (Hulls.md 7b.3): touching a moving group makes you its passenger | 4 |
+| **Stress units, overstress** | sources give capacity, machines use it; over the limit the WHOLE network stops; one number to read | the **hydraulic budget**: a pipe net's pressure is its capacity, each ram moving takes its load (bricks pushed); over it, every ram on the net stalls until load falls or pressure rises. Simple, readable, and it makes the cistern's height matter | 6b |
+| **Engineer's goggles** | look at a part: speed, stress, overstressed | the **view tool** (3.3) shows a net's level, pressure, load / capacity. Lesson from Create's add-ons (Stethoscope, Kinetic Lens): show the **whole net's** sum, not one part | 2 |
+| **Wrench** | turn a part's facing, pick it up without breaking it | the same tool as the view tool: one hand for "look, turn, take" | 2 |
+| **Redstone Link** | wireless, the channel is a PAIR of items in two slots | the antenna channel is **two colours** (two 1x1 rounds on top): many channels, hard to guess, each end still a brick | 7 |
+| **Sequenced gearshift** | a small program: turn 90, wait, turn back | a **sequencer brick**: steps of "extend n / wait t / retract" set in a small panel. Crushers, airlocks, staged doors without a clock circuit | 3 |
+| **Deployer, drill, saw** | a part that uses an item, breaks blocks, rides a contraption | a **placer** (lays a block from its slots) and a **breaker** (breaks the brick in front, as a pickaxe). On a piston: a wall that seals behind you, a tunnel bore | 5 |
+| **Hose pulley** | lowers a hose to drain or fill a fluid body | a **hose reel**: an intake on a hose lowered into a pond or cistern; reads and draws STILL water only (11.2) | 6b |
+| **Fluid tank** | stores fluid, multi-block | not a block: a cistern of bricks with real water in it is the tank (seen, shot, leaked). A compact tank brick only if play asks for it | -- |
+| **Ponder** | hold a key over an item: a little animated scene shows how it works | **worth copying**: wiring is the hardest thing in the game to learn. A tiny diorama per part (lever -> cable -> lamp; piston hop; cistern -> ram) played in the inventory | 2+ |
+| **Display link, nixie tubes** | show numbers from machines | a **number tile** (printed 1x2 tile) shows a net's level: counters, pressure gauges | 3 |
+| Belts, funnels, chutes, trains, schematicannon | item logistics, transport, printing builds | out of scope for wiring; belts and funnels later with the inventory | -- |
+| Rotation as the power itself | axles, cogs, RPM | **hydraulics take that role** (gathered finite water, a budget, sources you can see and break). Rotation stays a "maybe later" (9.6) | -- |
+
+Create's warnings worth keeping: contraptions are entities and each costs,
+so cap how many move at once (as PlanetPieces caps pieces); and its size
+limit is a config number, as our push limit is.
 
 ## Sources
 
@@ -396,6 +439,11 @@ pressure, the intake reads it instead of the head; nothing else changes.
 - Hytale: launch post <https://hytale.com/news/2026/1/hytale-is-finally-here>, no official roadmap
   <https://hytalesl.io/wiki/hytale-roadmap/>, fan list <https://www.hyguilds.com/hytale-future-roadmap>,
   Logica mod <https://www.curseforge.com/hytale/mods/logica>
+- Create: contraptions <https://mintlify.wiki/Creators-of-Create/Create/concepts/contraptions>,
+  moving contraptions <https://git.grimmauld.de/mirrors/Create/wiki/Moving-Contraptions>,
+  stress <https://create.fandom.com/wiki/Kinetic_Stress>,
+  <https://mintlify.wiki/Creators-of-Create/Create/concepts/stress-system>,
+  Stethoscope add-on <https://www.curseforge.com/minecraft/mc-mods/create-stethoscope>
 - LEGO Technic pneumatics (pump, switch valve, cylinder, hose) are the
   look for pipes; no source needed.
 - Vintage Story mechanical power: <https://wiki.vintagestory.at/Special:MyLanguage/Mechanical_Power>
