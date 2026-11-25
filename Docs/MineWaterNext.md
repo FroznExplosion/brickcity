@@ -161,6 +161,11 @@ have needed work before.
   The same as 2026-11-17 (885 / 173 ns). **The rules are not the cost: meshing is** -- two
   thirds or more of a busy tick, ~0.8 ms a tile re-meshed. That is where to look before
   anything else (fewer re-meshes a tick for slow changes, cheaper tops), not the cells.
+
+  **Done 2026-11-24:** the easing's per-corner hash map is a vector sorted once a mesh;
+  a tile changing every tick is re-meshed every `MESH_GAP` (2) ticks -- its corners ease
+  over 0.2 s, two ticks -- except round the player or when asked. Spill bench: 14,150 ->
+  10,867 meshes, mean busy tick 34.9 -> 22.3 ms (part of it a cooler machine).
 - **W3 -- done 2026-11-24.** Past 1.5 x the sim radius plus a tile (~112 m;
   was 2 x), with nothing queued: a section never written -- dry, or only the
   generated sea, lakes, pools -- is let go (sampled afresh if asked); a written
