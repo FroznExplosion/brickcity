@@ -53,6 +53,12 @@ constexpr int MAX_EVALS = 65536;    ///< a tick's budget (6)
 constexpr int SEA_REACH = 2;       ///< studs water runs out over the open sea
 constexpr int DROP_SEEK = 5;        ///< studs flowing water looks for a drop (4.1.5)
 constexpr int MESH_PER_TICK = 24;
+/// A tile whose water changes every tick is meshed every MESH_GAP ticks, not
+/// every tick (meshing was two thirds of a busy tick, W2 2026-11-24): its
+/// corners ease over EASE_S (0.2 s, two ticks), so the motion stays
+/// continuous. The tile round the player, and a mesh asked for, at once.
+constexpr uint32_t MESH_GAP = 2;
+std::unordered_map<int64_t, uint32_t> g_tile_meshed_at;
 constexpr float TOP_SINK = 0.015f;  ///< tops a hair under the course: no z-fight with ground tops
 
 enum { K_SOURCE = 0, K_FLOW = 1, K_FALL = 2, K_STILL = 3 };
@@ -1501,7 +1507,10 @@ inline float lake_amp(Get get, int x, int b, int z) {
 /// snapped every rising cell to its full height -- the "jump" (the user,
 /// 2026-11-23).
 struct Ease { float y; float off; double t; };
-std::unordered_map<int64_t, std::unordered_map<int64_t, Ease>> g_prev_tops;
+/// A tile's corners, sorted by key: appended while meshing and sorted once
+/// (a node-based hash map insert a corner was most of a mesh's time).
+using EaseList = std::vector<std::pair<int64_t, Ease>>;
+std::unordered_map<int64_t, EaseList> g_prev_tops;
 /// How long a corner takes to reach a new height (water_fluid.gdshader
 /// `ease_s`, set from ease_seconds()): about a tick of each fluid's, so a
 /// running front creeps on instead of stepping (lava ticks every 5th).
@@ -1611,8 +1620,14 @@ bool clear_real_marks(int tx, int tz) {
 
 double mesh_tile(int tx, int tz, Array &water, Array &lava) {
     MeshBuf buf[3];
-    std::unordered_map<int64_t, Ease> &prev = g_prev_tops[tkey(tx, tz)];
-    std::unordered_map<int64_t, Ease> now;
+    EaseList &prev = g_prev_tops[tkey(tx, tz)];
+    EaseList now;
+    now.reserve(prev.size() + 64);
+    auto find_prev = [&](int64_t k) -> const Ease * {
+        auto it = std::lower_bound(prev.begin(), prev.end(), k,
+                [](const std::pair<int64_t, Ease> &e, int64_t key) { return e.first < key; });
+        return (it != prev.end() && it->first == k) ? &it->second : nullptr;
+    };
     const double t_now = clock_s();
     // Where a corner last meshed is drawn now (the shader's easing).
     auto shown = [&](const Ease &e, int f) -> float {
@@ -1632,16 +1647,16 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
     };
     auto moved = [&](int x, int b, int z, int ox, int oz, int f, float y) -> float {
         const int64_t k = ckey(x, b, z, ox, oz, f);
-        auto it = prev.find(k);
-        const float off = it != prev.end() ? shown(it->second, f) - y : 0.0f;
-        now[k] = Ease{ y, off, t_now };
+        const Ease *e = find_prev(k);
+        const float off = e != nullptr ? shown(*e, f) - y : 0.0f;
+        now.push_back({ k, Ease{ y, off, t_now } });
         return off;
     };
     // Where a neighbour's corner was last mesh (its side's foot follows it),
     // or `fallback` when it was not drawn in this tile.
     auto was = [&](int x, int b, int z, int ox, int oz, int f, float fallback) -> float {
-        auto it = prev.find(ckey(x, b, z, ox, oz, f));
-        return it != prev.end() ? shown(it->second, f) : fallback;
+        const Ease *e = find_prev(ckey(x, b, z, ox, oz, f));
+        return e != nullptr ? shown(*e, f) : fallback;
     };
     const bool real = real_tile(tx, tz);
     bool sea_top[SX * SX] = {};
@@ -1839,6 +1854,15 @@ double mesh_tile(int tx, int tz, Array &water, Array &lava) {
     brick::sky_levels_into(buf[F_WATER].v, buf[F_WATER].n, buf[F_WATER].col);
     water = buf[F_WATER].arrays();
     lava = buf[F_LAVA].arrays();
+    // Sorted, the LAST record of a corner kept (as the map's overwrite did).
+    std::stable_sort(now.begin(), now.end(),
+            [](const std::pair<int64_t, Ease> &a, const std::pair<int64_t, Ease> &b) { return a.first < b.first; });
+    size_t w = 0;
+    for (size_t i = 0; i < now.size(); ++i) {
+        if (w > 0 && now[w - 1].first == now[i].first) now[w - 1] = now[i];
+        else now[w++] = now[i];
+    }
+    now.resize(w);
     prev.swap(now);
     return t_now;
 }
@@ -2367,14 +2391,24 @@ void do_tick() {
 
     // Meshes for what changed, and what was asked for.
     const auto tm = std::chrono::steady_clock::now();
+    const std::unordered_set<int64_t> asked(g_mesh_requests.begin(), g_mesh_requests.end());
     for (int64_t k : g_mesh_requests) g_dirty_tiles.insert(k);
     g_mesh_requests.clear();
     int meshed = 0;
     std::vector<int64_t> left;
+    const double tile_len = (double)SX * STUD_M;
+    const int ctx = (int)std::floor(g_cx / tile_len), ctz = (int)std::floor(g_cz / tile_len);
     for (int64_t k : g_dirty_tiles) {
         if (meshed >= MESH_PER_TICK) { left.push_back(k); continue; }
         const int tx = tile_coord(k, false);
         const int tz = tile_coord(k, true);
+        auto at = g_tile_meshed_at.find(k);
+        const bool by_player = std::abs(tx - ctx) <= 1 && std::abs(tz - ctz) <= 1;
+        if (at != g_tile_meshed_at.end() && g_tick - at->second < MESH_GAP && !by_player && !asked.count(k)) {
+            left.push_back(k);
+            continue;
+        }
+        g_tile_meshed_at[k] = g_tick;
         MeshOut mo;
         mo.tx = tx;
         mo.tz = tz;
@@ -2503,6 +2537,7 @@ double BrickFluid::reset(double sea_m, bool sea_on) {
         g_lava_dirty.clear();
     }
     g_prev_tops.clear();
+    g_tile_meshed_at.clear();
     g_log.clear();
     g_log_floor = g_writes.load();
     {
