@@ -30,6 +30,7 @@ var base := Vector3i.ZERO   # a flat spot: its x, ground top plate, z
 
 
 func _initialize() -> void:
+	preload("res://scripts/terrain/worldgen_presets.gd").apply_fitted_flag()
 	BrickTerrain.configure(424242)
 	BrickTerrain.set_generator(1)
 	BrickTerrain.reset_gen_params()

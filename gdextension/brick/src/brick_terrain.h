@@ -593,6 +593,18 @@ uint64_t tile_version(int tx, int tz);
 /// Every tile's version changes (the world set up again).
 void bump_field_version();
 
+/// The GENERATED cells (no edits) of tile (tx, tz)'s own TILE x TILE columns,
+/// plates [y_lo, y_hi): vox[lx + TILE * (lz + TILE * (yp - y_lo))], material,
+/// 255 under the bedrock; gtop[lx + TILE * lz] the column's generated top
+/// plate. From the kept generated tiles and deep sections, made when not
+/// kept. Any thread. False without the biome generator (test fields): the
+/// region fit (terrain_fit.h) is then off. `field` gets the field's serial.
+bool generated_cells(int tx, int tz, int y_lo, int y_hi, std::vector<uint8_t> &vox,
+        std::vector<int16_t> &gtop, uint32_t *field = nullptr,
+        int lx0 = 0, int lx1 = TILE, int lz0 = 0, int lz1 = TILE);
+/// The field's serial: changes with the world (seed, generator, params).
+uint32_t field_serial();
+
 /// A tile's top course packed into pieces (pack_tile's output): `owner` is
 /// TILE x TILE, x fastest, the piece owning each column's top course or -1.
 struct TilePack {

@@ -399,7 +399,11 @@ func generate(s: Dictionary) -> void:
 	BrickTerrain.set_gen_params(settings.gen)
 	# The ground's brick fill (Docs/TerrainRegions.md 11). Stage B: held, not
 	# drawn yet; region_fit_probe reads the same settings.
-	TerrainFit.configure(settings.get("bricks", Presets.DEFAULT_BRICKS))
+	var bricks: Dictionary = settings.get("bricks", Presets.DEFAULT_BRICKS)
+	TerrainFit.configure(bricks)
+	# The game's ground bricks from the fit (Docs/TerrainRegions.md 12): the
+	# preset's "fitted", or --fitted for a gate. Off: the old pattern.
+	TerrainFit.set_enabled(bool(bricks.get("fitted", false)) or "--fitted" in OS.get_cmdline_user_args())
 	# Before anything bakes: the tiles are made from the field WITH them.
 	var loaded := _load_edits()
 	_load_pieces()

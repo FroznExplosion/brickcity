@@ -4,6 +4,7 @@
 #include "brick_fluid.h"
 #include "terrain_biomes.h"
 #include "terrain_bond.h"
+#include "terrain_fit.h"
 
 #include <shared_mutex>
 #include <mutex>
@@ -982,6 +983,10 @@ uint64_t tile_version(int tx, int tz) {
 
 void bump_field_version() {
     g_field_serial.fetch_add(1, std::memory_order_acq_rel);
+}
+
+uint32_t field_serial() {
+    return g_field_serial.load(std::memory_order_acquire);
 }
 
 void set_edit(int x, int yp, int z, int material) {
@@ -2174,8 +2179,14 @@ struct BondView {
     static constexpr int SIDE = TILE + 2 * PAD;
     std::vector<uint8_t> memo;        ///< group + 1, 0 unknown
     std::vector<int32_t> top_memo;    ///< top plate past the sample, INT_MIN unknown
+    /// The region fit's bricks (Docs/TerrainRegions.md 12), when the game
+    /// uses them (TerrainFit.set_enabled); else the old pattern.
+    bool fit_on = false;
+    brick::FitView fit;
+    std::unordered_map<int64_t, bool> whole_memo;
 
     BondView(const TileSample &p_s, bool p_tops) : s(p_s), tops(p_tops) {
+        fit_on = brick::fit_enabled();
         c_lo = floor_div(s.y0, PLATES_PER_CELL) - 1;
         c_n = floor_div(s.y0 + s.ysize - 1, PLATES_PER_CELL) - c_lo + 2;
         memo.assign((size_t)SIDE * SIDE * c_n, 0);
@@ -2243,14 +2254,96 @@ struct BondView {
         return g;
     }
 
+    /// Every cell of fitted brick `b` still a bond cell (not dug, built
+    /// over, made the top course by a hole or placed): the fit is of the
+    /// generated cells, and a brick an edit cut is its cells one by one.
+    bool whole(const brick::FitBrick &b) {
+        const int64_t k = bond_key(b.x, b.c, b.z);
+        auto it = whole_memo.find(k);
+        if (it != whole_memo.end()) {
+            return it->second;
+        }
+        bool ok = true;
+        for (int cc = b.c; cc < b.c + b.h && ok; ++cc) {
+            for (int zz = b.z; zz < b.z + b.sz && ok; ++zz) {
+                for (int xx = b.x; xx < b.x + b.sx && ok; ++xx) {
+                    const int g = group(xx, cc, zz);
+                    ok = g == BOND_MEDIUM || g == BOND_STRONG;
+                }
+            }
+        }
+        whole_memo[k] = ok;
+        return ok;
+    }
+
+    /// The fitted regions this sample's open faces are in, fitted in one go
+    /// before a mesh asks for them cell by cell (Docs/TerrainRegions.md 12):
+    /// a region is fitted only where some cell of it is drawn.
+    void prefetch_open() {
+        if (!fit_on) {
+            return;
+        }
+        std::vector<std::array<int, 3>> cells;
+        const int ylo = s.y0, yhi = s.y0 + s.ysize;
+        for (int lz = -MARGIN; lz < TILE + MARGIN; ++lz) {
+            for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
+                int last_c = INT_MIN;
+                for (int yp = ylo; yp < yhi; ++yp) {
+                    const size_t i = (size_t)s.vidx(lx, yp, lz);
+                    if (s.vox[i] == MAT_AIR) {
+                        continue;
+                    }
+                    const int c = floor_div(yp, PLATES_PER_CELL);
+                    if (c == last_c) {
+                        continue;
+                    }
+                    if (!(s.open_air(lx - 1, yp, lz) || s.open_air(lx + 1, yp, lz)
+                                || s.open_air(lx, yp - 1, lz) || s.open_air(lx, yp + 1, lz)
+                                || s.open_air(lx, yp, lz - 1) || s.open_air(lx, yp, lz + 1))) {
+                        continue;
+                    }
+                    last_c = c;
+                    cells.push_back({ s.tx * TILE + lx, c, s.tz * TILE + lz });
+                }
+            }
+        }
+        fit.prefetch(cells);
+    }
+
+    /// A bond cell in a fitted brick still whole (`b` that brick).
+    bool in_fitted(int x, int c, int z, brick::FitBrick &b) {
+        const int g = group(x, c, z);
+        return (g == BOND_MEDIUM || g == BOND_STRONG) && fit.at(x, c, z, b) && whole(b);
+    }
+
     /// The brick of a bond cell (group MEDIUM or STRONG; anything else is
-    /// its own 1x1).
+    /// its own 1x1). Its `c` and `h` always set: the fitted brick's bottom
+    /// course and height, else `c` and 1.
     BondRect rect(int x, int c, int z) {
         int px, pz, psx, psz;
         if (placed_at(x, c, z, px, pz, psx, psz)) {
-            return BondRect{ px, pz, psx, psz };
+            return BondRect{ px, pz, psx, psz, c, 1 };
         }
-        return bond_rect(x, c, z, [&](int cx, int cz) { return group(cx, c, cz); });
+        if (fit_on) {
+            brick::FitBrick b;
+            if (in_fitted(x, c, z, b)) {
+                return BondRect{ b.x, b.z, b.sx, b.sz, b.c, b.h };
+            }
+            // Ground the fit does not hold whole (built up by edits, the rest
+            // of a brick a hole cut): the old pattern among those cells only,
+            // so it never overlaps a fitted brick.
+            BondRect r = bond_rect(x, c, z, [&](int cx, int cz) {
+                brick::FitBrick q;
+                return in_fitted(cx, c, cz, q) ? (int)BOND_NONE : group(cx, c, cz);
+            });
+            r.c = c;
+            r.h = 1;
+            return r;
+        }
+        BondRect r = bond_rect(x, c, z, [&](int cx, int cz) { return group(cx, c, cz); });
+        r.c = c;
+        r.h = 1;
+        return r;
     }
 };
 
@@ -2270,15 +2363,15 @@ void piece_runs(const TileSample &s, const Piece &p, BondView &view, PackedInt32
     }
 }
 
-/// clear_runs' runs for one bond brick of course `c`: every column of it, the
-/// whole course.
-void bond_runs(const BondRect &r, int c, PackedInt32Array &runs) {
+/// clear_runs' runs for one bond brick (BondView::rect's): every column of
+/// it, all its courses.
+void bond_runs(const BondRect &r, PackedInt32Array &runs) {
     for (int dz = 0; dz < r.sz; ++dz) {
         for (int dx = 0; dx < r.sx; ++dx) {
             runs.push_back(r.x + dx);
             runs.push_back(r.z + dz);
-            runs.push_back(c * PLATES_PER_CELL);
-            runs.push_back(c * PLATES_PER_CELL + PLATES_PER_CELL - 1);
+            runs.push_back(r.c * PLATES_PER_CELL);
+            runs.push_back((r.c + r.h) * PLATES_PER_CELL - 1);
         }
     }
 }
@@ -3331,10 +3424,10 @@ Dictionary BrickTerrain::find_brick(Vector3 point, Vector3 normal) {
         const int c = floor_div(yp, PLATES_PER_CELL);
         BondView view(s, true);
         const BondRect r = view.rect(x, c, z);
-        bond_runs(r, c, runs);
-        const int b = c * PLATES_PER_CELL;
+        bond_runs(r, runs);
+        const int b = r.c * PLATES_PER_CELL;
         lo_m = Vector3((float)r.x * STUD_M, (float)b * PLATE_M, (float)r.z * STUD_M);
-        hi_m = lo_m + Vector3((float)r.sx * STUD_M, BRICK_M, (float)r.sz * STUD_M);
+        hi_m = lo_m + Vector3((float)r.sx * STUD_M, BRICK_M * (float)r.h, (float)r.sz * STUD_M);
     }
     const Vector3 c = (lo_m + hi_m) * 0.5f;
     const Vector3 size = hi_m - lo_m;
@@ -3539,8 +3632,8 @@ Dictionary BrickTerrain::find_bricks(Vector3i lo, Vector3i hi) {
                     }
                     for (int b = floor_div(y0, PLATES_PER_CELL); b <= floor_div(below_hi, PLATES_PER_CELL); ++b) {
                         const BondRect r = view.rect(x, b, z);
-                        if (bond_taken.insert(bond_key(r.x, b, r.z)).second) {
-                            bond_runs(r, b, runs);
+                        if (bond_taken.insert(bond_key(r.x, r.c, r.z)).second) {
+                            bond_runs(r, runs);
                         }
                     }
                 }
@@ -4149,6 +4242,7 @@ static void exposed_brick_cells(const TileSample &s, bool tops, std::vector<uint
     ylo_out = INT_MAX;
     yhi_out = INT_MIN;
     BondView view(s, tops);
+    view.prefetch_open();
     const int gx0 = s.tx * TILE, gz0 = s.tz * TILE;
     const int ylo = s.y0, yhi = s.y0 + s.ysize;
     int band_lo = 0, band_hi = 0;
@@ -4184,7 +4278,7 @@ static void exposed_brick_cells(const TileSample &s, bool tops, std::vector<uint
                         if (bx < -MARGIN || bz < -MARGIN || bx >= TILE + MARGIN || bz >= TILE + MARGIN) {
                             continue;
                         }
-                        for (int q = c * PLATES_PER_CELL; q < (c + 1) * PLATES_PER_CELL; ++q) {
+                        for (int q = r.c * PLATES_PER_CELL; q < (r.c + r.h) * PLATES_PER_CELL; ++q) {
                             if (s.in_y(q) && s.solid(bx, q, bz)) {
                                 out[(size_t)s.vidx(bx, q, bz)] = 1;
                                 ylo_out = std::min(ylo_out, q);
@@ -4324,6 +4418,7 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
     // knew about. Memoised per cell and course (a cell's three plates and up
     // to six faces ask the same).
     BondView view(s, t_behind != nullptr ? t_behind_tops : !pieces.empty());
+    view.prefetch_open();
     std::vector<BondRect> rect_memo((size_t)TILE * TILE * view.c_n, BondRect{ 0, 0, 0, 0 });
     auto brick_rect = [&](int lx, int yp, int lz) -> BondRect {
         const int c = floor_div(yp, PLATES_PER_CELL);
@@ -4342,8 +4437,10 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
         return r;
     };
     auto brick_key = [&](int lx, int yp, int lz) -> int64_t {
+        // The brick's BOTTOM course: a tall brick's faces are one brick's,
+        // no seam drawn between its courses.
         const BondRect r = brick_rect(lx, yp, lz);
-        return bond_key(r.x, floor_div(yp, PLATES_PER_CELL), r.z);
+        return bond_key(r.x, r.c, r.z);
     };
 
     // A cell's colour comes from its own material, jittered by the piece that
@@ -4646,10 +4743,10 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                             bp0 = pp.top - (PLATES_PER_CELL - 1);
                             bp1 = pp.top + 1;
                         } else {
-                            const int cb = floor_div(yp, PLATES_PER_CELL) * PLATES_PER_CELL;
+                            const int cb = br.c * PLATES_PER_CELL;
                             bp0 = INT_MAX;
                             bp1 = INT_MIN;
-                            for (int q = cb; q < cb + PLATES_PER_CELL; ++q) {
+                            for (int q = cb; q < cb + br.h * PLATES_PER_CELL; ++q) {
                                 if (s.solid(lx, q, lz)) {
                                     bp0 = std::min(bp0, q);
                                     bp1 = std::max(bp1, q + 1);
@@ -5844,6 +5941,88 @@ static bool sample_section(int tx, int sy, int tz, TileSample &out) {
     for (int lz = -MARGIN; lz < TILE + MARGIN; ++lz) {
         for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
             out.col[TileSample::idx(lx, lz)] = (uint8_t)layer_colour(gx0 + lx, gz0 + lz);
+        }
+    }
+    return true;
+}
+
+// The region fit's cells (terrain_fit.cpp): the generator's, from the kept
+// tiles and sections, never the edits.
+bool brick::generated_cells(int tx, int tz, int y_lo, int y_hi, std::vector<uint8_t> &vox,
+        std::vector<int16_t> &gtop, uint32_t *field_out, int lx0, int lx1, int lz0, int lz1) {
+    lx0 = std::max(lx0, 0);
+    lz0 = std::max(lz0, 0);
+    lx1 = std::min(lx1, TILE);
+    lz1 = std::min(lz1, TILE);
+    if (!biomes_on() || y_hi <= y_lo) {
+        return false;
+    }
+    const uint32_t field = (uint32_t)(tile_version(tx, tz) >> 32);
+    if (field_out) {
+        *field_out = field;
+    }
+    const uint64_t gkey = (uint64_t)tile_key(tx, tz);
+    std::shared_ptr<const GenTile> gen = gen_find(g_gen, gkey, field);
+    if (!gen) {
+        TileSample tmp;
+        sample_tile(g_field, tx, tz, tmp);
+        gen = gen_find(g_gen, gkey, field);
+        if (!gen) {
+            return false;
+        }
+    }
+    const int ny = y_hi - y_lo;
+    // Only the columns asked for are written; the rest of `vox` is stale.
+    vox.resize((size_t)TILE * TILE * ny);
+    for (int yp = 0; yp < ny; ++yp) {
+        for (int lz = lz0; lz < lz1; ++lz) {
+            std::memset(&vox[(size_t)lx0 + TILE * ((size_t)lz + TILE * (size_t)yp)], MAT_AIR, (size_t)(lx1 - lx0));
+        }
+    }
+    gtop.resize((size_t)TILE * TILE);
+    for (int lz = 0; lz < TILE; ++lz) {
+        for (int lx = 0; lx < TILE; ++lx) {
+            gtop[(size_t)lx + TILE * lz] = gen->top[TileSample::idx(lx, lz)];
+        }
+    }
+    auto copy = [&](const GenTile &g, int lo, int hi) {
+        lo = std::max(lo, y_lo);
+        hi = std::min(hi, y_hi);
+        for (int yp = lo; yp < hi; ++yp) {
+            for (int lz = lz0; lz < lz1; ++lz) {
+                const uint8_t *src = &g.vox[(size_t)(MARGIN + lx0) + SPAN * ((size_t)(yp - g.gy0) + (size_t)g.gys * (lz + MARGIN))];
+                std::memcpy(&vox[(size_t)lx0 + TILE * ((size_t)lz + TILE * (size_t)(yp - y_lo))], src, (size_t)(lx1 - lx0));
+            }
+        }
+    };
+    copy(*gen, gen->gy0, gen->gy0 + gen->gys);
+    if (y_lo < gen->gy0) {
+        const int under_hi = std::min(y_hi, gen->gy0);
+        // The deep sections' cells, deep tier or not: the fit is of what
+        // the generator makes, whatever has been sampled or dug so far.
+        {
+            for (int yp = 0; yp < under_hi - y_lo; ++yp) {
+                for (int lz = lz0; lz < lz1; ++lz) {
+                    std::memset(&vox[(size_t)lx0 + TILE * ((size_t)lz + TILE * (size_t)yp)], 255, (size_t)(lx1 - lx0));
+                }
+            }
+            for (int sy = floor_div(y_lo, DEEP_SECTION_PLATES); sy <= floor_div(under_hi - 1, DEEP_SECTION_PLATES); ++sy) {
+                const uint64_t skey = (uint64_t)tile_key(tx, tz) * 0x9E3779B97F4A7C15ULL ^ (uint64_t)(uint32_t)sy;
+                std::shared_ptr<const GenTile> sec = gen_find(g_gen_sec, skey, field);
+                if (!sec) {
+                    TileSample tmp;
+                    if (!sample_section(tx, sy, tz, tmp)) {
+                        continue;   // under the bedrock: no cells
+                    }
+                    sec = gen_find(g_gen_sec, skey, field);
+                    if (!sec) {
+                        continue;
+                    }
+                }
+                // Its own plates (one guard plate sampled each side); the
+                // surface tile's are the surface's.
+                copy(*sec, sec->gy0 + 1, std::min(sec->gy0 + sec->gys - 1, gen->gy0));
+            }
         }
     }
     return true;

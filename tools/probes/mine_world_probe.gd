@@ -35,6 +35,7 @@ var _names: PackedStringArray
 
 
 func _initialize() -> void:
+	preload("res://scripts/terrain/worldgen_presets.gd").apply_fitted_flag()
 	BrickTerrain.configure(424242)
 	_names = BrickTerrain.material_names()
 	var classic_before := _classic_sample()
@@ -1093,7 +1094,13 @@ func _check_bond() -> void:
 					pairs += 1
 					if ua != ub and la != lb:
 						over += 1
-	_expect(pairs > 60 and over == 0, "bond: no seam over a seam (%d of %d joints, top course and deep rock)" % [over, pairs])
+	if TerrainFit.get_enabled():
+		# The region fit's stagger is scored, not a rule (Docs/TerrainRegions.md
+		# 11, the user's option c): the best outline a cell can have, a few
+		# seams over seams where nothing better fits. Few, not none.
+		_expect(pairs > 60 and over * 10 <= pairs, "bond (fitted): few seams over seams (%d of %d joints, top course and deep rock)" % [over, pairs])
+	else:
+		_expect(pairs > 60 and over == 0, "bond: no seam over a seam (%d of %d joints, top course and deep rock)" % [over, pairs])
 	# Breaking takes exactly the brick.
 	var r0: Rect2i = rects[Vector3i(x0 + 4, tc - 6, z0 + 4)]
 	var stud := BrickWorld.get_stud_metres()
