@@ -514,6 +514,24 @@ func _wood_and_leaves() -> void:
 				unique = false
 				print("    %s shares filament %d with %s" % [n, f, names[m]])
 	_ok("every wood and leaf colour has a filament of its own", unique)
+	# terrain.gdshader draws these from the PBR sets by number (Docs/PbrWood.md
+	# 8): its lists must be the engine's.
+	var code := FileAccess.get_file_as_string("res://shaders/terrain.gdshader")
+	var lists_ok := true
+	for pair in [["TERRAIN_WOOD", fam[&"wood"]], ["TERRAIN_LEAVES", fam[&"leaves"]]]:
+		var re := RegEx.create_from_string(pair[0] + r"\[\d+\] = int\[\]\(([\d, ]+)\)")
+		var mt := re.search(code)
+		var want := []
+		for n in pair[1]:
+			want.append(names.find(n))
+		var got := []
+		if mt != null:
+			for v in mt.get_string(1).split(","):
+				got.append(int(v.strip_edges()))
+		if got != want:
+			lists_ok = false
+			print("    terrain.gdshader %s %s, the engine's %s" % [pair[0], got, want])
+	_ok("terrain.gdshader's wood and leaf numbers are the engine's", lists_ok)
 	var fl = load("res://scripts/water/floaters.gd")
 	_ok("every colour floats: birch wood, red leaves", fl.density_of("birch wood") < 1.0
 			and fl.density_of("red leaves") < 1.0 and fl.density_of("stone") > 1.0)
