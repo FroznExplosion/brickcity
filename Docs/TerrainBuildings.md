@@ -113,7 +113,7 @@ not move its middle yet (the weights are the stamp's).
 - **5, glass.** The city's towers have no glass bricks (it paints its
   panes, PiecePanes): MineBuildings._glaze fills each outer-wall opening
   above the ground storey with glass cells (the ground storey's are its
-  doors). MAT_GLASS, a new ground material (appended, 39): solid to
+  doors). MAT_GLASS, a new ground material (appended, 41, after farming's two): solid to
   edits, collapse and collision; light passes it (the sky and block light
   fills read it as open); the overlay lays no brick of it; the terrain
   shader draws it as a 4x4 screen-door (55% of its pixels discarded, fixed,

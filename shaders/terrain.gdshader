@@ -2,6 +2,8 @@ shader_type spatial;
 render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 #include "res://shaders/weather.gdshaderinc"
 #include "res://shaders/print_underside.gdshaderinc"
+// The PBR sets, for the ground's wood and leaves (Docs/PbrWood.md 8).
+#include "res://shaders/brick_materials.gdshaderinc"
 #ifdef TERRAIN_BOX
 #include "res://shaders/brick_boxed.gdshaderinc"
 #endif
@@ -200,7 +202,7 @@ uniform bool materials_enabled = true;
 // screen-door: a fixed 4x4 pattern of its pixels discarded (shadows too),
 // the rest tinted and glossy. No overlay brick is laid over it, so it is
 // never sunk (the recess is for faces under a real brick).
-const int TERRAIN_GLASS = 39;
+const int TERRAIN_GLASS = 41;
 const float GLASS_OPEN = 0.55;
 const vec3 MATERIAL_TABLE[7] = {
     vec3(1.0, 1.0, 1.0),    // air, never drawn
@@ -282,6 +284,42 @@ int tb_nibble(float word, int n) {
     return (int(word) >> (4 * n)) & 15;
 }
 #endif
+
+group_uniforms pbr;
+// TERRAIN WOOD AND LEAVES (Docs/PbrWood.md 8): drawn from the brick world's
+// texture sets (bm_pbr), by brick.gdshader's rules and fades: inside
+// `pbr_range` colour, roughness and the normal map, to `pbr_far_range`
+// colour and roughness, past it the flat colour.
+uniform float pbr_range = 14.0;
+uniform float pbr_far_range = 60.0;
+uniform float pbr_bump : hint_range(0.0, 3.0) = 1.0;
+group_uniforms;
+// brick_terrain.h's Material numbers: wood, pale wood, birch wood; leaves,
+// light, autumn and red leaves. Appended there, never moved (a save stores
+// the byte); inventory_probe checks these against BrickTerrain.material_names.
+const int TERRAIN_WOOD[3] = int[](32, 34, 35);
+const int TERRAIN_LEAVES[4] = int[](33, 36, 37, 38);
+// Farmland, dry and wet (Docs/MineFarming.md 10); farm_probe checks them.
+const int TERRAIN_FARMLAND = 39;
+const int TERRAIN_WET_FARMLAND = 40;
+// Its set (bm_pbr_set's numbering), -1 for none. Wood takes the wood
+// variant nearest its colour, as a brick does: caramel oak's set, birch's
+// sand birch's.
+varying flat int v_set;
+
+int terrain_pbr_set(int m, vec3 c) {
+    for (int i = 0; i < 3; i++) {
+        if (m == TERRAIN_WOOD[i]) {
+            return bm_pbr_set(1, c);
+        }
+    }
+    for (int i = 0; i < 4; i++) {
+        if (m == TERRAIN_LEAVES[i]) {
+            return PBR_LEAF_SET;
+        }
+    }
+    return -1;
+}
 
 void vertex() {
 #ifdef TERRAIN_BOX
@@ -424,6 +462,7 @@ void vertex() {
     vv.xyz += normalize(vv.xyz) * push;
     POSITION = PROJECTION_MATRIX * vv;
 #endif
+    v_set = terrain_pbr_set(int(round(v_material * 255.0)), COLOR.rgb);
 }
 
 const float TAU_F = 6.28318530718;
@@ -545,6 +584,24 @@ void fragment() {
         float seam = clamp((seam_width - d) / aa + 0.5, 0.0, 1.0);
         float fade = (1.0 - smoothstep(seam_fade_begin, seam_fade_end, dist)) * outline_w;
         albedo *= mix(1.0, seam_darken, seam * fade);
+    }
+
+    // TILLED SOIL (Docs/MineFarming.md 10): farmland's top is furrowed --
+    // ridges along X, two a stud, on the world lattice so a field's rows line
+    // up -- and the wet one is darker and a little glossy.
+    {
+        int fm = int(round(v_material * 255.0));
+        if (fm == TERRAIN_FARMLAND || fm == TERRAIN_WET_FARMLAND) {
+            float top = step(0.9, v_flat_normal.y);
+            float row = fract(v_world.z / 0.175);
+            float ridge = smoothstep(0.0, 0.35, row) * (1.0 - smoothstep(0.65, 1.0, row));
+            float fade = 1.0 - smoothstep(20.0, 45.0, dist);
+            albedo *= mix(1.0, mix(0.62, 1.08, ridge), top * fade);
+            if (fm == TERRAIN_WET_FARMLAND) {
+                albedo *= 0.62;
+                surface_gloss *= 0.6;          // a roughness factor: wet is smoother
+            }
+        }
     }
 
     if (chamfer_enabled && chamfer_width > 0.0 && has_frame) {
@@ -715,7 +772,8 @@ void fragment() {
 
     // --- printed surface -------------------------------------------------
     float print_rough = 0.0;
-    if (print_lines_enabled) {
+    // Wood and leaves are not printed (MAT_PRINTED; Docs/PbrWood.md 8).
+    if (print_lines_enabled && v_set < 0) {
         float fade = 1.0 - smoothstep(print_fade_begin, print_fade_end, dist);
         // A top's bevel facet is plain: the nozzle's paths stop at the edge
         // of the top rather than running on down the bevel (they carry the
@@ -905,6 +963,18 @@ void fragment() {
     float out_rough = clamp(surface_roughness * surface_gloss * mtl.x + print_rough
             + (1.0 - under_solid) * 0.25, 0.0, 1.0);
     float out_spec = surface_specular * mtl.y;
+    // Wood and leaves (Docs/PbrWood.md 8): the set's roughness at any
+    // distance, its colour and relief near. The world's metres are the
+    // block of wood; the grain runs along X.
+    if (v_set >= 0) {
+        out_rough = clamp(out_rough + PBR_ROUGH_SHIFT[v_set], 0.04, 1.0);
+        if (dist < pbr_far_range) {
+            float colour_w = 1.0 - smoothstep(pbr_far_range * 0.75, pbr_far_range, dist);
+            float bump = pbr_bump * (1.0 - smoothstep(pbr_range * 0.7, pbr_range, dist));
+            bm_pbr(v_set, v_world, v_flat_normal, 0, dp_x, dp_y, colour_w, bump, albedo, out_rough,
+                    NORMAL);
+        }
+    }
     // Rain (weather.gdshaderinc): the ground darkens more than a wall does.
     vec3 wet_normal = NORMAL;
     weather_wet_surface(albedo, out_rough, out_spec, wet_normal, VERTEX, INV_VIEW_MATRIX,

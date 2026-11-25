@@ -4,7 +4,8 @@ extends MenuScreen
 ## from the items hands. A MenuScreen, so it fits any window: the slots size
 ## themselves to the room there is, and what still does not fit scrolls.
 ##
-##   [Storage | Creative]          tabs (Creative only in creative)
+##   [Storage | Creative | Craft | Farming]   tabs (Creative only in creative);
+##                                 Farming is the farming guide (FarmGuide)
 ##   chest  9 x 3                  when a chest is open (stage 5)
 ##   storage 9 x 3  -- or --  every catalog item (Creative)
 ##   off-hand | hotbar 2 / hotbar 1
@@ -49,6 +50,9 @@ var _craft_box: Control
 var _craft_list: VBoxContainer
 var _craft_label: Label
 var _tab_craft: Button
+## The Farming page: the farming guide (Docs/MineFarming.md, FarmGuide).
+var _farm_box: Control
+var _tab_farm: Button
 var _creative_box: Control
 var _creative_flow: HFlowContainer
 var _info: Label
@@ -84,6 +88,11 @@ func _build_content() -> void:
 	_tab_craft.toggle_mode = true
 	_tab_craft.pressed.connect(func() -> void: show_page("craft"))
 	header.add_child(_tab_craft)
+	_tab_farm = Button.new()
+	_tab_farm.text = "Farming"
+	_tab_farm.toggle_mode = true
+	_tab_farm.pressed.connect(func() -> void: show_page("farming"))
+	header.add_child(_tab_farm)
 
 	_chest_box = _section("Chest", _grid(&"chest", Inventory.CHEST_SIZE))
 	content.add_child(_chest_box)
@@ -114,6 +123,9 @@ func _build_content() -> void:
 	_creative_box = _section("Creative: take any item (shift: into the inventory); a held stack clicked here is thrown away",
 			_creative_flow)
 	content.add_child(_creative_box)
+	_farm_box = _section("Farming guide  |  every crop: what it wants, how long it takes, what it gives",
+			FarmGuide.build(_show_slot))
+	content.add_child(_farm_box)
 
 	var hands := HBoxContainer.new()
 	hands.add_theme_constant_override("separation", GAP * 3)
@@ -269,9 +281,11 @@ func show_page(p: String) -> void:
 	_tab_storage.button_pressed = page == "storage"
 	_tab_creative.button_pressed = page == "creative"
 	_tab_craft.button_pressed = page == "craft"
+	_tab_farm.button_pressed = page == "farming"
 	_storage_box.visible = page == "storage"
 	_craft_box.visible = page == "craft"
 	_creative_box.visible = page == "creative"
+	_farm_box.visible = page == "farming"
 	_refresh()
 	_relayout()            # the slot size depends on what the page shows
 
@@ -300,8 +314,12 @@ func _refresh() -> void:
 	if page == "craft":
 		_rebuild_craft()
 	_chest_box.visible = not inv.chest_key.is_empty()
-	title_label.text = "Chest" if not inv.chest_key.is_empty() else "Inventory"
+	title_label.text = inv.chest_title if not inv.chest_key.is_empty() else "Inventory"
+	(_chest_box.get_child(0) as Label).text = inv.chest_title
 	for s in _slots:
+		if not s.addr.is_empty() and s.addr.area == &"chest":
+			# A backpack put down has fewer slots than a chest.
+			s.visible = int(s.addr.index) < inv.area_size(&"chest")
 		if not s.addr.is_empty():
 			var a: Dictionary = s.addr
 			s.selected = (a.area == inv.hotbar_area() and a.index == inv.active_slot) \

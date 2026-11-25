@@ -4,6 +4,7 @@
 #include "brick_world.h"
 #include "terrain_biomes.h"
 #include "terrain_bond.h"
+#include "terrain_fit.h"
 
 #include <godot_cpp/classes/ref.hpp>
 #include <godot_cpp/core/class_db.hpp>
@@ -344,7 +345,10 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
     a.packed = tops.packed;
     const auto tb0 = std::chrono::steady_clock::now();
     auto add = [&](int bx, int y, int bz, int bsx, int bsz, uint8_t m) {
-        VBrick vbk{ bx, y, bz, bsx, bsz, m, m == MAT_PILLAR, y == H - 1 };
+        // Ice is held (Docs/MineWaterNext.md 10): it floats on the water it
+        // froze from, which the ground's survey does not see; a sheet of it
+        // is bricks side by side, bonded to nothing.
+        VBrick vbk{ bx, y, bz, bsx, bsz, m, m == MAT_PILLAR || m == MAT_ICE, y == H - 1 };
         const int32_t id = (int32_t)vb.size();
         for (int dz = 0; dz < bsz; ++dz) {
             for (int dx = 0; dx < bsx; ++dx) {
@@ -459,7 +463,36 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
         }
     }
 
-    // Under it, the bond: every other solid cell's brick, laid once.
+    // Under it, the bond: every other solid cell's brick, laid once. The
+    // fitted bricks where the game draws them (TerrainFit.set_enabled).
+    const bool fit_on = brick::fit_enabled();
+    brick::FitView fit;
+    std::unordered_map<int64_t, bool> whole_memo;
+    // A bond cell (absolute x, z; local course y) in a fitted brick whose
+    // every cell in the region still bonds.
+    auto in_fitted = [&](int ax, int y, int az, brick::FitBrick &b) -> bool {
+        const int g = group_local(ax - x0, y, az - z0);
+        if ((g != BOND_MEDIUM && g != BOND_STRONG) || !fit.at(ax, y0 + y, az, b)) {
+            return false;
+        }
+        const int64_t k = bond_key(b.x, b.c, b.z);
+        auto it = whole_memo.find(k);
+        if (it != whole_memo.end()) {
+            return it->second;
+        }
+        bool ok = true;
+        for (int cc = b.c; cc < b.c + b.h && ok; ++cc) {
+            for (int zz = b.z; zz < b.z + b.sz && ok; ++zz) {
+                for (int xx = b.x; xx < b.x + b.sx && ok; ++xx) {
+                    // Out of the region's courses: not known whole.
+                    const int gq = (cc - y0 >= 0 && cc - y0 < H) ? group_local(xx - x0, cc - y0, zz - z0) : (int)BOND_NONE;
+                    ok = gq == BOND_MEDIUM || gq == BOND_STRONG;
+                }
+            }
+        }
+        whole_memo[k] = ok;
+        return ok;
+    };
     for (int y = 0; y < H; ++y) {
         const int course = y0 + y;
         auto group_abs = [&](int ax, int az) { return group_local(ax - x0, y, az - z0); };
@@ -469,7 +502,23 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
                 if (m == MAT_AIR || owner[idx(x, y, z)] >= 0) {
                     continue;
                 }
-                const BondRect r = bond_rect(x0 + x, course, z0 + z, group_abs);
+                BondRect r;
+                brick::FitBrick fb;
+                if (fit_on && in_fitted(x0 + x, y, z0 + z, fb)) {
+                    // The fitted brick's footprint in this course (Docs/
+                    // TerrainRegions.md 12; a tall brick is a body a course
+                    // until stage D).
+                    r = BondRect{ fb.x, fb.z, fb.sx, fb.sz };
+                } else if (fit_on) {
+                    // Ground no fitted brick holds whole: the old pattern
+                    // among those cells, as the tiles draw it.
+                    r = bond_rect(x0 + x, course, z0 + z, [&](int ax, int az) {
+                        brick::FitBrick q;
+                        return in_fitted(ax, y, az, q) ? (int)BOND_NONE : group_abs(ax, az);
+                    });
+                } else {
+                    r = bond_rect(x0 + x, course, z0 + z, group_abs);
+                }
                 int bx = r.x - x0, bz = r.z - z0, bsx = r.sx, bsz = r.sz;
                 // Every cell of the rectangle names it, so none is taken yet;
                 // if one were, the cell goes alone rather than overlap.

@@ -15,7 +15,7 @@ func check(ok: bool, what: String) -> void:
 func _init() -> void:
 	var glass := MineBuildings.glass_material()
 	# terrain.gdshader's TERRAIN_GLASS.
-	check(glass == 39, "glass is material %d (the shader's 39)" % glass)
+	check(glass == 41, "glass is material %d (the shader's 41)" % glass)
 	var p := {"x": 20, "z": 20, "courses": 2 * TowerRecipe.COURSES_PER_FLOOR, "rooms": true,
 			"windows": true, "stairs": true}
 	var plain := MineBuildings.tower_cells(p.merged({"furnish": false}))

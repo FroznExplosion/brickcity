@@ -7,19 +7,49 @@
 
 using namespace godot;
 
+#include <array>
+#include <memory>
+#include <vector>
+#include <unordered_map>
+
 namespace brick {
 /// A fitted brick: its min corner (studs), bottom course, size in studs and
-/// courses, the material of most of its cells; loose = sand/gravel 1x1.
+/// courses, the material of most of its cells (its strength; each cell keeps
+/// its own colour).
 struct FitBrick {
     int x = 0, z = 0, c = 0, sx = 1, sz = 1, h = 1, mat = 0;
-    bool loose = false;
 };
-/// THE LOOKUP (Docs/TerrainRegions.md 12): the fitted brick a generated cell
-/// is in. Any thread; a tile's first ask fits it (ms), later ones are a
-/// lookup. False where nothing is fitted (air, the deep tier, not yet
-/// configured). Generated cells only: edits are the caller's.
+/// THE LOOKUP (Docs/TerrainRegions.md 12): the fitted brick a GENERATED cell
+/// is in, at any depth. Any thread; a region's first ask fits it (with its
+/// tile's others), later ones are a lookup. False where no brick is fitted:
+/// air, the top course (the surface's pieces), sand and gravel (their own
+/// 1x1s), partly solid cells, no biome generator, not configured. Edits are
+/// the caller's to check.
 bool fitted_brick(int x, int course, int z, FitBrick &out);
-/// Drops every kept tile (new settings, a new world).
+/// Many lookups from one thread (a tile's mesh, a survey): the regions it
+/// has read stay open, no lock taken for them.
+class FitView {
+public:
+    FitView();
+    ~FitView();
+    FitView(const FitView &) = delete;
+    FitView &operator=(const FitView &) = delete;
+    bool at(int x, int course, int z, FitBrick &out);
+    /// The regions holding these cells {x, course, z} fitted in one go (a
+    /// tile's mesh asks its open faces first): a miss in `at` fits the
+    /// whole of its tile's layers instead.
+    void prefetch(const std::vector<std::array<int, 3>> &cells);
+    void clear();
+
+private:
+    struct Open;
+    std::unordered_map<int64_t, std::unique_ptr<Open>> open_;
+    Open *last_ = nullptr;
+    uint64_t gen_ = 0;
+};
+/// The game's ground bricks come from the fit (TerrainFit.set_enabled).
+bool fit_enabled();
+/// Drops every kept region (new settings, a new world).
 void fitted_clear();
 } // namespace brick
 
@@ -58,5 +88,9 @@ public:
     static Dictionary lookup_stats();
     /// The lookup against the batch fit (region_fit_probe): counts of cells
     /// checked, wrong and missing, from `threads` threads.
-    static Dictionary check_lookup(Vector2i tile, int threads = 4);
+    static Dictionary check_lookup(Vector2i tile, int threads = 4, int depth = 0);
+    /// The game's ground bricks from the fit (off: the old pattern). Every
+    /// tile is drawn again.
+    static void set_enabled(bool on);
+    static bool get_enabled();
 };
