@@ -2854,7 +2854,8 @@ PackedStringArray BrickTerrain::material_names() {
             "cream terracotta", "red terracotta", "clay", "bedrock", "coal ore", "iron ore",
             "copper ore", "gold ore", "redstone ore", "lapis ore", "diamond ore", "podzol",
             "dry grass", "lush grass", "cold grass", "dark grass", "granite", "diorite", "ice", "obsidian",
-            "wood", "leaves" }) {
+            "wood", "leaves", "pale wood", "birch wood", "light leaves",
+            "autumn leaves", "red leaves" }) {
         out.push_back(n);
     }
     return out;

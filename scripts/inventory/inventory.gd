@@ -116,7 +116,12 @@ func seed_default() -> void:
 		var id := StringName(bar2[i])
 		if ItemCatalog.has(id):
 			hotbars[1][i] = ItemStack.make(id, ItemCatalog.max_stack(id))
-	# The crafting stations (stage 12), at the end of the storage.
+	# Wood and leaves (Docs/Inventory.md 13), then the crafting stations
+	# (stage 12), at the end of the storage.
+	for k in 2:
+		var wl := [&"wood", &"leaves"][k] as StringName
+		if ItemCatalog.has(wl) and main.size() > 24:
+			main[21 + k] = ItemStack.make(wl, ItemCatalog.max_stack(wl))
 	for k in 2:
 		var st := [&"workbench", &"furnace"][k] as StringName
 		if ItemCatalog.has(st) and main.size() > 24:

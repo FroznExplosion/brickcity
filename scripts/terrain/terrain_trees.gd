@@ -81,6 +81,11 @@ var _solid := {}
 var _trunk_shapes := {}
 var _solid_at := Vector3.INF
 
+## FELLED (Docs/Inventory.md 13): the trunk cells (Vector2i x, z) of trees
+## the player cut down. `_place` leaves them out, so a cell streamed in again
+## keeps them gone; the mine world saves them with the world.
+var felled := {}
+
 
 func setup(p_camera: Camera3D, p_material: Material) -> void:
 	camera = p_camera
@@ -305,6 +310,8 @@ func _exit_tree() -> void:
 func _place(spots: Array) -> Array:
 	var rows := []
 	for spot in spots:
+		if felled.has(Vector2i(spot.cell.x, spot.cell.z)):
+			continue
 		var variant: int = spot.variant
 		var key := "tree_%d" % variant
 		if not _sets.has(key):
@@ -327,6 +334,100 @@ func _place(spots: Array) -> Array:
 		if not streaming:
 			_placed.append(row)
 	return rows
+
+
+# ---------------------------------------------------------------------------
+# Felling (Docs/Inventory.md 13)
+
+## The rows that may stand near `p` (this node's frame): the streamed cells
+## round it, or every placed tree.
+func _rows_near(p: Vector3) -> Array:
+	if not streaming:
+		return _placed
+	var cell_m := float(STREAM_CELL) * BrickWorld.get_stud_metres()
+	var cc := Vector2i(floori(p.x / cell_m), floori(p.z / cell_m))
+	var out := []
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			out.append_array(_cells.get(cc + Vector2i(dx, dz), []))
+	return out
+
+
+## The nearest tree a ray meets within `reach` (this node's frame: the mine
+## world's terrain frame), its trunk or its canopy: {cell (Vector2i trunk
+## x, z), variant, dist, point, box (AABB, this frame)}, or {}.
+func ray(from: Vector3, dir: Vector3, reach: float) -> Dictionary:
+	var best := {}
+	for row in _rows_near(from):
+		var at: Vector3 = (row.xf as Transform3D).origin
+		for b in Trees.boxes(int(row.variant)):
+			var box := AABB((b as AABB).position + at, (b as AABB).size)
+			var hit = box.intersects_ray(from, dir)
+			if hit == null:
+				continue
+			var d := from.distance_to(hit)
+			if d <= reach and (best.is_empty() or d < float(best.dist)):
+				best = {"cell": Vector2i(row.x, row.z), "variant": int(row.variant), "dist": d,
+						"point": hit, "box": box}
+	return best
+
+
+## Cut down the tree whose trunk is at `cell` (x, z): out of its set and its
+## trunk collider, and into `felled`. Returns its variant, or -1 if no tree
+## stands there (it is still remembered as felled).
+func fell(cell: Vector2i) -> int:
+	felled[cell] = true
+	var lists: Array = []
+	if streaming:
+		var cell_m := float(STREAM_CELL) * BrickWorld.get_stud_metres()
+		var stud := BrickWorld.get_stud_metres()
+		var cc := Vector2i(floori(cell.x * stud / cell_m), floori(cell.y * stud / cell_m))
+		for dz in range(-1, 2):
+			for dx in range(-1, 2):
+				var c := cc + Vector2i(dx, dz)
+				if _cells.has(c):
+					lists.append([c, _cells[c]])
+	else:
+		lists.append([null, _placed])
+	for pair in lists:
+		var rows: Array = pair[1]
+		for i in rows.size():
+			var row: Dictionary = rows[i]
+			if int(row.x) != cell.x or int(row.z) != cell.y:
+				continue
+			var lod := _sets[row.key] as ImpostorLod
+			lod.remove(int(row.handle))
+			rows.remove_at(i)
+			count -= 1
+			if camera != null:
+				var here := to_local(camera.global_position)
+				lod.update(here, SETS_BUDGET_US)
+				_sorted_at[row.key] = here
+			# Its trunk's collider: the cell's body made again without it.
+			if pair[0] != null and _solid.has(pair[0]):
+				_unsolid(pair[0])
+				_solid_at = Vector3.INF
+			return int(row.variant)
+	return -1
+
+
+## The felled trees as the save keeps them: [[x, z], ...].
+func felled_list() -> Array:
+	var out := []
+	for c in felled:
+		out.append([c.x, c.y])
+	out.sort()
+	return out
+
+
+## The felled trees of a save (`felled_list`'s shape): any standing now go.
+func set_felled(list) -> void:
+	felled.clear()
+	if not (list is Array):
+		return
+	for e in list:
+		if e is Array and (e as Array).size() == 2:
+			fell(Vector2i(int(e[0]), int(e[1])))
 
 
 ## The last frame's _process, microseconds (the mine world's flight gate).

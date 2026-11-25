@@ -329,7 +329,7 @@ void ignite_round(int x, int b, int z) {
         const int cx = x + NX[i], cb = b + NB[i], cz = z + NZ[i];
         for (int p = 0; p < 3; ++p) {
             const int m = edit_at(pack_cell(cx, cb * 3 + p, cz));
-            if (m == MAT_WOOD || m == MAT_LEAVES) {
+            if (material_burns(m)) {
                 g_out_fire.push_back(cx);
                 g_out_fire.push_back(cb * 3 + p);
                 g_out_fire.push_back(cz);

@@ -19,6 +19,11 @@ extends SceneTree
 ##   chest     a borrowed chest array is changed in place by the clicks and
 ##             shift-click moves between it and the player.
 ##   save      to_dict / from_dict give the same inventory back.
+##   wood      wood and leaves (Docs/Inventory.md 13): material families of
+##             their own colours, every colour floats and burns, a felled
+##             tree's yield in plate cells, its boxes, the wood recipes, the
+##             felled set's save shape. (Felling a real tree in survival is
+##             --gate=inventory's.)
 
 var _pass := 0
 var _fail := 0
@@ -48,6 +53,7 @@ func _init() -> void:
 	_character()
 	_backpacks()
 	_crafting()
+	_wood_and_leaves()
 	_guns()
 	print("inventory probe: %d ok, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
@@ -423,11 +429,15 @@ func _crafting() -> void:
 			and inv.count_of({"id": &"gravel", "tag": "", "count": 1}) == 12)
 	_ok("a chest needs a workbench near", not inv.can_craft(by["Chest"], [])
 			and inv.missing(by["Chest"], []).has("a workbench near"))
-	_ok("... and 48 stone: with only 28, 20 more", not inv.can_craft(by["Chest"], [&"workbench"])
-			and inv.missing(by["Chest"], [&"workbench"]).has("20 more any stone"))
-	inv.main[1] = ItemStack.make(&"stone", 100)
-	_ok("with the stone and a workbench near: a chest", inv.craft(by["Chest"], [&"workbench"]).made == 1
-			and inv.count_of({"id": &"chest", "tag": "", "count": 1}) == 1)
+	inv.main[2] = ItemStack.make(&"wood", 40)
+	_ok("... and 96 wood (section 13): with only 40, 56 more", not inv.can_craft(by["Chest"], [&"workbench"])
+			and inv.missing(by["Chest"], [&"workbench"]).has("56 more Wood"),
+			str(inv.missing(by["Chest"], [&"workbench"])))
+	inv.main[3] = ItemStack.make(&"wood", 60)
+	inv.main[1] = ItemStack.make(&"stone", 52)
+	_ok("with the wood and a workbench near: a chest", inv.craft(by["Chest"], [&"workbench"]).made == 1
+			and inv.count_of({"id": &"chest", "tag": "", "count": 1}) == 1
+			and inv.count_of({"id": &"wood", "tag": "", "count": 1}) == 4)
 	var all_res := inv.craft(by["Gravel"], [], true)
 	_ok("All: as many as the stone makes (80 left -> 6)", all_res.made == 6
 			and inv.count_of({"id": &"stone", "tag": "", "count": 1}) == 8)
@@ -473,6 +483,69 @@ func _crafting() -> void:
 	drops.free()
 	chests.free()
 	back.free()
+
+
+## Section 13: wood and leaves, the materials and what a tree gives.
+func _wood_and_leaves() -> void:
+	print("wood and leaves")
+	ItemCatalog.load_all(true)
+	var names := Array(BrickTerrain.material_names())
+	var fam := {&"wood": ["wood", "pale wood", "birch wood"],
+			&"leaves": ["leaves", "light leaves", "autumn leaves", "red leaves"]}
+	for id in fam:
+		var d := ItemCatalog.get_def(id)
+		var cols := PackedInt32Array(d.get("colours", []))
+		var all_in := true
+		for n in fam[id]:
+			var m := names.find(n)
+			all_in = all_in and m > 0 and cols.has(m) and ItemCatalog.block_item(m) == id
+		_ok("%s is a material of its colours %s" % [id, fam[id]], d.get("kind", "") == "block"
+				and cols.size() == (fam[id] as Array).size() and all_in, str(cols))
+	_ok("pale wood folds into wood, autumn leaves into leaves", not ItemCatalog.has(&"pale_wood")
+			and ItemCatalog.folded_into(&"pale_wood") == &"wood"
+			and ItemCatalog.folded_into(&"autumn_leaves") == &"leaves")
+	# Each colour a filament no other ground material uses: a thrown brick's
+	# colour says what it is (floaters.gd material_of_colour).
+	var unique := true
+	for n in fam[&"wood"] + fam[&"leaves"]:
+		var f := BrickTerrain.material_filament_index(names.find(n))
+		for m in names.size():
+			if names[m] != n and BrickTerrain.material_filament_index(m) == f:
+				unique = false
+				print("    %s shares filament %d with %s" % [n, f, names[m]])
+	_ok("every wood and leaf colour has a filament of its own", unique)
+	var fl = load("res://scripts/water/floaters.gd")
+	_ok("every colour floats: birch wood, red leaves", fl.density_of("birch wood") < 1.0
+			and fl.density_of("red leaves") < 1.0 and fl.density_of("stone") > 1.0)
+	var y := Trees.yield_cells(0)
+	_ok("a felled tree gives its trunk as wood (7 round 2x2 = 84) and its canopy as leaves",
+			int(y.wood) == int(Trees.TRUNK_HEIGHTS[0]) * 12 and int(y.leaves) > 100, str(y))
+	var bx := Trees.boxes(0)
+	var stud := BrickWorld.get_stud_metres()
+	_ok("its trunk box is 2 studs across, the canopy box over it and wider",
+			absf((bx[0] as AABB).size.x - 2.0 * stud) < 1e-4
+			and (bx[1] as AABB).position.y >= (bx[0] as AABB).end.y - 1e-4
+			and (bx[1] as AABB).size.x > (bx[0] as AABB).size.x, str(bx))
+	RecipeBook.load_all(true)
+	var by := {}
+	for r in RecipeBook.all():
+		by[r.name] = r
+	var wb_wood := false
+	for inp in by["Workbench"].inputs:
+		wb_wood = wb_wood or (inp.id == &"wood" and int(inp.count) == 48)
+	_ok("a workbench is made from 48 wood", wb_wood and (by["Workbench"].inputs as Array).size() == 1)
+	var inv := Inventory.new()
+	for b in 2:
+		for i in Inventory.HOTBAR_SIZE:
+			inv.hotbars[b][i] = null
+	inv.main[0] = ItemStack.make(&"wood", 50)
+	_ok("... by hand, from a felled tree's wood", inv.craft(by["Workbench"], []).made == 1
+			and inv.count_of({"id": &"workbench", "tag": "", "count": 1}) == 1)
+	var tt := TerrainTrees.new()
+	tt.set_felled([[30, -4], [12, 7]])
+	_ok("the felled trees' save shape round-trips, sorted", tt.felled_list() == [[12, 7], [30, -4]]
+			and tt.fell(Vector2i(1, 1)) == -1 and tt.felled.has(Vector2i(1, 1)), str(tt.felled_list()))
+	tt.free()
 
 
 ## Stage 10: a gun is an item -- the stack's data makes the same gun again.
