@@ -148,8 +148,15 @@ enum Material {
     /// same brick with water near it, drawn darker.
     MAT_FARMLAND,
     MAT_WET_FARMLAND,
+    /// GLASS (Docs/TerrainBuildings.md 5): a building's windows, and a block
+    /// item. Solid to everything that edits, collapses and collides; light
+    /// passes it (the sky and block light fills), the overlay lays no brick
+    /// of it, and the terrain shader draws it see-through (TERRAIN_GLASS).
+    MAT_GLASS,
     MATERIAL_COUNT
 };
+
+inline bool material_is_glass(int m) { return m == MAT_GLASS; }
 
 /// Wood or leaves, any colour: what lava sets alight and water floats.
 inline bool material_is_wood(int m) {
@@ -231,6 +238,7 @@ inline int material_filament(int m) {
         case MAT_RED_LEAVES: return FIL_RED;
         case MAT_FARMLAND: return FIL_BROWN;      // dirt's; the shader furrows it
         case MAT_WET_FARMLAND: return FIL_BROWN;  // and darkens the wet one
+        case MAT_GLASS: return 44;         // sky blue
         default: return FIL_GREY;
     }
 }
@@ -239,7 +247,7 @@ inline bool material_is_farmland(int m) { return m == MAT_FARMLAND || m == MAT_W
 
 /// Road is paved and farmland tilled: no studs. Everything natural takes them.
 inline bool material_studded(int m) {
-    return m != MAT_ROAD && m != MAT_AIR && !material_is_farmland(m);
+    return m != MAT_ROAD && m != MAT_AIR && !material_is_farmland(m) && m != MAT_GLASS;
 }
 
 // --- hashing ---------------------------------------------------------------

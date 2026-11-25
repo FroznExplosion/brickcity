@@ -85,6 +85,68 @@ past its middle (11 of 20 columns), it tips -- one piece, 8,492 bricks, lying
 on its side (mine_building_fallen.png). Damage to the building itself does
 not move its middle yet (the weights are the stamp's).
 
+**Stages 4b-8 done 2026-11-25 (one round, the user: "do all next items"):**
+
+- **4b, weights follow damage.** An edit into a building recounts the
+  columns it reached (MineBuildings._column_weight: its building cells,
+  base to top), and a changed weight asks the balance again, as an edit
+  under its base does.
+- **4b, breaks as it lands.** A toppled building goes in ITS OWN bricks:
+  each stamped brick still whole, a course at a time, tiled into the
+  falling parts (2x4 .. 1x1, _tile_course), bonded across courses as it was
+  laid; what damage cut goes as 1x1s. Its joints at a city brick's strength
+  (ground_collapse._let_group_go `times` 1.0, not the ground's x4), so
+  PlanetPieces' landing rule shears it where it hits.
+  Four things kept it from tipping at all, each fixed: let go from rest on
+  the edge of what held it, it fell asleep (a constant force does not wake
+  a body) and settled frozen -- so it starts turning its way (TIP_SPIN) and
+  may not settle for 5 s (ground_collapse._keep_tipping); the 100-piece
+  cap put it away as a record, in sight (pieces over KEEP_LAID_BRICKS are
+  no longer put away for the cap); cells of it that fill no whole course
+  (glass runs, furniture plates, stair steps) stayed in the ground and held
+  it from inside (cleared when it topples); and frozen rubble on or in it (a
+  shot brick on its roof) is immovable -- such pieces are woken.
+- **4c, items.** "Plastic bricks" (ItemCatalog): one material family whose
+  colours are every building material (MAT_FIL_BASE + each filament). A
+  mined building brick is one of its colour, and lays that colour again.
+  Glass is its own block item ("glass").
+- **5, glass.** The city's towers have no glass bricks (it paints its
+  panes, PiecePanes): MineBuildings._glaze fills each outer-wall opening
+  above the ground storey with glass cells (the ground storey's are its
+  doors). MAT_GLASS, a new ground material (appended, 41, after farming's two): solid to
+  edits, collapse and collision; light passes it (the sky and block light
+  fills read it as open); the overlay lays no brick of it; the terrain
+  shader draws it as a 4x4 screen-door (55% of its pixels discarded, fixed,
+  shadows too) and never sinks it; the near mesher stamps the glass material byte on its
+  faces (it wrote none on block faces before -- only glass gets one, so no
+  other face's look changes). A translucent brick of a stamped building
+  or build is glass. Not a real transparent pass: one opaque draw kept.
+- **6, interiors.** The tower's rooms are furnished as the city's
+  (TowerBlockout._furnish: RoomManifest's furniture as plain bricks), so
+  furniture is building bricks too: mined, shot, falling with it. Not yet:
+  doors as moving parts, lamps that light (a lamp brick is a coloured brick:
+  block light comes from lava only), room streaming.
+- **7, far view.** Partly: windows are glass cells now, not air, so the
+  coarse tier keeps them as sky-blue cells on the block. The far view from
+  bricks (Docs/Structures.md) is still the city's alone.
+- **8, placing.** `MineBuildings.stamp_build(host, corner, path)`: any
+  workshop build (BuildRecipe; its towers and catalogue furniture expanded as
+  the city placer does) stamped the same way (a brick placed where it fills
+  whole ground courses). TOWNS: a world with "towns" on (World settings,
+  "Towns (city buildings)"; off for worlds from before) has a town in 40% of
+  768-stud regions, 1..3 x 3 plots of 2..10-floor towers from the seed
+  (`town_at`), stamped one a half second as the player comes within 260
+  studs, on level dry plots only. The registry (balance records) and the
+  towns laid are saved in the world file ("buildings", "towns").
+
+Gate `--gate=buildings` (now digs 13 of 20 columns, 30 plates under the
+ground, so the tip is not a balance on the edge) checks all of it: glass cells, items, the cottage
+build, towns from the seed, weights recounted after the shot, the tip, the
+landing breaking it; pictures inside (mine_building_inside.png) and of the
+cottage. 6 runs in a row passed after the fixes, and --dig-all. Headless:
+`tools/probes/mine_buildings_probe.gd` (glass, furniture, the cottage, towns,
+the save, the items).
+
 2. **Building materials.** (done, above) Append terrain materials for the building
    palette's colours (or a colour byte per edited cell, if the edit table can
    carry one): walls the city's colours. Each material its own strength

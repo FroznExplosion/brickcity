@@ -2948,7 +2948,7 @@ PackedStringArray BrickTerrain::material_names() {
             "copper ore", "gold ore", "redstone ore", "lapis ore", "diamond ore", "podzol",
             "dry grass", "lush grass", "cold grass", "dark grass", "granite", "diorite", "ice", "obsidian",
             "wood", "leaves", "pale wood", "birch wood", "light leaves",
-            "autumn leaves", "red leaves", "farmland", "wet farmland" }) {
+            "autumn leaves", "red leaves", "farmland", "wet farmland", "glass" }) {
         out.push_back(n);
     }
     return out;
@@ -4077,7 +4077,7 @@ static thread_local std::map<std::array<int, 3>, OutBrick> *t_bricks = nullptr;
 
 static void note_brick(int x0, int z0, int sx, int sz, int p0, int p1, int mat, const Color &col,
         bool studded) {
-    if (t_bricks == nullptr || sx <= 0 || sz <= 0 || p1 <= p0) {
+    if (t_bricks == nullptr || sx <= 0 || sz <= 0 || p1 <= p0 || material_is_glass(mat)) {
         return;
     }
     const std::array<int, 3> k{ x0, z0, floor_div(p0, PLATES_PER_CELL) };
@@ -4978,6 +4978,13 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                         }
                         // Every face here is a listed brick's (note_brick).
                         m.facet = t_behind != nullptr ? BEHIND_FACE : BOXED_FACE;
+                        // GLASS says so in its material byte (terrain.gdshader
+                        // TERRAIN_GLASS draws it see-through). Only glass: the
+                        // rest of these faces keep the byte as it was.
+                        const uint8_t mat_was = m.material;
+                        if (material_is_glass(mat)) {
+                            m.material = (uint8_t)MAT_GLASS;
+                        }
                         if (dy < 0) {
                             // Wound a0 -> b0 along Z here: UV.x stays along X.
                             m.quad(Vector3((float)dx, (float)dy, (float)dz), col, bf,
@@ -4991,6 +4998,7 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                                 Vector2(ua, va + fsz.y), convex, square);
                         }
                         m.facet = 0;
+                        m.material = mat_was;
                     }
                     u += wdt;
                 }
@@ -6111,7 +6119,8 @@ struct SkyGrid {
         // The tile's own sample where it reaches: the same field, already read.
         if (sample_has(x, z, lx, lz) && s->in_y(yp0) && s->in_y(yp0 + PLATES_PER_CELL - 1)) {
             for (int p = 0; p < PLATES_PER_CELL; ++p) {
-                if (s->vox[s->vidx(lx, yp0 + p, lz)] == MAT_AIR) {
+                const uint8_t v = s->vox[s->vidx(lx, yp0 + p, lz)];
+                if (v == MAT_AIR || material_is_glass(v)) {
                     return false;
                 }
             }
@@ -6124,7 +6133,7 @@ struct SkyGrid {
                 if (any_edits) {
                     const int e = edit_at(pack_cell(x, yp0 + p, z));
                     if (e >= 0) {
-                        if (e == MAT_AIR) {
+                        if (e == MAT_AIR || material_is_glass(e)) {
                             return false;
                         }
                         continue;
@@ -6140,7 +6149,8 @@ struct SkyGrid {
             return true;
         }
         for (int p = 0; p < PLATES_PER_CELL; ++p) {
-            if (g_field.solid_at(x, yp0 + p, z) == MAT_AIR) {
+            const int v = g_field.solid_at(x, yp0 + p, z);
+            if (v == MAT_AIR || material_is_glass(v)) {
                 return false;
             }
         }

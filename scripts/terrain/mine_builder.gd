@@ -820,7 +820,10 @@ func _refresh_bar() -> void:
 		var dd := dims()
 		var cols: PackedInt32Array = d.get("colours", PackedInt32Array())
 		if cols.size() > 1:
-			what += " (%s)" % BrickTerrain.material_names()[lay_material(d)]
+			var lm := lay_material(d)
+			var mn := BrickTerrain.material_names()
+			# A building colour (MAT_FIL_BASE + filament) is named by its filament.
+			what += " (%s)" % (mn[lm] if lm < mn.size() else BrickWorld.get_material_colour_name(0, BrickTerrain.material_filament_index(lm)))
 		what += "  -  %s%s, %d cells" % [SHAPES[size_i][0], " turned" if turned and dd.x != dd.z else "",
 				dd.x * dd.y * dd.z]
 		keys = "Z shape  R turn  V colour  " + keys

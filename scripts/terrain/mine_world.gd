@@ -528,8 +528,38 @@ func generate(s: Dictionary) -> void:
 			int(settings.seed), _gen_ms, cell, _biome_names[BrickTerrain.biome_at(cell.x, cell.y)]])
 
 
+## TOWNS (Docs/TerrainBuildings.md 8): a world with "towns" on lays the
+## city's towers in some regions as the player comes near, one a half second
+## (MineBuildings.tend_towns). Never in a gate: their worlds are measured.
+var _town_in := 1.0
+var _trace_big: Array = []
+
+
+## A terrain material's name; a building colour's by its filament.
+func _material_name(m: int) -> String:
+	var names := BrickTerrain.material_names()
+	if m >= 0 and m < names.size():
+		return names[m]
+	return "%s bricks" % BrickWorld.get_material_colour_name(0, BrickTerrain.material_filament_index(m))
+
+
+func _tend_towns(delta: float, eye: Vector3) -> void:
+	if _gate or not bool(settings.get("towns", false)):
+		return
+	_town_in -= delta
+	if _town_in > 0.0:
+		return
+	_town_in = 0.5 if MineBuildings.towns_queued() > 0 else 2.0
+	var stud := BrickWorld.get_stud_metres()
+	var sea := floori(float(settings.gen.get("sea_m", 20.0)) / BrickWorld.get_plate_metres())
+	if MineBuildings.tend_towns(self, int(settings.seed), Vector2i(floori(eye.x / stud), floori(eye.z / stud)),
+			sea) > 0:
+		_world_dirty = true
+
+
 func _teardown() -> void:
 	MineBuildings.registry.clear()
+	MineBuildings.towns_from_save([])
 	fast_hold = false
 	_speed = 0.0
 	_speed_from = Vector3.INF
@@ -1281,6 +1311,7 @@ func _process(delta: float) -> void:
 	if on_foot and pawn.feet().y < -500.0:
 		set_on_foot(true, Vector3(eye.x, 0.0, eye.z) + Vector3.UP * 300.0)
 	_day_night(delta, eye)
+	_tend_towns(delta, eye)
 	if farming != null:
 		farming.step(delta, eye)
 	_autosave(delta)
@@ -1983,6 +2014,10 @@ func _load_inventory() -> void:
 	survival = bool(world.get("survival", not bool(world.get("creative", true))))
 	var fl = world.get("felled", [])
 	_felled_load = fl if fl is Array else []
+	# Buildings stamped into the ground (Docs/TerrainBuildings.md): their
+	# balance records, and the towns already laid.
+	MineBuildings.from_save(world.get("buildings", []))
+	MineBuildings.towns_from_save(world.get("towns", []))
 	# The world clock (Docs/MineFarming.md 4); a world from before starts at
 	# the old morning hour.
 	world_time = maxf(float(world.get("time", 0.30 * DAY_SECONDS)), 0.0)
@@ -2085,7 +2120,8 @@ func save_edits(wait := false) -> void:
 		save_character()
 	# The world file: only what is the world's (stage 6).
 	var inv_save := {"format": 3, "survival": survival,
-			"felled": _trees.felled_list() if _trees != null else _felled_load, "time": world_time}
+			"felled": _trees.felled_list() if _trees != null else _felled_load, "time": world_time,
+			"buildings": MineBuildings.to_save(), "towns": MineBuildings.towns_to_save()}
 	_time_saved = world_time
 	var farm_regions: Array = farming.store.take_dirty() if farming != null else []
 	if chests != null:
@@ -2271,7 +2307,7 @@ func _update_hud() -> void:
 		"%s   seed %d   %02d:%02d   %.1f ms" % [settings.name, int(settings.seed), hour, minute, _frame_ms],
 		"XYZ  %.1f / %.1f / %.1f m   (%.1f m above the sea line)" % [eye.x, eye.y, eye.z, eye.y - sea],
 		"biome  %s   ground %s" % [_biome_names[b] if b < _biome_names.size() else "?",
-				BrickTerrain.material_names()[BrickTerrain.material_at(c.x, c.y)]],
+				_material_name(BrickTerrain.material_at(c.x, c.y))],
 		"near  %s" % _streamer.report(),
 		"deep  %s" % _deep.report(),
 		_slow_line(),
@@ -6594,6 +6630,40 @@ func _run_buildings_gate() -> void:
 	var ok: bool = int(info.cells) > 1000
 	check.call(ok, "the tower is in the ground (%d cells)" % int(info.cells))
 	fails += 0 if ok else 1
+	# Stage 5: its windows glazed, in the GLASS material.
+	# terrain.gdshader TERRAIN_GLASS is 41: the enum must agree.
+	ok = int(info.glass) > 0 and MineBuildings.glass_material() == 41
+	check.call(ok, "its windows are glass (%d cells; material %d, the shader's 41)" % [int(info.glass), MineBuildings.glass_material()])
+	fails += 0 if ok else 1
+	# Stage 4c: a building brick, mined, is an item -- plastic bricks of its
+	# colour; glass is its own block.
+	var bmat := MineBuildings.BUILDING_MATERIAL_BASE + 8
+	ok = ItemCatalog.block_item(bmat) == &"plastic_bricks" \
+			and ItemCatalog.block_item(MineBuildings.glass_material()) == &"glass"
+	check.call(ok, "mined, its bricks are items (plastic bricks %s, glass %s)" % [
+			ItemCatalog.block_item(bmat), ItemCatalog.block_item(MineBuildings.glass_material())])
+	fails += 0 if ok else 1
+	# Stage 8: a workshop build stamped the same way (the cottage), beside it.
+	var cottage := MineBuildings.stamp_build(self, corner + Vector2i(-40, 0), BuildRecipe.shipped("cottage"))
+	ok = not cottage.is_empty() and int(cottage.cells) > 100
+	check.call(ok, "a workshop build (cottage) stamped into the ground (%d bricks, %d cells)" % [
+			int(cottage.get("bricks", 0)), int(cottage.get("cells", 0))])
+	fails += 0 if ok else 1
+	# ... and towns from the world's seed: some regions hold one, the same
+	# every time.
+	var towns := 0
+	var plots := 0
+	for rz in 5:
+		for rx in 5:
+			var t := MineBuildings.town_at(int(settings.seed), Vector2i(rx, rz))
+			if not t.is_empty():
+				towns += 1
+				plots += (t.plots as Array).size()
+	ok = towns > 0 and towns < 25 and JSON.stringify(MineBuildings.town_at(int(settings.seed), Vector2i(1, 1))) \
+			== JSON.stringify(MineBuildings.town_at(int(settings.seed), Vector2i(1, 1)))
+	check.call(ok, "towns from the seed: %d of 25 regions, %d towers" % [towns, plots])
+	fails += 0 if ok else 1
+	_flush_edits()
 	# It is ground now: the field says so.
 	var mid_cell := Vector3i(lo.x, base + 6, lo.z + 10)
 	ok = BrickTerrain.solid_at(mid_cell.x, mid_cell.y, mid_cell.z) != 0
@@ -6618,6 +6688,12 @@ func _run_buildings_gate() -> void:
 	await shoot_pic.call("near", centre + Vector3(-12.0, 1.8, -9.0), centre + Vector3(0, 3.0, 0))
 	await shoot_pic.call("mid", centre + Vector3(-40.0, 6.0, -22.0), look)
 	await shoot_pic.call("far", centre + Vector3(-110.0, 25.0, -60.0), look)
+	# Inside, its first floor: furniture and the windows' light (stages 5, 6).
+	var floor1 := (base + 3) * plate + 1.2
+	await shoot_pic.call("inside", Vector3((lo.x + 3.5) * stud, floor1, (lo.z + 3.5) * stud),
+			Vector3((lo.x + 16) * stud, floor1 - 0.4, (lo.z + 12) * stud))
+	await shoot_pic.call("cottage", centre + Vector3(-40.0 * stud - 10.0, 4.0, -12.0),
+			centre + Vector3(-40.0 * stud + 3.0, 1.5, 0.0))
 	# A shot at its west wall, 3 m up, from outside.
 	cam.global_transform = Transform3D(Basis(), to_global(centre + Vector3(-12.0, 3.0, 0))).looking_at(
 			to_global(Vector3(lo.x * stud, base * plate + 3.0, centre.z)))
@@ -6633,15 +6709,21 @@ func _run_buildings_gate() -> void:
 	ok = BrickTerrain.solid_at(lo.x, roundi(3.0 / plate) + base, roundi(centre.z / stud)) == 0
 	check.call(ok, "and the field has the hole")
 	fails += 0 if ok else 1
+	# 4b: its weight follows the damage -- the shot column recounted.
+	ok = MineBuildings.recounted > 0
+	check.call(ok, "its weight follows the damage (%d columns recounted)" % MineBuildings.recounted)
+	fails += 0 if ok else 1
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png(dev + "mine_building_shot.png")
 	# DIG out the ground under its west half: the foundation and the ground
 	# under it, down past the lowest ground, so the west half hangs.
 	var let0: int = collapse.groups_let_go
 	var bricks0: int = collapse.bricks_let_go
-	var g_lo := Vector3i(lo.x - 2, int(info.ground) - 12, lo.z - 2)
+	var land0: int = collapse.pieces.landings
+	var off0: int = collapse.pieces.broke_off
+	var g_lo := Vector3i(lo.x - 2, int(info.ground) - 30, lo.z - 2)
 	# `--dig-all`: the whole footprint, so nothing but its own bricks hold it.
-	var g_hi := Vector3i((hi.x + 2) if "--dig-all" in OS.get_cmdline_user_args() else (lo.x + 11), base - 1, hi.z + 2)
+	var g_hi := Vector3i((hi.x + 2) if "--dig-all" in OS.get_cmdline_user_args() else (lo.x + 13), base - 1, hi.z + 2)
 	var tipped0 := MineBuildings.toppled
 	terrain_edited(BrickTerrain.fill_box(g_lo, g_hi, 0, false))
 	_flush_edits()
@@ -6651,8 +6733,34 @@ func _run_buildings_gate() -> void:
 	await _frames(10)
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png(dev + "mine_building_dug.png")
-	for f in 360:
+	# Long enough for an 18 m tower to tip over and land (~6 s).
+	var biggest := 0
+	var put_away_whole := false
+	_trace_big = []
+	for f in 600:
 		await get_tree().process_frame
+		var seen_big = null
+		for pc in collapse.pieces.pieces:
+			if pc.bricks > 500:
+				seen_big = pc
+		if seen_big != null:
+			_trace_big = [f, seen_big.bricks, seen_big.settled, seen_big.impacts,
+					seen_big.body.global_position if is_instance_valid(seen_big.body) else Vector3.INF,
+					seen_big.body.linear_velocity if is_instance_valid(seen_big.body) else Vector3.INF]
+		elif not _trace_big.is_empty():
+			print("[mine-buildings] the building's piece gone at frame %d; last [frame, bricks, settled, impacts, at, v] %s" % [f, str(_trace_big)])
+			# Gone while lying still, never having landed: put away (the
+			# pieces' cap), not broken.
+			if bool(_trace_big[2]) and int(_trace_big[3]) == 0:
+				put_away_whole = true
+			_trace_big = []
+		if f % 120 == 60 or f == 599:
+			var bg := 0
+			for pc in collapse.pieces.pieces:
+				bg = maxi(bg, pc.bricks)
+			biggest = bg
+			print("[mine-buildings] frame %d: %d pieces, biggest %d bricks, waiting %d, landings %d" % [f,
+					collapse.pieces.pieces.size(), bg, collapse._waiting.size(), collapse.pieces.landings])
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png(dev + "mine_building_fallen.png")
 	var let := collapse.groups_let_go - let0
@@ -6668,6 +6776,17 @@ func _run_buildings_gate() -> void:
 	if not "--dig-all" in OS.get_cmdline_user_args():
 		ok = MineBuildings.toppled == tipped0 + 1
 		check.call(ok, "undermined past its middle, it tips (%d balance checks)" % MineBuildings.checks)
+		fails += 0 if ok else 1
+		# ... in its own bricks, at a city brick's strength: it breaks where
+		# it lands (PlanetPieces' landing rule).
+		var lands: int = collapse.pieces.landings - land0
+		var off: int = collapse.pieces.broke_off - off0
+		# Broken off pieces may go as crumbs (PlanetPieces: past MAX_MOVING
+		# moving pieces they do), so the measure is the piece itself: no
+		# piece left as big as the building was.
+		ok = lands > 0 and biggest < MineBuildings.last_parts and not put_away_whole
+		check.call(ok, "it breaks as it lands (%d hard landings, %d bricks went (%d odd cells cleared), biggest piece left %d; %d pieces broke off, %d bricks sheared)"
+				% [lands, MineBuildings.last_parts, MineBuildings.left_over, biggest, off, collapse.pieces.sheared])
 		fails += 0 if ok else 1
 	print("[mine-buildings] %s" % ["PASS" if fails == 0 else "%d FAILED" % fails])
 	get_tree().quit()
