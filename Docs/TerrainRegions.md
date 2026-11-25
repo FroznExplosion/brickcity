@@ -586,3 +586,37 @@ blocking edit is the terrain area's, small, and can go any time.
   ~240): enough for breaks; the fit's 8-stud reach and the water (W1) may
   want more kept, to be measured. W3 (far water let go or parked) merged by
   the water chat (f546587b).
+
+## 12. Stage B3: the switch-over (plan, 2026-11-24)
+
+Built so far (main a540db67): `TerrainFit` (terrain_fit.*) fits regions in
+the probe; the world's settings reach it (`TerrainFit.configure`, preset
+"bricks", M menu Bricks tab). Nothing drawn from it yet.
+
+What B3 changes, every caller of the old pattern (`brick::bond_rect`):
+
+| where | what it does now | with the fit |
+|---|---|---|
+| `brick_terrain.cpp` top course (~2058, ~2098) | the packer cuts the top course from the bond; "held" studs | the fit's top-course bricks; plates and tiles (smooth/studded) from section 11 |
+| `BondView::rect` (~2253) and `brick_key` in the mesher (~4345) | seams = bond rectangles, a brick's key is its course | `fitted_brick(x, c, z)`: the key is the brick's BOTTOM course, so a tall brick draws no seam inside it |
+| `find_brick` / `find_bricks` / `piece_runs` | the whole bond brick goes | the whole fitted brick (all its courses) |
+| the overlay's brick list (`overlay_bricks`) | a box per bond brick, one course | a box per fitted brick, `h` courses tall |
+| `terrain_collapse.cpp` (~403-472) | virtual bricks from the bond | fitted bricks; a tall brick as one body (stage D) |
+| cell colours | per cell | per cell (coal shows in a stone brick), properties from the brick's material |
+
+The lookup: `brick::fitted_brick(x, course, z) -> {x, z, c, sx, sz, h, mat}`,
+from a cache of region fits keyed (rx, rz, layer), filled on a miss from the
+kept generated cells (GenStore), LRU like the packs. A region needs its
+squares' cells, cells 2 round (cave air) and column tops; an odd layer
+needs the two even layers' fits round it. `region_fit_probe` gains a check:
+the cached lookup equals the batch fit, queried in any order and from
+several threads.
+
+Behind a switch (`TerrainFit.set_enabled`, off until the gates pass):
+`terrain_bricks_probe`, `terrain_audit_probe`, `mine_world_probe`,
+`terrain_collapse_probe`, `--gate=bricks`, `--gate=breaklag --burst`.
+
+Who: the terrain-audit chat owns the overlay and break speed and is editing
+the mesher and `find_brick`; the lookup and the cache are this chat's
+(terrain_fit.*). The callers' switch is one change across their code: agree
+who makes it before starting.
