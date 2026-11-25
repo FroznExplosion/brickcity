@@ -154,7 +154,7 @@ ores by name).
 
 ## 7. Not yet
 
-Flowers and tall grass, clouds, villages and structures, animals, enemies. (Falling sand: Docs/TerrainCollapse.md; water: Docs/MineWater.md; chests and the inventory: Docs/Inventory.md.)
+Flowers and tall grass, clouds, villages and structures, animals, enemies. (Falling sand: Docs/TerrainCollapse.md; water: Docs/MineWater.md; chests and the inventory: Docs/Inventory.md; cable tiles, levers, lamps: Docs/MineWiring.md.)
 
 ## 8. Build mode
 
@@ -386,6 +386,7 @@ made the difference.
 | `-- --gate=cave` | land in a reachable cave, still standing 200 ticks later |
 | `-- --gate=menu` | the generation menu and the pause menu clicked with real mouse events |
 | `-- --gate=look [--look=parts]` | the close view under different settings (the fuzz hunt) |
+| `-- --gate=wiring` | cable tiles, a lever, lamps: laid, aimed, lit, a shot cuts a run, saved (Docs/MineWiring.md 13) |
 
 ## 13. Cave floors are collided
 
