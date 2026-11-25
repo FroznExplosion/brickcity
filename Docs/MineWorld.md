@@ -1266,7 +1266,16 @@ passed `--gate=deep` and `--gate=handover`), and fire into falling sand.
   1.2-2.0 ms GPU, but a plain material on it saves only 0.1-0.6: it is its
   draws and triangles, not its lighting. 257 of its 335 meshes were one-tile
   blocks along the far rim (the fill ran one row past the blocks' square):
-  gone, 78 meshes, ~100 fewer draws a frame. Left, if wanted: the ~70 4-tile
-  blocks never under the detail merged into one mesh, and a coarser step
-  for ring 0 (fewer triangles at 45-180 m; a look change). The GPU numbers
-  here were taken with other chats' runs and low RAM: rough.
+  gone, 78 meshes, ~100 fewer draws a frame. On a quiet machine (2026-11-25,
+  from ~50 C, 500 MB free) the far tier now costs 0.74-0.78 ms on foot and
+  0.80-0.88 ms 25 m up (1.49 and 1.21 before the rim fix, from 57 C).
+  TRIED AND DROPPED: merging the small blocks of each 16x16-tile area clear
+  of the detail into one mesh (built on a worker from arrays each block
+  kept). Correct (a picture from above, merged and not: 0.1% px apart, trees
+  and water moving), but `--gate=gpu`'s "far areas not merged" row: +10
+  draws, GPU -0.02 / -0.00 ms -- most of those blocks are culled in any
+  view. Not worth its memory (a CPU copy of every block's arrays, a second
+  GPU copy). (GDScript trap met on the way: append_array on a packed array
+  held in an Array appends to a copy; append to a local and store it back.)
+  Left, if wanted: a coarser step for ring 0 (fewer triangles at 45-180 m;
+  a look change, the user's call).
