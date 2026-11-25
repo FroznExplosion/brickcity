@@ -184,6 +184,14 @@ static func _model(d: Dictionary) -> Node3D:
 			var tilt := Basis(Vector3.BACK, deg_to_rad(-35.0))
 			_part(inner, _box(Vector3(0.1, 1.2, 0.1)), wood, Vector3.ZERO, tilt)
 			_part(inner, _box(Vector3(0.85, 0.15, 0.17)), _mat(col, 0.25), tilt * Vector3(0, 0.55, 0), tilt)
+		"gun":
+			# A body, a barrel, a grip, a magazine.
+			var m := _mat(col, 0.35)
+			var dark := _mat(col.darkened(0.5), 0.5)
+			_part(inner, _box(Vector3(0.7, 0.3, 0.2)), m, Vector3(0.0, 0.55, 0))
+			_part(inner, _box(Vector3(0.3, 0.12, 0.12)), dark, Vector3(0.48, 0.6, 0))
+			_part(inner, _box(Vector3(0.18, 0.4, 0.16)), dark, Vector3(-0.2, 0.28, 0), Basis(Vector3.BACK, 0.25))
+			_part(inner, _box(Vector3(0.16, 0.3, 0.14)), m, Vector3(0.12, 0.3, 0))
 		"backpack":
 			# A pack: body, a lid flap over its top front, a front pocket, two straps.
 			var m := _mat(col, 0.7)

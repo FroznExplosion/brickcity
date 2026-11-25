@@ -264,6 +264,15 @@ and runs its own hands. Nothing here changes how a gun fires
     rolled rifle and pistol. Not in the mine world (yet): grenades, the
     skill tree's shield, picking up floor guns with R, the workbench's
     infusion -- the arsenal's, still in the city and on planets.
+    **Built** (2026-11-24): `scripts/inventory/mine_hands.gd`, gun items a
+    class from `WeaponClass.gun_ids()` (ItemCatalog), a gun icon model,
+    PlayerKit `"arsenal": false` (the level still loads), PlayerHud
+    `hint_lines` (the mine world shows its own keys). The builder acts when
+    the hand is not a gun; the wheel always walks the hotbar (Shift + wheel:
+    the flight's speed). `--gate=inventory`: the kit's guns, 7 draws one,
+    LMB fires it (31 -> 26 rounds), 1 puts it away, its rounds in its stack
+    and kept through a save. A gun held right in front of a wall is pulled
+    back by the view (PlayerView), as everywhere.
 11. **Materials, shapes, cost by size.** Building blocks become MATERIALS
     (stone, soil, sand, clay, snow, ice, ores ...; what breaking gives), each
     able to place a few terrain colours (stone: stone, dark stone, granite,

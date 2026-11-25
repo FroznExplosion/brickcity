@@ -12,7 +12,7 @@ extends RefCounted
 ##   material (block: BrickTerrain material index, else -1),
 ##   fluid (1 water, 2 lava, 0 none), fluid_kind ("source" / "still").
 
-const KINDS := ["block", "fluid", "bucket", "source_bucket", "chest", "tool", "backpack", "misc"]
+const KINDS := ["block", "fluid", "bucket", "source_bucket", "chest", "tool", "backpack", "gun", "misc"]
 ## Which hand an item may be in (zylanntest's HandUse).
 const HANDS := ["any", "right", "off", "two"]
 const NOT_ITEMS := ["air", "bedrock"]
@@ -38,6 +38,12 @@ static func load_all(force := false) -> void:
 		_add({"id": id, "name": names[m].capitalize(), "kind": "block", "material": m,
 				"hand": "right",
 				"colour": BrickWorld.get_filament_colour(BrickTerrain.material_filament_index(m))})
+	# A gun item a weapon class (Docs/Inventory.md 10): the stack's data is the
+	# gun itself (CharacterSave.gun_entry), so one item covers every roll.
+	for cid in WeaponClass.gun_ids():
+		_add({"id": gun_id(StringName(cid)), "name": String(cid).capitalize(), "kind": "gun", "max_stack": 1,
+				"hand": "right", "colour": Color(0.62, 0.64, 0.7), "glyph": "G",
+				"description": "A gun. In the hand: LMB fires, RMB aims, R reloads."})
 	for path in ContentPacks.files("data/items"):
 		var f := FileAccess.open(path, FileAccess.READ)
 		if f == null:
@@ -52,6 +58,10 @@ static func load_all(force := false) -> void:
 				var e: Dictionary = raw.duplicate(true)
 				e["id"] = StringName(k)
 				_add(e)
+
+
+static func gun_id(class_id: StringName) -> StringName:
+	return StringName("gun_%s" % class_id)
 
 
 static func block_id_for(material_name: String) -> StringName:
@@ -143,6 +153,8 @@ static func label(s: ItemStack) -> String:
 	var d := get_def(s.id)
 	var n: String = d.get("name", String(s.id))
 	match d.get("kind", ""):
+		"gun":
+			return str(s.data.get("name", n))
 		"bucket":
 			return "%s %d/%d tiles" % [n, int(s.data.get("tiles", 0)), BUCKET_TILES]
 		"source_bucket":
