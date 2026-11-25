@@ -63,6 +63,17 @@ course lines and stay bond cells (3,204 of 22,856 cells placed). Half dug:
 166 bricks let go (6 before); it still stands on the other half (3b).
 Mined, a building brick drops no item (ItemCatalog has none for them).
 
+**Stage 4 done 2026-11-24 (the building's own bricks):** instead of placed
+bricks at plate offsets, the building is laid ON the ground's courses:
+MineBuildings.course_map makes each 2-plate slab (and the base) one 3-plate
+course, so a storey is 21 plates, 7 courses, and every course of bricks
+lines up (the floors a plate thicker). Every brick that fills its courses is
+mark_placed (a slab's lower layer laid, not placed): 8,552 of 25,656 cells
+kept as whole bricks (3,204 before), the walls drawn as the building's own
+bricks. 6 floors: 18.1 m. Half dug, nothing lets go now -- whole bricks
+bridge the gap (no tipping, 3b); dug out from under all of it, the tower
+falls as ONE piece of 964 bricks (--gate=buildings --dig-all).
+
 2. **Building materials.** (done, above) Append terrain materials for the building
    palette's colours (or a colour byte per edited cell, if the edit table can
    carry one): walls the city's colours. Each material its own strength
@@ -73,7 +84,7 @@ Mined, a building brick drops no item (ItemCatalog has none for them).
    past the top of what is connected (or a building stamp registers its box
    so a dig under it surveys the whole of it). Gate: --dig-all leaves
    nothing standing over the hole.
-4. **Placed bricks keep their shapes.** Stamped bricks recorded as placed
+4. **Placed bricks keep their shapes.** (done by course alignment, above) Stamped bricks recorded as placed
    rects, so the mesher draws the building's own bricks, and the overlay's
    boxes are its bricks. Needs placed bricks at PLATE offsets, not only on
    the ground's courses (a storey is 20 plates, the ground's course 3).

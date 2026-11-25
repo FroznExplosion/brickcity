@@ -46,6 +46,28 @@ static func _terrain_ids() -> Dictionary:
 	return _mat_ids
 
 
+## The building's plates onto the ground's: building plate -> [first ground
+## plate, last ground plate, in a slab, layer in its band]. The ground's
+## course is 3 plates; a storey is 6 courses and a 2-plate slab (20 plates),
+## so storeys drift off the ground's course lines. Here each slab (and the
+## base) is one whole 3-plate course: a storey is 21 plates, 7 courses, and
+## every course of bricks lines up with the ground's (Docs/TerrainBuildings.md
+## 4). The floors are a plate thicker for it.
+static func course_map(courses: int) -> Array:
+	var out := []
+	var t := 0
+	for band: Dictionary in TowerRecipe.layout(courses):
+		var n := int(band.plates)
+		var slab: bool = band.kind == "base" or band.kind == "slab"
+		for o in n:
+			if slab:
+				out.append([t, t + 2, true, o])
+			else:
+				out.append([t + o, t + o, false, o])
+		t += 3 if slab else n
+	return out
+
+
 ## The tower's bricks as boxes of plate cells relative to its corner:
 ## [lo (stud, plate, stud), hi (inclusive), terrain material]. Glass is left
 ## out. `p`: TowerBlockout's parameters ({"x", "z", "courses", "rooms",
@@ -69,6 +91,7 @@ static func tower_cells(p: Dictionary) -> Array:
 		f.build_into(world, c, StaircaseRecipe.flight_parts(palette))
 	var ts := BrickWorld.ticks_per_stud()
 	var tp := BrickWorld.ticks_per_plate()
+	var ymap := course_map(int(p.courses))
 	var out := []
 	for id in world.get_block_count(c):
 		var box: Array = world.get_block_ticks(c, id)
@@ -83,7 +106,15 @@ static func tower_cells(p: Dictionary) -> Array:
 		var a := Vector3i(lo.x / ts, lo.y / tp, lo.z / ts)
 		@warning_ignore("integer_division")
 		var b := Vector3i((hi.x + ts - 1) / ts - 1, (hi.y + tp - 1) / tp - 1, (hi.z + ts - 1) / ts - 1)
-		out.append([a, b, BUILDING_MATERIAL_BASE + world.get_block_colour(c, id)])
+		# Onto the ground's courses (course_map): a slab's 2 plates are one
+		# 3-plate course, so every wall brick sits on the ground's course
+		# lines and is kept whole. A slab's lower layer is laid but not
+		# placed: its upper layer's bricks are that course's bricks.
+		var ya: Array = ymap[clampi(a.y, 0, ymap.size() - 1)]
+		var yb: Array = ymap[clampi(b.y, 0, ymap.size() - 1)]
+		var place := not (bool(ya[2]) and int(ya[3]) == 0)
+		out.append([Vector3i(a.x, int(ya[0]), a.z), Vector3i(b.x, int(yb[1]), b.z),
+				BUILDING_MATERIAL_BASE + world.get_block_colour(c, id), place])
 	world.release_chunk(c)
 	return out
 
@@ -125,7 +156,8 @@ static func stamp(host: Node, corner: Vector2i, p: Dictionary) -> Dictionary:
 		n += int(res.get("changed", 0))
 		# One brick, kept whole (only whole courses of it: a brick off the
 		# ground's course lines stays bond cells).
-		placed += BrickTerrain.mark_placed(blo, bhi, int(cbox[2]))
+		if bool(cbox[3]):
+			placed += BrickTerrain.mark_placed(blo, bhi, int(cbox[2]))
 		host.terrain_edited(res)
 	return {"base": base, "lo": lo, "hi": hi, "bricks": cells.size(), "cells": n, "ground": t_min,
 			"placed": placed}

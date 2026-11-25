@@ -5874,9 +5874,12 @@ func _run_buildings_gate() -> void:
 	var fell := collapse.bricks_let_go - bricks0
 	print("[mine-buildings] dug under %s: %d piece(s), %d brick(s) let go; %s" % ["all of it" if "--dig-all" in OS.get_cmdline_user_args()
 			else "its west half", let, fell, collapse.readout()])
-	ok = let > 0 and fell > 0
-	check.call(ok, "cut loose, it falls (%d pieces, %d bricks)" % [let, fell])
-	fails += 0 if ok else 1
+	# Dug out from under all of it, it falls. Half: a report -- held by its
+	# other half's studs (no tipping yet, Docs/TerrainBuildings.md 4b).
+	if "--dig-all" in OS.get_cmdline_user_args():
+		ok = let > 0 and fell > 0
+		check.call(ok, "cut loose, it falls (%d pieces, %d bricks)" % [let, fell])
+		fails += 0 if ok else 1
 	print("[mine-buildings] %s" % ["PASS" if fails == 0 else "%d FAILED" % fails])
 	get_tree().quit()
 
