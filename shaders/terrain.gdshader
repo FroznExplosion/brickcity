@@ -292,6 +292,9 @@ group_uniforms;
 // the byte); inventory_probe checks these against BrickTerrain.material_names.
 const int TERRAIN_WOOD[3] = int[](32, 34, 35);
 const int TERRAIN_LEAVES[4] = int[](33, 36, 37, 38);
+// Farmland, dry and wet (Docs/MineFarming.md 10); farm_probe checks them.
+const int TERRAIN_FARMLAND = 39;
+const int TERRAIN_WET_FARMLAND = 40;
 // Its set (bm_pbr_set's numbering), -1 for none. Wood takes the wood
 // variant nearest its colour, as a brick does: caramel oak's set, birch's
 // sand birch's.
@@ -563,6 +566,24 @@ void fragment() {
         float seam = clamp((seam_width - d) / aa + 0.5, 0.0, 1.0);
         float fade = (1.0 - smoothstep(seam_fade_begin, seam_fade_end, dist)) * outline_w;
         albedo *= mix(1.0, seam_darken, seam * fade);
+    }
+
+    // TILLED SOIL (Docs/MineFarming.md 10): farmland's top is furrowed --
+    // ridges along X, two a stud, on the world lattice so a field's rows line
+    // up -- and the wet one is darker and a little glossy.
+    {
+        int fm = int(round(v_material * 255.0));
+        if (fm == TERRAIN_FARMLAND || fm == TERRAIN_WET_FARMLAND) {
+            float top = step(0.9, v_flat_normal.y);
+            float row = fract(v_world.z / 0.175);
+            float ridge = smoothstep(0.0, 0.35, row) * (1.0 - smoothstep(0.65, 1.0, row));
+            float fade = 1.0 - smoothstep(20.0, 45.0, dist);
+            albedo *= mix(1.0, mix(0.62, 1.08, ridge), top * fade);
+            if (fm == TERRAIN_WET_FARMLAND) {
+                albedo *= 0.62;
+                surface_gloss *= 0.6;          // a roughness factor: wet is smoother
+            }
+        }
     }
 
     if (chamfer_enabled && chamfer_width > 0.0 && has_frame) {

@@ -1,8 +1,8 @@
 # Farming in the mine world -- plan
 
-Design only, nothing built yet (2026-11-25). The scene is
-`scenes/terrain_test.tscn` (Docs/MineWorld.md). Questions still open for the
-user are in section 14.
+Planned 2026-11-25; stages 1 and 2 BUILT the same day (section 15). The
+scene is `scenes/terrain_test.tscn` (Docs/MineWorld.md). The user's answers
+to the questions are in section 14.
 
 ## 0. What is asked
 
@@ -324,14 +324,74 @@ Each stage merged on its own, with its probe.
 - **Terrain area.** Farming touches mine_world.gd and the builder (Terrain and
   inventory owners); the farm code itself stays in `scripts/farming/`.
 
-## 14. Questions for the user
+## 14. The user's answers (2026-11-25)
 
-1. **Closed game.** Should crops grow while the game is closed (real time,
-   capped), or only while it runs (any ground, loaded or not)?
-2. **What are crops for?** The mine world has no hunger or food today. Food
-   for health or buffs, crafting (cloth, rope, dyes), fuel, trading, or all?
-3. **Trampling.** Agreed that the player never tramples, only animals?
-4. **Tilled soil.** A drawn tile over dirt (no C++ change, recommended for
-   now) or a real terrain material `farmland` (Terrain area, a C++ append)?
-5. **Death.** Should every crop be able to rot, or only some (others just
-   wait ripe)?
+1. **Closed game: no.** Crops grow only while the player is in the world --
+   anywhere in it, loaded or not -- never while the game is closed.
+2. **What crops are for:** later selling, health, maybe hunger and crafting.
+   For now only the growing is built.
+3. **Trampling:** the player tramples a plot only by LANDING on it from more
+   than a standard jump: a fall of 3 bricks or more. Walking and jumping on a
+   field are fine.
+4. **Tilled soil:** the brick itself becomes a tilled brick with a smooth top
+   -- a real terrain material (farmland), not a drawn tile.
+5. **Death:** only some crops could die, and maybe none will: deferred. Ripe
+   crops wait.
+
+Also asked: a farming guide in the game, for every crop: how farming works
+and what each crop wants (built: the inventory's Farming tab, section 15).
+
+## 15. Built (2026-11-25): stages 1 and 2
+
+**Controls.** Hoe: RMB on the top of grass, dirt or podzol. Seeds: RMB on
+tilled soil. RMB on a ripe crop harvests (whatever is in the hand) and
+replants from the seeds carried. LMB on a crop: harvest if ripe, else pull it
+(seed back). LMB on bare tilled soil breaks it (soil back). Looking at a plot
+shows a line over the hotbar: crop, stars, stage, time to ripe, what holds it
+back, the soil. E -> Farming: the guide. Creative kits get a hoe and every
+seed; survival finds seeds breaking grass and the like by hand (each crop's
+`found`).
+
+**Tilled soil** (C++, append-only): `MAT_FARMLAND` 39 and `MAT_WET_FARMLAND`
+40 in brick_terrain.h -- unstudded like road (`material_studded`), bonded
+like soil, no tufts or curved bricks on them, dirt's filament. The terrain
+shader (`TERRAIN_FARMLAND`) furrows their tops, two ridges a stud along X,
+and darkens the wet one. The hoe fills the 2x2 block's whole 3-plate course
+with farmland and marks it placed (`mark_placed` marks whole courses only),
+so it is ONE brick; a ground top part way up a course is dug down to the
+course under it. Water within 4 studs (the course of the soil or the one
+over it) turns it wet farmland, and back when the water goes. Breaking it
+gives soil (`ItemCatalog.FARMLAND_GIVES`); farmland is no item.
+
+**The clock.** `world_time` (mine_world.gd), seconds played in the world,
+saved in the world file (`time`); the sky's hour is its day part, so the sky
+keeps its hour across loads too. T moves it an hour (the crops get it). An
+autosave marks the world file out of date when the clock has moved 5 s.
+
+**Code.** `scripts/farming/`: `FarmCrops` (content/<pack>/data/farming,
+ContentPacks), `FarmPlant` (the plot as data, `settle`, rates, harvest,
+stars; the daylight integral is a 480-sample Simpson table of the sky's own
+curve, growth at night 15% of noon), `FarmStore` (plots by 256-stud region,
+`<save>.regions/r_x_z.farm`, `BCMF` format 1, written on the save worker),
+`FarmDraw` (crop models of brick parts per stage, MultiMesh instances within
+96 m), `MineFarming` (the mine world's: till, plant, harvest, trample,
+refresh of water/light/soil, the look line), `FarmGuide` (the guide page,
+written from the crop table and the growth rules), `farm_gate.gd`.
+Crops: wheat, carrot, potato, beans (give fertility back), pumpkin (thirsty,
+slow), berry bush (regrows); items in content/base/data/items/farming.json.
+
+**Not yet** (later stages): area tools, watering can, compost and
+fertilisers, more crops, animals and enclosure, birds, weeds, blight,
+breeding, giant crops, automation, death.
+
+**Tests.** `farm_probe` (headless, 55 checks): the materials and shader
+numbers, the crops and their items, one settle == many == saved half way for
+every crop over 0.3, 1.7 and 5 days, daylight, every factor, the spread,
+harvests and stars, fertility, region save. `--gate=farm` (windowed): till
+(through the builder, a raised top dug down, stone and side faces refused),
+plant, a dug channel wetting the near plots only, two days of growth (wet
+wheat ripe, dry not), the field drawn, RMB harvest + replant, LMB pull, a
+plot out of reach untouched while the clock runs and caught up exactly on
+return, a real fall trampling (a hop not), the world generated again with
+the farm and the clock intact; pictures `user://dev/farm_field.png`,
+`farm_guide.png`.

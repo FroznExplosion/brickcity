@@ -2855,7 +2855,7 @@ PackedStringArray BrickTerrain::material_names() {
             "copper ore", "gold ore", "redstone ore", "lapis ore", "diamond ore", "podzol",
             "dry grass", "lush grass", "cold grass", "dark grass", "granite", "diorite", "ice", "obsidian",
             "wood", "leaves", "pale wood", "birch wood", "light leaves",
-            "autumn leaves", "red leaves" }) {
+            "autumn leaves", "red leaves", "farmland", "wet farmland" }) {
         out.push_back(n);
     }
     return out;
@@ -7790,7 +7790,7 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
         for (int lz = 0; lz < TILE; ++lz) {
             for (int lx = 0; lx < TILE; ++lx) {
                 const int i = TileSample::idx(lx, lz);
-                if (!s.smooth[i] || s.mat[i] == MAT_ROAD) {
+                if (!s.smooth[i] || s.mat[i] == MAT_ROAD || material_is_farmland(s.mat[i])) {
                     continue;
                 }
                 const int gx = gx0 + lx;
@@ -7876,7 +7876,7 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                 continue;
             }
             const int i = TileSample::idx(lx, lz);
-            if (s.plate[i] == 0 || s.mat[i] == MAT_ROAD) {
+            if (s.plate[i] == 0 || s.mat[i] == MAT_ROAD || material_is_farmland(s.mat[i])) {
                 continue;
             }
             const int gx = gx0 + lx;
@@ -8723,6 +8723,8 @@ void BrickTerrain::_bind_methods() {
     ClassDB::bind_integer_constant("BrickTerrain", "Material", "MAT_STONE", MAT_STONE);
     ClassDB::bind_integer_constant("BrickTerrain", "Material", "MAT_DARK_STONE", MAT_DARK_STONE);
     ClassDB::bind_integer_constant("BrickTerrain", "Material", "MAT_ROAD", MAT_ROAD);
+    ClassDB::bind_integer_constant("BrickTerrain", "Material", "MAT_FARMLAND", MAT_FARMLAND);
+    ClassDB::bind_integer_constant("BrickTerrain", "Material", "MAT_WET_FARMLAND", MAT_WET_FARMLAND);
     ClassDB::bind_integer_constant("BrickTerrain", "PieceKind", "PIECE_BRICK", PIECE_BRICK);
     ClassDB::bind_integer_constant("BrickTerrain", "PieceKind", "PIECE_TILE", PIECE_TILE);
     ClassDB::bind_integer_constant("BrickTerrain", "PieceKind", "PIECE_RAMP", PIECE_RAMP);

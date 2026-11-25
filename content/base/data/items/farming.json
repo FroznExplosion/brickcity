@@ -1,0 +1,22 @@
+{
+	"items": {
+		"hoe": { "name": "Hoe", "kind": "hoe", "max_stack": 1, "hand": "right", "colour": "#a8a8b0", "glyph": "H",
+			"description": "Right-click the top of soil (grass, dirt, podzol): that 2x2 brick becomes tilled soil, smooth and furrowed. Seeds go on tilled soil." },
+		"wheat_seeds": { "name": "Wheat seeds", "kind": "seed", "crop": "wheat", "max_stack": 99, "colour": "#c9b25a", "glyph": ".",
+			"description": "Right-click tilled soil to plant. Found breaking grass by hand." },
+		"pumpkin_seeds": { "name": "Pumpkin seeds", "kind": "seed", "crop": "pumpkin", "max_stack": 99, "colour": "#e8dca0", "glyph": ".",
+			"description": "Right-click tilled soil to plant. Slow and thirsty: plant near water." },
+		"carrot": { "name": "Carrot", "kind": "seed", "crop": "carrot", "max_stack": 99, "colour": "#ef8a1e", "glyph": "c", "model": "produce",
+			"description": "Food. Right-click tilled soil to plant one." },
+		"potato": { "name": "Potato", "kind": "seed", "crop": "potato", "max_stack": 99, "colour": "#c9a467", "glyph": "p", "model": "produce",
+			"description": "Food. Right-click tilled soil to plant one." },
+		"beans": { "name": "Beans", "kind": "seed", "crop": "beans", "max_stack": 99, "colour": "#7fbf4d", "glyph": "b", "model": "produce",
+			"description": "Food. Right-click tilled soil to plant; beans give fertility back to the soil." },
+		"berries": { "name": "Berries", "kind": "seed", "crop": "berry_bush", "max_stack": 99, "colour": "#c3243e", "glyph": "o", "model": "produce",
+			"description": "Food. Right-click tilled soil to plant a berry bush, which regrows after picking." },
+		"wheat": { "name": "Wheat", "kind": "misc", "max_stack": 99, "colour": "#dcb84a", "glyph": "w", "model": "produce",
+			"description": "Grain from a wheat field." },
+		"pumpkin": { "name": "Pumpkin", "kind": "misc", "max_stack": 16, "colour": "#f07a18", "glyph": "P", "model": "produce",
+			"description": "A whole pumpkin." }
+	}
+}

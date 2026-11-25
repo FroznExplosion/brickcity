@@ -1,0 +1,59 @@
+{
+	"_about": "Crops of the mine world (Docs/MineFarming.md). stages counts the ripe one; stage_hours is in-game hours a stage at full rate (full sun, wet, rich soil). dry_rate: the rate on dry farmland. light: the light it wants (0-1; open sky is 1). drain: fertility a harvest takes; restores: fertility it gives back. likes/dislikes: biome names. yield and seeds_back: [min, max] a harvest. regrow_to: a perennial goes back to this stage when harvested (-1: replant). found: breaking these blocks by hand in survival may give the seed.",
+	"crops": {
+		"wheat": {
+			"name": "Wheat", "family": "grain", "seed": "wheat_seeds", "produce": "wheat",
+			"stages": 5, "stage_hours": 5, "dry_rate": 0.4, "light": 0.7, "drain": 10,
+			"likes": ["Plains", "Meadow", "Savanna"], "dislikes": ["Snowy Plains", "Snowy Taiga", "Desert", "Jungle"],
+			"yield": [1, 2], "seeds_back": [1, 2],
+			"look": { "shape": "grain", "leaf": "#5e9e3b", "ripe": "#dcb84a" },
+			"found": [{ "material": "grass", "chance": 0.08 }, { "material": "dry grass", "chance": 0.08 }],
+			"tips": "The easy first crop. Wants open sky and water near it; dry soil slows it to under half speed. Give back seeds as well as grain, so a field keeps itself going."
+		},
+		"carrot": {
+			"name": "Carrot", "family": "root", "seed": "carrot", "produce": "carrot",
+			"stages": 5, "stage_hours": 5, "dry_rate": 0.55, "light": 0.5, "drain": 8,
+			"likes": ["Meadow", "Birch Forest", "Taiga"], "dislikes": ["Desert", "Badlands"],
+			"yield": [2, 4], "seeds_back": [0, 0],
+			"look": { "shape": "root", "leaf": "#4f9a32", "ripe": "#ef8a1e" },
+			"found": [{ "material": "lush grass", "chance": 0.05 }, { "material": "grass", "chance": 0.02 }],
+			"tips": "Planted from a carrot, so keep one back. Copes with a little shade and some dryness. Likes cool meadows."
+		},
+		"potato": {
+			"name": "Potato", "family": "root", "seed": "potato", "produce": "potato",
+			"stages": 5, "stage_hours": 6, "dry_rate": 0.65, "light": 0.4, "drain": 12,
+			"likes": ["Taiga", "Forest", "Windswept Hills"], "dislikes": ["Jungle", "Desert"],
+			"yield": [2, 5], "seeds_back": [0, 0],
+			"look": { "shape": "root", "leaf": "#3f8a3a", "ripe": "#c9a467" },
+			"found": [{ "material": "podzol", "chance": 0.06 }, { "material": "dark grass", "chance": 0.03 }],
+			"tips": "The hardiest food crop: grows in shade and on dry soil better than any other, but it is hungry -- it takes the most out of the soil. Plant beans after it."
+		},
+		"beans": {
+			"name": "Beans", "family": "legume", "seed": "beans", "produce": "beans",
+			"stages": 4, "stage_hours": 5, "dry_rate": 0.45, "light": 0.6, "drain": 0, "restores": 15,
+			"likes": ["Forest", "Plains", "Jungle"], "dislikes": ["Snowy Plains", "Snowy Taiga"],
+			"yield": [2, 3], "seeds_back": [0, 0],
+			"look": { "shape": "legume", "leaf": "#4c9440", "ripe": "#7fbf4d" },
+			"found": [{ "material": "dark grass", "chance": 0.04 }, { "material": "grass", "chance": 0.02 }],
+			"tips": "Puts fertility BACK into the soil every harvest. Grow them where a hungry crop (potatoes, pumpkins) has worn the soil out."
+		},
+		"pumpkin": {
+			"name": "Pumpkin", "family": "gourd", "seed": "pumpkin_seeds", "produce": "pumpkin",
+			"stages": 6, "stage_hours": 7, "dry_rate": 0.25, "light": 0.8, "drain": 18,
+			"likes": ["Plains", "Savanna", "Forest"], "dislikes": ["Snowy Plains", "Snowy Taiga", "Taiga"],
+			"yield": [1, 1], "seeds_back": [1, 3],
+			"look": { "shape": "gourd", "leaf": "#3d8a2f", "ripe": "#f07a18" },
+			"found": [{ "material": "grass", "chance": 0.015 }, { "material": "lush grass", "chance": 0.03 }],
+			"tips": "Slow and thirsty: on dry soil it barely grows, so dig it next to water. Wants full sun and rich soil, and takes a lot out of it. A well kept pumpkin gives extra seeds."
+		},
+		"berry_bush": {
+			"name": "Berry bush", "family": "bush", "seed": "berries", "produce": "berries",
+			"stages": 5, "stage_hours": 6, "dry_rate": 0.75, "light": 0.3, "drain": 4, "regrow_to": 3,
+			"likes": ["Taiga", "Snowy Taiga", "Dark Forest", "Birch Forest"], "dislikes": ["Desert", "Badlands"],
+			"yield": [2, 4], "seeds_back": [0, 0],
+			"look": { "shape": "bush", "leaf": "#2f7a3a", "ripe": "#c3243e" },
+			"found": [{ "material": "podzol", "chance": 0.04 }, { "material": "cold grass", "chance": 0.05 }],
+			"tips": "Plant once, pick for ever: after a harvest the bush keeps its leaves and only grows the berries again. Happy in shade, cold and on dry soil."
+		}
+	}
+}

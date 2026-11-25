@@ -10,6 +10,9 @@ extends Node3D
 ##   RMB      use the item in hand: place its block on the face looked at
 ##            (held: repeats), pour a fluid
 ##   MMB      pick the block looked at into the hand
+##   farming (Docs/MineFarming.md, MineFarming): a hoe's RMB tills soil, a
+##            seed's RMB plants on tilled soil, RMB on a ripe crop harvests,
+##            LMB on a crop harvests or pulls it
 ##   1-9, wheel   a slot of the active hotbar
 ##   X        tap: the other hotbar; held: the other off-hand slot
 ##   Z        block size: 2x2, 1x1 or 4x4 studs, one brick tall
@@ -460,6 +463,12 @@ func break_target() -> bool:
 		return true
 	if target.has("tree"):
 		return _fell(target.tree, target.position)
+	# A crop on tilled soil: harvested if ripe, else pulled (MineFarming).
+	if host.farming != null and host.farming.break_target(target):
+		broken += 1
+		log_blocks.append("crop %s" % target.cell)
+		target = {}
+		return true
 	var material := int(target.get("material", 0))
 	if hand_kind() == "tool":
 		return _pick(material)
@@ -471,6 +480,8 @@ func break_target() -> bool:
 	log_blocks.append("break %s" % _block_of(target.cell))
 	var at := _cell_lo(_block_of(target.cell)) + _block_size_m() * 0.5
 	host.terrain_edited(res)
+	if host.farming != null:
+		host.farming.cells_changed(c[0], c[1])
 	target = {}
 	# Survival: the broken bricks into the inventory; what does not fit drops
 	# where the block was.
@@ -479,7 +490,22 @@ func break_target() -> bool:
 		var left := inv.add_item(ItemStack.make(id, int(res.changed)))
 		if left != null:
 			host.drops.spawn(left, at)
+		_find_seeds(material, at)
 	return true
+
+
+## Survival: grass and the like broken by hand may give a crop's seed
+## (FarmCrops.found_in, the crops' "found").
+func _find_seeds(material: int, at: Vector3) -> void:
+	var names: PackedStringArray = BrickTerrain.material_names()
+	if material <= 0 or material >= names.size():
+		return
+	for f in FarmCrops.found_in(names[material]):
+		if randf() < float(f[1]) and ItemCatalog.has(f[0]):
+			var left := inv.add_item(ItemStack.make(f[0], 1))
+			if left != null:
+				host.drops.spawn(left, at)
+			log_blocks.append("found %s" % f[0])
 
 
 ## LMB on a tree, by hand or with a tool (Docs/Inventory.md 13): the whole
@@ -577,6 +603,28 @@ func place_target() -> bool:
 		return true
 	var d := hand_def()
 	var k := str(d.get("kind", ""))
+	# Farming (MineFarming): a ripe crop is picked whatever is in the hand;
+	# a hoe tills, a seed plants.
+	if host.farming != null:
+		if host.farming.harvest_target(target):
+			log_blocks.append("harvest %s" % target.cell)
+			target = {}
+			return true
+		if k == "hoe":
+			var ok: bool = host.farming.till(target)
+			if ok:
+				placed += 1
+				log_blocks.append("till %s" % target.cell)
+			target = {}
+			return ok
+		if k == "seed":
+			var ok2: bool = host.farming.plant(target, d.id)
+			if ok2:
+				inv.consume_hand(1)
+				placed += 1
+				log_blocks.append("plant %s %s" % [d.id, target.cell])
+			target = {}
+			return ok2
 	if k == "chest" or k == "station" or k == "backpack":
 		return _place_chest()          # a workbench, furnace or backpack stands like a chest
 	var b := _block_of(target.cell)

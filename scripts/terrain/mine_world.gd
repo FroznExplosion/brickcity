@@ -96,6 +96,17 @@ var _inv_walker_frozen := false
 ## Chests and the items lying in the world (Docs/Inventory.md 4, stage 5).
 var chests: MineChests = null
 var drops: DroppedItems = null
+## Farming (Docs/MineFarming.md): tilled plots, crops on the world clock.
+var farming: MineFarming = null
+## THE WORLD CLOCK (Docs/MineFarming.md 4): seconds played in this world,
+## saved with it (the world file's "time"). The sky's hour is its day part;
+## crops grow by it. Runs only while the world is open.
+var world_time := 0.30 * DAY_SECONDS
+var _time_saved := 0.0
+## The look line over the hotbar: the plot or crop looked at.
+var _farm_label: Label = null
+## --gate=farm's runner, held while it runs (a RefCounted).
+var _farm_gate: RefCounted = null
 ## What is in the hands: the selected slot, a gun or not (Docs/Inventory.md 10).
 var hands: MineHands = null
 ## Sky light on collapse pieces, drops and chests (Docs/MineWorld.md 19);
@@ -257,6 +268,10 @@ func _ready() -> void:
 	add_child(chests)
 	chests.setup(self, builder.inv, drops)
 	chests.sky = sky_lit
+	farming = MineFarming.new()
+	farming.name = "Farming"
+	add_child(farming)
+	farming.setup(self)
 	_build_item_icons()
 	debris = Debris.new()
 	debris.name = "Debris"
@@ -290,6 +305,10 @@ func _ready() -> void:
 			_run_gen_gate()
 		elif "--gate=menu" in OS.get_cmdline_user_args():
 			_run_menu_gate()
+		elif "--gate=farm" in OS.get_cmdline_user_args():
+			# Farming (Docs/MineFarming.md): scripts/farming/farm_gate.gd.
+			_farm_gate = preload("res://scripts/farming/farm_gate.gd").new()
+			_farm_gate.run(self)
 		elif "--gate=inventory" in OS.get_cmdline_user_args():
 			_run_inventory_gate()
 		elif "--gate=pbrwood" in OS.get_cmdline_user_args():
@@ -386,9 +405,12 @@ func generate(s: Dictionary) -> void:
 	_load_pieces()
 	_load_placed()
 	_load_inventory()
+	var plots := farming.load_world(_regions_dir(path_for_regions())) if farming != null else 0
 	# A one-file save to move to regions: the first save writes them all.
 	_edits_dirty = _migrate_old
 	_save_status = "%d changes loaded" % loaded if loaded > 0 else "new world"
+	if plots > 0:
+		_save_status += ", %d farm plots" % plots
 	var sea := float(settings.gen.get("sea_m", 20.0))
 	# The sea line is where trees stop; the water snaps it to a course below.
 	BrickWave.set_sea_level(sea)
@@ -614,6 +636,10 @@ func _place_player(feet: Vector3) -> void:
 		cam = parts.cam
 		pawn = parts.pawn
 		player = parts.player
+		# A fall onto a field tramples it (Docs/MineFarming.md).
+		pawn.landed.connect(func() -> void:
+				if farming != null and on_foot:
+					farming.landed(pawn.last_fall, player_feet_local()))
 		gun = parts.gun
 		view = parts.view
 		gun.on_structure_hit = _world_hit
@@ -1251,11 +1277,14 @@ func _process(delta: float) -> void:
 	if on_foot and pawn.feet().y < -500.0:
 		set_on_foot(true, Vector3(eye.x, 0.0, eye.z) + Vector3.UP * 300.0)
 	_day_night(delta, eye)
+	if farming != null:
+		farming.step(delta, eye)
 	_autosave(delta)
 	_hud_in -= delta
 	if _hud_in <= 0.0:
 		_hud_in = 0.2
 		_update_hud()
+		_update_farm_label()
 	# After the tiers (day and night, autosave, HUD), and this whole _process:
 	# a slow frame's process time past it is other nodes' (--gate=stop).
 	var q1 := Time.get_ticks_usec()
@@ -1311,10 +1340,13 @@ func _follow_far(eye: Vector3) -> void:
 ## (_eye_lights); `--no-sky-light`: the old single factor from the eye's
 ## depth.
 func _day_night(delta: float, eye: Vector3) -> void:
+	# The world clock runs whatever the sky does; a gate sets it itself.
+	if not _gate:
+		world_time += delta
 	if sky_hold:
 		return
 	if not _gate:
-		_time = fposmod(_time + delta / DAY_SECONDS, 1.0)
+		_time = fposmod(world_time / DAY_SECONDS, 1.0)
 	var a := (_time - 0.25) * TAU
 	var to_sun := Vector3(cos(a), sin(a), 0.35).normalized()
 	var height := sin(a)
@@ -1522,7 +1554,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			_show_readout = not _show_readout
 			_update_hud()
 		KEY_T:
-			_time = fposmod(_time + 1.0 / 24.0, 1.0)
+			# An hour on: the crops get it too (the clock moves, not just the sky).
+			world_time += DAY_SECONDS / 24.0
+			_time = fposmod(world_time / DAY_SECONDS, 1.0)
 
 
 ## The world generation menu, opened the way the pause menu opens
@@ -1945,6 +1979,12 @@ func _load_inventory() -> void:
 	survival = bool(world.get("survival", not bool(world.get("creative", true))))
 	var fl = world.get("felled", [])
 	_felled_load = fl if fl is Array else []
+	# The world clock (Docs/MineFarming.md 4); a world from before starts at
+	# the old morning hour.
+	world_time = maxf(float(world.get("time", 0.30 * DAY_SECONDS)), 0.0)
+	_time_saved = world_time
+	if not _gate:
+		_time = fposmod(world_time / DAY_SECONDS, 1.0)
 	inv.creative = not survival
 	if first and how_kit_added(inv):
 		_inv_dirty = true
@@ -1976,6 +2016,11 @@ func how_kit_added(inv: Inventory) -> bool:
 	for st in [&"workbench", &"furnace", &"grenade"]:
 		if inv.ensure_item(st):
 			print("[mine] %s added to the inventory" % st)
+			added = true
+	# Farming (Docs/MineFarming.md): a hoe and every crop's seed.
+	for it in [&"hoe", &"wheat_seeds", &"carrot", &"potato", &"beans", &"pumpkin_seeds", &"berries"]:
+		if ItemCatalog.has(it) and inv.ensure_item(it):
+			print("[mine] %s added to the inventory" % it)
 			added = true
 	return added
 
@@ -2023,8 +2068,9 @@ func save_edits(wait := false) -> void:
 		WorkerThreadPool.wait_for_task_completion(_save_task)
 		_save_task = -1
 	var fluid_at := BrickFluid.change_count()
-	if (not _edits_dirty and not _inv_dirty and not _world_dirty and fluid_at == _fluid_saved_at) \
-			or settings.is_empty():
+	var farm_dirty := farming != null and farming.store.has_dirty()
+	if (not _edits_dirty and not _inv_dirty and not _world_dirty and fluid_at == _fluid_saved_at
+			and not farm_dirty) or settings.is_empty():
 		return
 	_edits_dirty = false
 	_world_dirty = false
@@ -2035,7 +2081,9 @@ func save_edits(wait := false) -> void:
 		save_character()
 	# The world file: only what is the world's (stage 6).
 	var inv_save := {"format": 3, "survival": survival,
-			"felled": _trees.felled_list() if _trees != null else _felled_load}
+			"felled": _trees.felled_list() if _trees != null else _felled_load, "time": world_time}
+	_time_saved = world_time
+	var farm_regions: Array = farming.store.take_dirty() if farming != null else []
 	if chests != null:
 		inv_save["chests"] = chests.to_save()
 	if drops != null:
@@ -2083,6 +2131,7 @@ func save_edits(wait := false) -> void:
 			DirAccess.rename_absolute(rp + ".tmp", rp)
 		if migrate and all_written and FileAccess.file_exists(path):
 			DirAccess.remove_absolute(path)
+		FarmStore.write_regions(rdir, farm_regions)
 		var ip := _inventory_path(path)
 		var iv := FileAccess.open(ip + ".tmp", FileAccess.WRITE)
 		if iv != null:
@@ -2134,6 +2183,10 @@ func _autosave(delta: float) -> void:
 	_save_in -= delta
 	if _save_in <= 0.0:
 		_save_in = AUTOSAVE_SECONDS
+		# Time passing is a change: crops are settled against this clock, so a
+		# reload must not wind it back.
+		if absf(world_time - _time_saved) > 5.0:
+			_world_dirty = true
 		save_edits(false)
 
 
@@ -2176,6 +2229,25 @@ func _build_hud() -> void:
 	_hud.add_theme_constant_override("outline_size", 4)
 	_hud.add_theme_font_size_override("font_size", 14)
 	_hud_layer.add_child(_hud)
+	_farm_label = Label.new()
+	_farm_label.name = "FarmLook"
+	_farm_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_farm_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM)
+	_farm_label.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_farm_label.offset_top = -150
+	_farm_label.offset_bottom = -104
+	_farm_label.add_theme_color_override("font_color", Color(0.96, 0.97, 0.99))
+	_farm_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	_farm_label.add_theme_constant_override("outline_size", 4)
+	_farm_label.add_theme_font_size_override("font_size", 15)
+	_hud_layer.add_child(_farm_label)
+
+
+## The plot or crop looked at, over the hotbar (Docs/MineFarming.md 3).
+func _update_farm_label() -> void:
+	if _farm_label == null or farming == null or builder == null:
+		return
+	_farm_label.text = farming.look_text(builder.target) if builder.active else ""
 
 
 func _update_hud() -> void:

@@ -43,6 +43,8 @@ inline int bond_group(int m) {
         case MAT_LUSH_GRASS:
         case MAT_COLD_GRASS:
         case MAT_DARK_GRASS:
+        case MAT_FARMLAND:
+        case MAT_WET_FARMLAND:
             return BOND_MEDIUM;
         default:
             return BOND_STRONG;

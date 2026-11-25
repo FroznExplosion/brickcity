@@ -12,10 +12,14 @@ extends RefCounted
 ##   material (block: BrickTerrain material index, else -1),
 ##   fluid (1 water, 2 lava, 0 none), fluid_kind ("source" / "still").
 
-const KINDS := ["block", "fluid", "bucket", "source_bucket", "chest", "station", "tool", "backpack", "gun", "grenade", "misc"]
+const KINDS := ["block", "fluid", "bucket", "source_bucket", "chest", "station", "tool", "backpack", "gun", "grenade",
+		"hoe", "seed", "misc"]
 ## Which hand an item may be in (zylanntest's HandUse).
 const HANDS := ["any", "right", "off", "two"]
-const NOT_ITEMS := ["air", "bedrock"]
+## Tilled soil is made with a hoe, never laid; breaking it gives soil
+## (FARMLAND_GIVES, Docs/MineFarming.md).
+const NOT_ITEMS := ["air", "bedrock", "farmland", "wet farmland"]
+const FARMLAND_GIVES := &"soil"
 ## A bucket holds this many tiles of water: 3 bricks (Docs/MineWater.md 10).
 const BUCKET_TILES := 9
 
@@ -164,7 +168,8 @@ static func _complete(e: Dictionary) -> Dictionary:
 			out.max_stack = BLOCK_STACK
 	# A tool's own numbers (the Mega Pickaxe): how much one break clears and
 	# how often it repeats while held (MineBuilder._break_cells/_break_repeat).
-	for k in ["break_area", "break_repeat", "model"]:
+	# A seed's crop (Docs/MineFarming.md): what it grows into.
+	for k in ["break_area", "break_repeat", "model", "crop"]:
 		if e.has(k):
 			out[k] = e[k]
 	return out
@@ -197,6 +202,8 @@ static func kind(id: StringName) -> String:
 ## The block item that places terrain material `m`, or &"".
 static func block_item(m: int) -> StringName:
 	load_all()
+	if m == BrickTerrain.MAT_FARMLAND or m == BrickTerrain.MAT_WET_FARMLAND:
+		return FARMLAND_GIVES
 	return _by_material.get(m, &"")
 
 
