@@ -3140,6 +3140,8 @@ func _run_pbrwood_gate() -> void:
 	await _shot(UserPaths.DEV + "pbr_terrain_near_off.png")
 	var near_off := vp.get_texture().get_image()
 	_mat.set_shader_parameter("pbr_far_range", 60.0)
+	if "--measure" in OS.get_cmdline_user_args():
+		await _pbrwood_measure(look)
 	for sh in [["mid", 10.0], ["far", 40.0]]:
 		await look.call(float(sh[1]))
 		await _frames(90)
@@ -3175,6 +3177,37 @@ func _run_pbrwood_gate() -> void:
 	print("[pbr-gate] PBRWOOD-GATE %s (%d failed)%s" % ["PASS" if fails.is_empty() else "FAIL",
 			fails.size(), "" if fails.is_empty() else ": " + ", ".join(fails)])
 	get_tree().quit(0 if fails.is_empty() else 1)
+
+
+## --gate=pbrwood --measure: what the sets cost the GPU (Docs/PbrWood.md 8),
+## flat out like --gate=gpu (vsync and the fps cap off, in memory only),
+## from the near view and from a metre (the wall filling the picture): sets
+## on against off (pbr_far_range 0), three times each way in turn so the
+## heat's drift falls out. Only trustworthy with the editor closed and no
+## other runs (CLAUDE.md).
+func _pbrwood_measure(look: Callable) -> void:
+	var menu_settings := get_node_or_null(^"/root/MenuSettings")
+	if menu_settings != null:
+		menu_settings.set_value(&"vsync", 0, false)      # in memory: never saved
+		menu_settings.set_value(&"max_fps", 0, false)
+	for view_d in [3.0, 1.0]:
+		await look.call(view_d)
+		var d_gpu := 0.0
+		var d_frame := 0.0
+		for r in 3:
+			_mat.set_shader_parameter("pbr_far_range", 60.0)
+			await _frames(70)      # the overlay copies the ground's parameters once a second
+			var on: Dictionary = await _gpu_measure()
+			_mat.set_shader_parameter("pbr_far_range", 0.0)
+			await _frames(70)
+			var off: Dictionary = await _gpu_measure()
+			print(_gpu_line("%.0f m sets on, round %d" % [view_d, r + 1], on, {}))
+			print(_gpu_line("%.0f m sets off, round %d" % [view_d, r + 1], off, on))
+			d_gpu += float(on.gpu) - float(off.gpu)
+			d_frame += float(on.frame) - float(off.frame)
+		print("[pbr-cost] %.0f m: the sets cost %+.3f ms GPU, %+.3f ms frame (mean of 3)" % [view_d, d_gpu / 3.0, d_frame / 3.0])
+	_mat.set_shader_parameter("pbr_far_range", 60.0)
+	await look.call(3.0)
 
 
 func _run_look_gate() -> void:
