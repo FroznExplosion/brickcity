@@ -614,9 +614,11 @@ func _place_player(feet: Vector3) -> void:
 		player = parts.player
 		gun = parts.gun
 		view = parts.view
-		gun.on_structure_hit = _mine
+		gun.on_structure_hit = _world_hit
 		var s := AIServices.new()
 		s.world3d = get_world_3d()
+		# A grenade's blast reaches the ground through the services (Grenade.blast).
+		s.on_structure_hit = _world_hit
 		# No arsenal: the mine world's guns are hotbar items (MineHands,
 		# Docs/Inventory.md 10); the city and planets keep theirs.
 		kit = PlayerKit.attach(self, player, cam, gun, s, {"scripted": _gate, "arsenal": false})
@@ -718,6 +720,83 @@ func _origin_step() -> void:
 	origin_shift += d
 	shifts += 1
 	print("[mine] origin shift %d: %s m, the global origin is now terrain %s" % [shifts, -d, origin_shift])
+
+
+## Something hit the world: a blast (a grenade, ordnance: StructuralDamage's
+## `blast`) breaks the bricks round it; anything else is a shot (`_mine`).
+func _world_hit(point: Vector3, dir: Vector3, info) -> void:
+	if info is Dictionary and bool(info.get("blast", false)):
+		blast(point, clampf(float(info.get("radius", 1.2)), 0.8, 1.6))
+	else:
+		_mine(point, dir, info)
+
+
+## A BLAST at `point` (global): every whole brick in the box `radius` round it
+## goes, as the Mega Pickaxe's face does (BrickTerrain.find_bricks on a
+## worker, cleared by `_land_breaks`), and the chests in reach break.
+## The grenade itself (scripts/ai/grenade.gd) hurts the bodies near it.
+func blast(point: Vector3, radius: float) -> void:
+	var c := to_local(point)
+	if chests != null:
+		for key in chests.chests.keys():
+			if chests.box_of(chests.chests[key].block).get_center().distance_to(c) <= radius + 0.3:
+				chests.break_chest(key, builder != null and not builder.inv.creative)
+	if _break_jobs.size() >= MAX_BREAK_JOBS:
+		return
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var lo := Vector3i(floori((c.x - radius) / stud), floori((c.y - radius) / plate), floori((c.z - radius) / stud))
+	var hi := Vector3i(floori((c.x + radius) / stud), floori((c.y + radius) / plate), floori((c.z + radius) / stud))
+	var holder := [{}]
+	var task := WorkerThreadPool.add_task(func() -> void: holder[0] = BrickTerrain.find_bricks(lo, hi),
+			false, "grenade blast")
+	# The shots' job shape: [task, holder, origin, when, hole] (no pre-hole: -1).
+	_break_jobs.append([task, holder, c, Time.get_ticks_usec(), -1])
+	blasts += 1
+
+
+## Blasts set off (the gate's count).
+var blasts := 0
+
+
+## G, or LMB with grenades in the hand: one thrown where the crosshair is
+## (the arsenal's throw, without the arsenal: Docs/Inventory.md 10). From the
+## hand's stack if it holds grenades, else the first carried; creative never
+## runs out. False with none.
+func throw_grenade() -> bool:
+	var inv: Inventory = builder.inv
+	var from_at := {}
+	if inv.hand() != null and inv.hand().id == &"grenade":
+		from_at = inv.hand_addr()
+	else:
+		for a in inv.all_addrs():
+			var s := inv.get_slot(a)
+			if s != null and s.id == &"grenade" and a.area != &"chest":
+				from_at = a
+				break
+	if from_at.is_empty() or kit == null or pawn == null:
+		return false
+	if not inv.creative:
+		inv.take_from(from_at, false)
+	var c := _eye_camera()
+	var eye := c.global_position
+	var fwd := -c.global_transform.basis.z
+	var space := get_world_3d().direct_space_state
+	var ex: Array[RID] = [pawn.body.get_rid()]
+	var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(eye, eye + fwd * 25.0, Layers.GUN_MASK, ex))
+	var to: Vector3 = hit.position if not hit.is_empty() else eye + fwd * 25.0
+	if hit.is_empty():
+		var down := space.intersect_ray(PhysicsRayQueryParameters3D.create(to, to + Vector3.DOWN * 60.0,
+				Layers.PAWN_MASK, ex))
+		if not down.is_empty():
+			to = down.position
+	var g := Grenade.throw(kit.services, pawn, eye + fwd * 0.6, to, self)
+	g.damage = CombatScale.melee(1) * 2.5
+	grenades_thrown += 1
+	return true
+
+
+var grenades_thrown := 0
 
 
 ## The gun hit the ground: it breaks WHOLE BRICKS there -- the surface piece
@@ -1566,8 +1645,29 @@ func open_chest(key: String) -> void:
 		if _inv_screen != null:
 			_inv_screen.show_page("craft")
 		return
-	builder.inv.open_chest(key, chests.slots_of(key))
+	builder.inv.open_chest(key, chests.slots_of(key),
+			str(ItemCatalog.get_def(chests.item_of(key)).get("name", "Chest")))
 	toggle_inventory()
+
+
+## Shift + RMB on a backpack put down (zylanntest's): it is worn. If one was
+## worn already they swap -- yours stands where the other stood, its contents
+## in it. Its contents come along either way (they are the backpack's).
+func take_backpack(key: String) -> void:
+	if chests == null or not chests.chests.has(key):
+		return
+	var id := chests.item_of(key)
+	var block: Vector3i = chests.chests[key].block
+	var picked := ItemStack.make(id, 1)
+	picked.contents = chests.slots_of(key)
+	chests.remove(key)
+	var inv: Inventory = builder.inv
+	var old := inv.backpack
+	inv.set_slot(Inventory.addr(&"backpack"), picked)
+	if old != null:
+		chests.place(block, old.contents, true, old.id)
+	inv.changed.emit()
+	world_items_changed()
 
 
 ## The stations in reach of the player (the crafting list's).
@@ -1871,7 +1971,7 @@ func how_kit_added(inv: Inventory) -> bool:
 	if inv.ensure_item(&"chest", &"mega_pickaxe"):
 		print("[mine] chests added to the inventory")
 		added = true
-	for st in [&"workbench", &"furnace"]:
+	for st in [&"workbench", &"furnace", &"grenade"]:
 		if inv.ensure_item(st):
 			print("[mine] %s added to the inventory" % st)
 			added = true
@@ -2704,6 +2804,74 @@ func _run_inventory_gate() -> void:
 	check.call("... and the felled tree still gone (%s)" % felled_cell, felled_cell != Vector2i.MAX
 			and _trees.felled.has(felled_cell))
 	set_survival(false)
+	inv = builder.inv
+	# Grenades (the user, 2026-11-25): G throws one; its blast breaks the
+	# bricks round it (it crashed: no AI world here, Grenade._clear).
+	set_on_foot(false)
+	var ge := _eye()
+	var gc := Vector2i(floori(ge.x / stud), floori(ge.z / stud))
+	_fly_to(Vector3(ge.x, _ground_m(gc.x, gc.y) + 3.0, ge.z), Vector3(0, 0, -1))
+	walker.pitch = -0.7
+	await _frames(10)
+	var edits0 := BrickTerrain.get_edit_count()
+	var blasts0 := blasts
+	var thrown0 := grenades_thrown
+	await _key(KEY_G)
+	await _frames(150)
+	check.call("G throws a grenade (creative: from the storage's stack)", grenades_thrown == thrown0 + 1)
+	check.call("it went off: a blast in the bricks (%d -> %d edits), no crash" % [edits0, BrickTerrain.get_edit_count()],
+			blasts > blasts0 and BrickTerrain.get_edit_count() > edits0)
+	await _shot(UserPaths.DEV + "inv_grenade.png")
+	# A backpack put down (the user): opened, picked up -- swapped for the one
+	# worn -- and broken.
+	walker.pitch = -1.45
+	_fly_to(_eye() - Vector3(0, 1.6, 0) + Vector3(-2.0, 0, 0), Vector3(0, 0, -1))
+	await _frames(10)
+	var bag := Inventory.make_backpack(&"small_backpack")
+	bag.contents[0] = ItemStack.make(&"coal_ore", 7)
+	var held_b := inv.hand()
+	inv.hotbars[inv.active_hotbar][inv.active_slot] = bag
+	inv.changed.emit()
+	await _frames(3)
+	builder.update_target()
+	builder.place_target()
+	await _frames(5)
+	var bkey := ""
+	for k in chests.chests:
+		if chests.item_of(k) == &"small_backpack":
+			bkey = k
+	check.call("RMB with a backpack puts it down, out of the hand (creative too)", bkey != "" and inv.hand() == null)
+	builder.update_target()
+	builder.place_target()
+	await _frames(5)
+	check.call("RMB on it opens it: 9 slots, 'Small Backpack', its coal", inventory_open() and inv.area_size(&"chest") == 9
+			and inv.chest_title == "Small Backpack" and inv.chest_slots[0] != null and inv.chest_slots[0].count == 7)
+	await _shot(UserPaths.DEV + "inv_bag_open.png")
+	await _key(KEY_E)
+	var worn0 := inv.backpack
+	if bkey != "":
+		var bblock: Vector3i = chests.chests[bkey].block
+		take_backpack(bkey)
+		await _frames(3)
+		var lkey := MineChests.key_of(bblock)
+		check.call("picked up: the small one worn (its coal is the storage), the large one stands there with its things",
+				inv.backpack != null and inv.backpack.id == &"small_backpack" and inv.main[0] != null
+				and inv.main[0].id == &"coal_ore" and chests.item_of(lkey) == &"large_backpack"
+				and chests.slots_of(lkey) == worn0.contents)
+		take_backpack(lkey)
+		await _frames(3)
+		check.call("swapped back: the large one worn (27 slots), the small one down again",
+				inv.backpack != null and inv.backpack.id == &"large_backpack" and inv.backpack.contents == worn0.contents
+				and inv.area_size(&"main") == 27 and chests.item_of(lkey) == &"small_backpack")
+		var d0 := drops.count()
+		chests.break_chest(lkey, false)
+		await _frames(3)
+		var fell: ItemStack = drops.drops[-1].stack if drops.count() > d0 else null
+		check.call("broken: it falls as the small backpack, the coal still in it",
+				fell != null and fell.id == &"small_backpack" and fell.contents[0] != null and fell.contents[0].count == 7)
+		drops.clear()
+	inv.hotbars[inv.active_hotbar][inv.active_slot] = held_b
+	inv.changed.emit()
 	builder.set_active(false)
 	builder.gate_keys = false
 	print("[inv-gate] INV-GATE %s (%d failed)%s" % ["PASS" if fails.is_empty() else "FAIL",

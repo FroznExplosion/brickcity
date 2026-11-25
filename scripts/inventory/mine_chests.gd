@@ -110,8 +110,12 @@ func place(block: Vector3i, slots: Array = [], force := false, item: StringName 
 	var s := slots
 	if not is_container(item):
 		s = []
-	elif s.size() != Inventory.CHEST_SIZE:
-		s = Inventory._empty(Inventory.CHEST_SIZE)
+	elif s.size() != slot_count(item):
+		# A backpack keeps the very array it carried (its contents go with it).
+		if ItemCatalog.kind(item) == "backpack" and not s.is_empty():
+			s.resize(maxi(s.size(), slot_count(item)))
+		else:
+			s = Inventory._empty(slot_count(item))
 	var node := _node(block, item)
 	add_child(node)
 	if sky != null:
@@ -126,8 +130,33 @@ func slots_of(key: String) -> Array:
 	return chests[key].slots if chests.has(key) else []
 
 
+## A chest, or a BACKPACK put down (zylanntest's): both hold slots; a backpack's
+## are its own contents, so it can be picked up again with them, or swapped
+## for the one worn (mine_world.take_backpack).
 static func is_container(item: StringName) -> bool:
-	return ItemCatalog.kind(item) == "chest"
+	var k := ItemCatalog.kind(item)
+	return k == "chest" or k == "backpack"
+
+
+static func slot_count(item: StringName) -> int:
+	if ItemCatalog.kind(item) == "backpack":
+		return maxi(int(ItemCatalog.get_def(item).get("slots", 9)), 1)
+	return Inventory.CHEST_SIZE
+
+
+## Take a placed thing away without dropping anything (a backpack picked up).
+func remove(key: String) -> void:
+	if not chests.has(key):
+		return
+	var c: Dictionary = chests[key]
+	chests.erase(key)
+	if inv != null and inv.chest_key == key:
+		if host != null and host.has_method("inventory_open") and host.inventory_open():
+			host.toggle_inventory()
+		inv.close_chest()
+	if is_instance_valid(c.node):
+		(c.node as Node).queue_free()
+	_changed()
 
 
 func item_of(key: String) -> StringName:
@@ -197,6 +226,12 @@ func break_chest(key: String, drop_self: bool) -> void:
 	var all: Array = (c.slots as Array).filter(func(s): return s != null)
 	if drop_self:
 		all.append(ItemStack.make(c.get("item", &"chest"), 1))
+	if ItemCatalog.kind(c.get("item", &"chest")) == "backpack":
+		# A backpack falls as itself, its contents still in it (never lost,
+		# creative or not).
+		var bp := ItemStack.make(c.item, 1)
+		bp.contents = c.slots
+		all = [bp]
 	for s in all:
 		if drops != null:
 			var v := Vector3(rng.randf_range(-1.2, 1.2), rng.randf_range(2.0, 3.5), rng.randf_range(-1.2, 1.2))
@@ -293,6 +328,6 @@ func restore(saved) -> void:
 			raw = e.get("slots", [])
 		if not ItemCatalog.has(item):
 			continue
-		var slots := Inventory._empty(Inventory.CHEST_SIZE)
+		var slots := Inventory._empty(slot_count(item))
 		Inventory._load_array(slots, raw)
 		place(Vector3i(int(parts[0]), int(parts[1]), int(parts[2])), slots, true, item)

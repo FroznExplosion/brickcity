@@ -201,6 +201,10 @@ static func _model(d: Dictionary) -> Node3D:
 			_part(inner, _box(Vector3(0.46, 0.32, 0.12)), dark, Vector3(0, 0.3, 0.26))
 			for x in [-0.2, 0.2]:
 				_part(inner, _box(Vector3(0.08, 0.8, 0.06)), dark, Vector3(x, 0.45, -0.24))
+		"grenade":
+			_part(inner, _cyl(0.36, 0.36, 0.62), _mat(col, 0.5), Vector3(0, 0.31, 0))
+			_part(inner, _cyl(0.16, 0.16, 0.16), _mat(Color(0.75, 0.75, 0.78), 0.3), Vector3(0, 0.7, 0))
+			_part(inner, _box(Vector3(0.08, 0.45, 0.12)), _mat(Color(0.75, 0.75, 0.78), 0.3), Vector3(0.24, 0.55, 0))
 		"station":
 			if str(d.get("model", "")) == "furnace":
 				# A stone box, a dark mouth with a glow in it, a chimney.
