@@ -44,6 +44,15 @@ const MIX_C := {
 }
 const FLAT := [1.0, 0.0, 0.0]
 const TALL := [0.85, 0.10, 0.05]
+## About 10 % tall (the user, 2026-11-24).
+const TALL10 := [0.90, 0.07, 0.03]
+## A deeper band's own mix: bigger and taller blocks down in the caves.
+const MIX_DEEP := {
+	"2x4": 0.22, "2x6": 0.10, "2x2": 0.15, "3x4": 0.06, "3x6": 0.05, "3x3": 0.04, "2x3": 0.05,
+	"1x4": 0.04, "1x6": 0.03, "1x2": 0.18, "1x1": 0.08,
+}
+## The surface band the probe sees reaches only some metres under the top.
+const DEEP_M := 3.0
 
 
 func _initialize() -> void:
@@ -62,19 +71,17 @@ func _initialize() -> void:
 	BrickTerrain.set_gen_params(s.gen)
 
 	var areas: Array = _pick_areas()
+	var chosen := {"shapes": MIX_A, "heights": TALL10, "stagger": 0.0, "cave_stagger": 0.35, "aim": 0.3}
 	var variants: Array = [
 		{"name": "old pattern (bond_rect)", "mode": "bond"},
-		{"name": "A, no stagger, flat", "shapes": MIX_A, "heights": FLAT},
-		{"name": "A, stagger 0, flat, 1 try", "shapes": MIX_A, "heights": FLAT, "stagger": 0.0},
-		{"name": "A, stagger 0, flat, 6 tries", "shapes": MIX_A, "heights": FLAT, "stagger": 0.0, "tries": 6},
-		{"name": "A, stagger 0, tall, 6 tries", "shapes": MIX_A, "heights": TALL, "stagger": 0.0, "tries": 6},
-		{"name": "A, stagger 0, tall, 12 tries", "shapes": MIX_A, "heights": TALL, "stagger": 0.0, "tries": 12},
-		{"name": "A, s0, tall, 6 tries, seams x3", "shapes": MIX_A, "heights": TALL, "stagger": 0.0, "tries": 6, "try_seams": 3.0},
-		{"name": "A, s0.35, tall, 6 (caves weak)", "shapes": MIX_A, "heights": TALL, "stagger": 0.35, "tries": 6, "try_seams": 0.3},
-		{"name": "B (bigger), s0, tall, 6 tries", "shapes": MIX_B, "heights": TALL, "stagger": 0.0, "tries": 6},
-		{"name": "C (even), s0, tall, 6 tries", "shapes": MIX_C, "heights": TALL, "stagger": 0.0, "tries": 6},
-		{"name": "A, s0, tall, 6, cross 0", "shapes": MIX_A, "heights": TALL, "stagger": 0.0, "tries": 6, "cross": 0.0},
-		{"name": "A, s0, tall, 6, cross 0.5", "shapes": MIX_A, "heights": TALL, "stagger": 0.0, "tries": 6, "cross": 0.5},
+		_with(chosen, {"name": "one material a brick", "mixed": false}),
+		_with(chosen, {"name": "mixed, aim 0"}).merged({"aim": 0.0}, true),
+		_with(chosen, {"name": "CHOSEN: mixed, aim +30%"}),
+		_with(chosen, {"name": "mixed, aim +60%", "aim": 0.6}),
+		_with(chosen, {"name": "chosen, caves strong too", "cave_stagger": 0.0}),
+		_with(chosen, {"name": "chosen + deep band (from %.0f m)" % DEEP_M,
+				"bands": [{"below_m": DEEP_M, "shapes": MIX_DEEP, "heights": [0.80, 0.13, 0.07]}]}),
+		_with(chosen, {"name": "chosen, cross 0", "cross": 0.0}),
 	]
 	var t0 := Time.get_ticks_msec()
 	var res: Array = TerrainFit.run(areas, variants)
@@ -93,7 +100,7 @@ func _initialize() -> void:
 	# Shares against the targets, for the quota variants.
 	for i in res.size():
 		var v: Dictionary = variants[i]
-		if not v.has("shapes"):
+		if not v.has("shapes") or v.has("bands"):
 			_shares_plain(res[i])
 			continue
 		var r: Dictionary = res[i]
@@ -151,6 +158,12 @@ func _pick_areas() -> Array:
 					best[i] = t
 	print("[fit] areas: steepest %s (%.0f plates of relief), grassy %s, highest %s (mean %.0f)" % [best[0], score[0], best[1], best[2], score[2]])
 	return best
+
+
+func _with(base: Dictionary, over: Dictionary) -> Dictionary:
+	var d := base.duplicate()
+	d.merge(over, true)
+	return d
 
 
 func _shares_plain(r: Dictionary) -> void:
