@@ -1277,5 +1277,12 @@ passed `--gate=deep` and `--gate=handover`), and fire into falling sand.
   view. Not worth its memory (a CPU copy of every block's arrays, a second
   GPU copy). (GDScript trap met on the way: append_array on a packed array
   held in an Array appends to a copy; append to a local and store it back.)
-  Left, if wanted: a coarser step for ring 0 (fewer triangles at 45-180 m;
-  a look change, the user's call).
+  DISTANT GROUND DETAIL (the user, 2026-11-25: detailed by default,
+  configurable): a Video setting, High / Medium / Low (TerrainCoarse.detail;
+  each level samples every far block 2x coarser). Changing it in play lays a
+  new far tier out on the workers and swaps it in (_follow_far, as a
+  re-anchor). Far triangles 327k / 116k / 39k. `--gate=gpu --far-detail=N`
+  (quiet, not held back): the far tier High 0.78 ms on foot, 1.10 ms 25 m up;
+  Low 0.12 and 0.22 -- the frame's GPU 7.04 -> 5.79 and 4.80 -> 3.67 ms.
+  `--gate=gpu --header-only --far-detail=N` prints the tier's counts and
+  saves mine_far_detail_N.png (over the trees, across the hand-over).
