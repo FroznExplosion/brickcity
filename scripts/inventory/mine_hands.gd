@@ -35,6 +35,8 @@ var off_gun: GunController = null
 var off_held: ItemStack = null
 var _off_view: Node3D
 var _off_kick := 0.0
+## RMB down, from its events (Input's polled state may lag a synthesised one).
+var _rmb_down := false
 ## Where the off-hand gun is drawn, in the camera's frame, and how long.
 const OFF_POS := Vector3(-0.15, -0.12, -0.34)
 const OFF_LENGTH := 0.26
@@ -214,7 +216,7 @@ func _process(delta: float) -> void:
 	if off_held != null and off_gun.gun != null:
 		var free: bool = host.get("_menu") == null and not host.inventory_open()
 		var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED or PlayerCamera.hands_off
-		down = free and captured and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)
+		down = free and captured and (_rmb_down or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT))
 		if off_gun.ammo <= 0 and not off_gun.is_reloading():
 			off_gun.reload()
 	off_gun.set_trigger(down)
@@ -227,6 +229,8 @@ func _process(delta: float) -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_RIGHT:
+		_rmb_down = event.pressed
 	# R reloads the off-hand gun too (the main gun's reload is the pawn's).
 	if off_held != null and event is InputEventKey and event.pressed and not event.echo \
 			and (event as InputEventKey).keycode == KEY_R:

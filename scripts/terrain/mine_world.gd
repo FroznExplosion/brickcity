@@ -2581,9 +2581,12 @@ func _offhand_gun_checks(check: Callable, rifle: ItemStack) -> void:
 			and hands.off_gun.gun != null and player.hold_aim)
 	var off0: int = hands.off_gun.ammo
 	var placed0: int = builder.placed
-	await _mouse_tap(MOUSE_BUTTON_RIGHT, 25)
-	check.call("4b: RMB fires the off-hand pistol (%d -> %d rounds), nothing laid" % [off0, hands.off_gun.ammo],
-			hands.off_gun.ammo < off0 and builder.placed == placed0)
+	# Taps, not a hold: a pistol that charges fires on the release (GunFireMode).
+	for t in 3:
+		await _mouse_tap(MOUSE_BUTTON_RIGHT, 6)
+		await _frames(12)
+	check.call("4b: RMB fires the off-hand pistol (%d -> %d rounds, %s), nothing laid" % [off0, hands.off_gun.ammo,
+			str(hands.off_gun.fire_mode())], hands.off_gun.ammo < off0 and builder.placed == placed0)
 	await _shot(UserPaths.DEV + "inv_offhand_pistol.png")
 	await _key(KEY_7)
 	await _frames(20)
@@ -3095,7 +3098,8 @@ func _run_inventory_gate() -> void:
 		await _frames(10)
 		_mine(to_global(box.get_center()), Vector3.DOWN, null)
 		await _frames(5)
-		check.call("a shot breaks the chest, its soil drops (creative: not the chest)",
+		check.call("a shot breaks the chest, its soil drops (creative: not the chest) (chests %d, drops %s)" % [
+				chests.count(), str(drops.drops.map(func(d): return (d.stack as ItemStack).id))],
 				chests.count() == 0 and drops.count() == 1
 				and (drops.drops[0].stack as ItemStack).id == &"soil")
 		await _frames(60)
@@ -3116,7 +3120,11 @@ func _run_inventory_gate() -> void:
 			var s := inv.get_slot(a)
 			if s != null and s.id == &"soil":
 				now_has += s.count
-		check.call("walking over it picks it up (soil %d -> %d)" % [had, now_has],
+		var free_n := 0
+		for a in inv.all_addrs():
+			if a.area in [&"hotbar_0", &"hotbar_1", &"main"] and inv.get_slot(a) == null:
+				free_n += 1
+		check.call("walking over it picks it up (soil %d -> %d; %d free slots, drops %d)" % [had, now_has, free_n, drops.count()],
 				drops.count() == 0 and now_has > had)
 		# The ground under a second chest goes: it breaks.
 		_fly_to(box.get_center() + Vector3(0, 2.4, 0), Vector3(0, 0, -1))
