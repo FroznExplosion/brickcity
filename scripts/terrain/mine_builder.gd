@@ -88,6 +88,8 @@ var _hold_break := 0.0
 var _pick_jobs: Array = []
 const MAX_PICK_JOBS := 2
 var _hold_place := 0.0
+## RMB held down: place_target is repeating (a lever is turned once a press).
+var rmb_repeat := false
 ## X: when it went down (ms), or -1; and whether this hold already swapped the off-hand.
 var _x_down := -1
 var _x_held_used := false
@@ -284,6 +286,8 @@ func _process(delta: float) -> void:
 		_x_held_used = true
 		inv.toggle_offhand()
 	if not active:
+		if host.wiring != null:
+			host.wiring.show_wrench(false, {})
 		return
 	update_target()
 	var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
@@ -296,7 +300,13 @@ func _process(delta: float) -> void:
 		_hold_place -= delta
 		if _hold_place <= 0.0:
 			place_target()
+			rmb_repeat = true
 			_hold_place = REPEAT
+	else:
+		rmb_repeat = false
+	# The wrench (Docs/MineWiring.md 14): cables through walls, the readout.
+	if host.wiring != null:
+		host.wiring.show_wrench(hand_kind() == "wrench", target)
 
 
 # ---------------------------------------------------------------------------
@@ -638,10 +648,23 @@ func place_target() -> bool:
 		target = {}
 		return true
 	if target.has("device"):
-		# RMB on a lever turns it, whatever is in the hand (Docs/MineWiring.md).
-		var used: bool = host.wiring.use_device(target.device)
+		# RMB on a device, once a press (Docs/MineWiring.md): a lever turns, a
+		# button presses, a delay steps; with the wrench a gate turns, and
+		# shift takes the device back.
+		if rmb_repeat:
+			return false
+		var dev: Vector3i = target.device
+		var used := false
+		if hand_kind() == "wrench" and Input.is_key_pressed(KEY_SHIFT):
+			var it: StringName = host.wiring.devices[dev].item
+			used = host.wiring.remove_device(dev, false)
+			if used and not inv.creative:
+				inv.add_item(ItemStack.make(it, 1))
+				inv.changed.emit()
+		else:
+			used = host.wiring.use_device(dev, "turn" if hand_kind() == "wrench" else "use")
 		if used:
-			log_blocks.append("use device %s" % target.device)
+			log_blocks.append("use device %s" % dev)
 		target = {}
 		return used
 	var d := hand_def()
@@ -850,8 +873,11 @@ func _place_wiring(k: String, id: StringName) -> bool:
 	var ok := false
 	if k == "wire":
 		ok = host.wiring.place_cable(cell)
-	elif not _box_hits_player(host.wiring.device_box(cell)) and not host.chests.overlaps(host.wiring.device_box(cell)):
-		ok = host.wiring.place_device(cell, id)
+	elif not _box_hits_player(host.wiring.device_box(cell, id)) and not host.chests.overlaps(host.wiring.device_box(cell, id)):
+		# A device faces away from the player placing it.
+		var cam: Camera3D = host._eye_camera()
+		var f := MineWiring.facing_of(host.global_transform.basis.inverse() * -cam.global_transform.basis.z) if cam != null else 0
+		ok = host.wiring.place_device(cell, id, false, false, f)
 	if not ok:
 		return false
 	inv.consume_hand(1)
