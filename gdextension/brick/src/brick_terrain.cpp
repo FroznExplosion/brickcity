@@ -5954,45 +5954,32 @@ static bool sample_section(int tx, int sy, int tz, TileSample &out) {
     return true;
 }
 
-// The region fit's cells (terrain_fit.cpp): the generator's, from the kept
-// tiles and sections, never the edits.
+// The region fit's cells (terrain_fit.cpp): the generator's, never the edits.
+// From the kept tiles and sections where they are kept; otherwise made here,
+// only the columns and plates asked for, by the formula sample_tile and
+// sample_section use (a column's biome, then a material a course up to its
+// bound plate) -- not a whole sample with its derived arrays, nor a section's
+// flood fill, which a neighbour's slice was costing.
+static thread_local bool t_gen_made_only = false;
+void brick::set_generated_made_only(bool on) { t_gen_made_only = on; }
+
 bool brick::generated_cells(int tx, int tz, int y_lo, int y_hi, std::vector<uint8_t> &vox,
         std::vector<int16_t> &gtop, uint32_t *field_out, int lx0, int lx1, int lz0, int lz1) {
     lx0 = std::max(lx0, 0);
     lz0 = std::max(lz0, 0);
     lx1 = std::min(lx1, TILE);
     lz1 = std::min(lz1, TILE);
-    if (!biomes_on() || y_hi <= y_lo) {
+    if (!biomes_on() || y_hi <= y_lo || lx1 <= lx0 || lz1 <= lz0) {
         return false;
     }
     const uint32_t field = (uint32_t)(tile_version(tx, tz) >> 32);
     if (field_out) {
         *field_out = field;
     }
-    const uint64_t gkey = (uint64_t)tile_key(tx, tz);
-    std::shared_ptr<const GenTile> gen = gen_find(g_gen, gkey, field);
-    if (!gen) {
-        TileSample tmp;
-        sample_tile(g_field, tx, tz, tmp);
-        gen = gen_find(g_gen, gkey, field);
-        if (!gen) {
-            return false;
-        }
-    }
     const int ny = y_hi - y_lo;
-    // Only the columns asked for are written; the rest of `vox` is stale.
     vox.resize((size_t)TILE * TILE * ny);
-    for (int yp = 0; yp < ny; ++yp) {
-        for (int lz = lz0; lz < lz1; ++lz) {
-            std::memset(&vox[(size_t)lx0 + TILE * ((size_t)lz + TILE * (size_t)yp)], MAT_AIR, (size_t)(lx1 - lx0));
-        }
-    }
-    gtop.resize((size_t)TILE * TILE);
-    for (int lz = 0; lz < TILE; ++lz) {
-        for (int lx = 0; lx < TILE; ++lx) {
-            gtop[(size_t)lx + TILE * lz] = gen->top[TileSample::idx(lx, lz)];
-        }
-    }
+    gtop.assign((size_t)TILE * TILE, (int16_t)INT16_MIN);
+    std::vector<uint8_t> done((size_t)ny, 0);   // plates filled from a kept tile or section
     auto copy = [&](const GenTile &g, int lo, int hi) {
         lo = std::max(lo, y_lo);
         hi = std::min(hi, y_hi);
@@ -6001,35 +5988,70 @@ bool brick::generated_cells(int tx, int tz, int y_lo, int y_hi, std::vector<uint
                 const uint8_t *src = &g.vox[(size_t)(MARGIN + lx0) + SPAN * ((size_t)(yp - g.gy0) + (size_t)g.gys * (lz + MARGIN))];
                 std::memcpy(&vox[(size_t)lx0 + TILE * ((size_t)lz + TILE * (size_t)(yp - y_lo))], src, (size_t)(lx1 - lx0));
             }
+            done[(size_t)(yp - y_lo)] = 1;
         }
     };
-    copy(*gen, gen->gy0, gen->gy0 + gen->gys);
-    if (y_lo < gen->gy0) {
-        const int under_hi = std::min(y_hi, gen->gy0);
-        // The deep sections' cells, deep tier or not: the fit is of what
-        // the generator makes, whatever has been sampled or dug so far.
-        {
-            for (int yp = 0; yp < under_hi - y_lo; ++yp) {
-                for (int lz = lz0; lz < lz1; ++lz) {
-                    std::memset(&vox[(size_t)lx0 + TILE * ((size_t)lz + TILE * (size_t)yp)], 255, (size_t)(lx1 - lx0));
-                }
+    const uint64_t gkey = (uint64_t)tile_key(tx, tz);
+    std::shared_ptr<const GenTile> gen = t_gen_made_only ? nullptr : gen_find(g_gen, gkey, field);
+    if (gen) {
+        for (int lz = lz0; lz < lz1; ++lz) {
+            for (int lx = lx0; lx < lx1; ++lx) {
+                gtop[(size_t)lx + TILE * lz] = gen->top[TileSample::idx(lx, lz)];
             }
-            for (int sy = floor_div(y_lo, DEEP_SECTION_PLATES); sy <= floor_div(under_hi - 1, DEEP_SECTION_PLATES); ++sy) {
-                const uint64_t skey = (uint64_t)tile_key(tx, tz) * 0x9E3779B97F4A7C15ULL ^ (uint64_t)(uint32_t)sy;
-                std::shared_ptr<const GenTile> sec = gen_find(g_gen_sec, skey, field);
-                if (!sec) {
-                    TileSample tmp;
-                    if (!sample_section(tx, sy, tz, tmp)) {
-                        continue;   // under the bedrock: no cells
-                    }
-                    sec = gen_find(g_gen_sec, skey, field);
-                    if (!sec) {
-                        continue;
-                    }
+        }
+        copy(*gen, gen->gy0, gen->gy0 + gen->gys);
+    }
+    // Kept deep sections under it (their own plates, not the guard ones).
+    for (int sy = floor_div(y_lo, DEEP_SECTION_PLATES); sy <= floor_div(y_hi - 1, DEEP_SECTION_PLATES); ++sy) {
+        const uint64_t skey = (uint64_t)tile_key(tx, tz) * 0x9E3779B97F4A7C15ULL ^ (uint64_t)(uint32_t)sy;
+        std::shared_ptr<const GenTile> sec = t_gen_made_only ? nullptr : gen_find(g_gen_sec, skey, field);
+        if (sec) {
+            copy(*sec, sec->gy0 + 1, sec->gy0 + sec->gys - 1);
+        }
+    }
+    bool rest = false;
+    for (uint8_t d : done) {
+        rest = rest || d == 0;
+    }
+    if (!rest && gen) {
+        return true;
+    }
+    // The rest from the generator, a column at a time.
+    const uint32_t seed = g_field.seed;
+    const int bed = biome_bedrock_plate();
+    for (int lz = lz0; lz < lz1; ++lz) {
+        for (int lx = lx0; lx < lx1; ++lx) {
+            const int gx = tx * TILE + lx, gz = tz * TILE + lz;
+            const BColumn c = biome_column(g_field.seed, gx, gz);
+            int last_b = INT_MIN;
+            uint8_t last_v = (uint8_t)MAT_AIR;
+            for (int yp = y_lo; yp < y_hi; ++yp) {
+                if (done[(size_t)(yp - y_lo)]) {
+                    continue;
                 }
-                // Its own plates (one guard plate sampled each side); the
-                // surface tile's are the surface's.
-                copy(*sec, sec->gy0 + 1, std::min(sec->gy0 + sec->gys - 1, gen->gy0));
+                uint8_t v = (uint8_t)MAT_AIR;
+                if (yp < bed) {
+                    v = 255;   // under the bedrock: no cell
+                } else if (yp <= c.bound_p) {
+                    const int yb = floor_div(yp, PLATES_PER_CELL);
+                    if (yb != last_b) {
+                        last_b = yb;
+                        last_v = (uint8_t)biome_cell(c, seed, gx, yb, gz);
+                    }
+                    v = last_v;
+                }
+                vox[(size_t)lx + TILE * ((size_t)lz + TILE * (size_t)(yp - y_lo))] = v;
+            }
+            if (!gen) {
+                // The generated top: the highest solid course under the
+                // bound, its top plate (none above the bound).
+                int yb = floor_div(c.bound_p, PLATES_PER_CELL);
+                const int floor_b = floor_div(bed, PLATES_PER_CELL);
+                while (yb >= floor_b && biome_cell(c, seed, gx, yb, gz) == MAT_AIR) {
+                    --yb;
+                }
+                gtop[(size_t)lx + TILE * lz] = (int16_t)(yb >= floor_b
+                        ? std::min(c.bound_p, yb * PLATES_PER_CELL + PLATES_PER_CELL - 1) : bed - 1);
             }
         }
     }

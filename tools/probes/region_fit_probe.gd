@@ -194,6 +194,20 @@ func _check_lookup(areas: Array) -> void:
 				print("[fit]     ", e)
 			if int(r.wrong) > 0 or int(r.missing) > 0 or int(r.checked) == 0:
 				failures += 1
+	# The fit's cells made straight from the generator equal the kept ones
+	# (tile and deep sections, built first so they are kept).
+	var sp := BrickTerrain.get_deep_section_plates()
+	for a: Vector2i in areas:
+		var t: Vector2i = a + Vector2i(2, 2)
+		BrickTerrain.build_tile(t.x, t.y)
+		var floor_p := BrickTerrain.deep_top(t.x, t.y)
+		var sy := floori(float(floor_p - 1) / sp)
+		BrickTerrain.build_section(t.x, sy, t.y)
+		BrickTerrain.build_section(t.x, sy - 1, t.y)
+		var g: Dictionary = TerrainFit.check_generated(t, (sy - 1) * sp, BrickTerrain.surface_plate(t.x * 32, t.y * 32) + 60)
+		print("[fit] generated cells %s: %d of %d differ, %d tops differ" % [t, g.cells_differ, g.cells, g.tops_differ])
+		if int(g.cells_differ) > 0 or int(g.tops_differ) > 0:
+			failures += 1
 	print("[fit] lookup %s" % ("PASS" if failures == 0 else "FAIL (%d areas disagree)" % failures))
 
 

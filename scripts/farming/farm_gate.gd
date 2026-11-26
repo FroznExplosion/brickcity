@@ -39,6 +39,13 @@ extends RefCounted
 ##             pulled with LMB, the crop staying; mulch goes on; an animals'
 ##             trample turns a plot to dirt in the world; with trouble on,
 ##             three days bring events to the open field.
+##   stage 6   a seed's traits go into its plant and come back in its
+##             harvest's seeds (the label shows them); corn by beans is a
+##             companion; a bare plot between two ripe wheat plants sprouts a
+##             cross with the better traits; a biome crop is refused outside
+##             its biomes; four 3-star pumpkins merge into a giant (chance set
+##             to 1 here), drawn as one, and picked for many pumpkins
+##             (user://dev/farm_giant.png).
 ##   save      the world generated again (saved, loaded): the plots, their
 ##             state and the clock come back.
 ##   pictures  user://dev/farm_field.png, farm_guide.png.
@@ -426,13 +433,123 @@ func run(host: Node) -> void:
 	check("the switch is saved with the world (farm_trouble: %s)" % str(wf.get("farm_trouble", "?") if wf is Dictionary else "?"),
 			wf is Dictionary and wf.get("farm_trouble", true) == false)
 
+	# --- stage 6: traits, companions, crossing, biome crops, giants
+	var t6: float = w.world_time
+	var clear := func(b: Vector3i) -> Dictionary:
+		var q := f.store.get_plot(b)
+		if q.is_empty():
+			f.till({"cell": Vector3i(b.x * 2, top, b.z * 2), "normal": Vector3i.UP})
+			q = f.store.get_plot(b)
+		if not q.is_empty():
+			FarmPlant.settle(q, w.world_time)
+			q.crop = &""
+			q.giant = 0
+			q.fert = 90.0
+			q.biome = -1             # a neutral biome: stars do not hang on the spawn's
+		return q
+	# Traits: seeds with growth 5, yield 2 on a plot; its harvest's seeds keep them.
+	var tw: Vector3i = rect[3]           # wet (by the channel): ripe in time
+	clear.call(tw)
+	f.plant({"cell": Vector3i(tw.x * 2, top, tw.z * 2)}, &"wheat_seeds", {"g": 5, "y": 2})
+	check("a seed's traits go into its plant (G%d Y%d)" % [int(f.store.get_plot(tw).tg), int(f.store.get_plot(tw).ty)],
+			int(f.store.get_plot(tw).tg) == 5 and int(f.store.get_plot(tw).ty) == 2)
+	# Companions: corn beside beans.
+	var cb: Vector3i = field[6]
+	var bb: Vector3i = field[7]
+	clear.call(cb)
+	clear.call(bb)
+	f.plant({"cell": Vector3i(cb.x * 2, top, cb.z * 2)}, &"corn")
+	f.plant({"cell": Vector3i(bb.x * 2, top, bb.z * 2)}, &"beans")
+	f.refresh(cb)
+	check("corn beside beans has a companion", bool(f.store.get_plot(cb).companion))
+	# Crossing: wheat (G1) and wheat (Y2) either side of a bare plot, in the
+	# wet column by the channel (N-S); the bare plot looked at now and later.
+	var xa: Vector3i = field[2]
+	var xm: Vector3i = rect[0]
+	var xb: Vector3i = rect[1]
+	for q in [xa, xm, xb]:
+		clear.call(q)
+	f.plant({"cell": Vector3i(xa.x * 2, top, xa.z * 2)}, &"wheat_seeds", {"g": 1})
+	f.plant({"cell": Vector3i(xb.x * 2, top, xb.z * 2)}, &"wheat_seeds", {"y": 2})
+	f.refresh(xm)
+	# Biome crops: cactus fruit only where it grows.
+	var cactus := FarmCrops.get_crop(&"cactus_fruit")
+	var cf: Vector3i = field[5]
+	var here_ok := MineFarming.grows_here(cactus, BrickTerrain.biome_at(cf.x * 2, cf.z * 2))
+	var cq: Dictionary = clear.call(cf)
+	cq.biome = BrickTerrain.biome_at(cf.x * 2, cf.z * 2)
+	var planted_cactus := f.plant({"cell": Vector3i(cf.x * 2, top, cf.z * 2)}, &"cactus_fruit")
+	check("cactus fruit planted only where it grows (here: %s, planted: %s)" % [here_ok, planted_cactus],
+			planted_cactus == here_ok)
+	# Giants: four pumpkins in a 2x2, wet, rich, kept.
+	var g4: Array[Vector3i] = [field[0], field[1], field[3], field[4]]
+	for q in g4:
+		clear.call(q)
+		f.plant({"cell": Vector3i(q.x * 2, top, q.z * 2)}, &"pumpkin_seeds")
+	MineFarming.giant_chance = 1.0
+	w.world_time += FarmPlant.DAY * 4.0
+	await w._frames(10)
+	f.settle_all()
+	for q in g4 + [xm, cb]:
+		f.refresh(q)
+	MineFarming.giant_chance = 0.4
+	var gstate := []
+	for q in g4:
+		gstate.append(int(f.store.get_plot(q).get("giant", 0)))
+	check("four 3-star pumpkins merge into a giant (%s, %d giants)" % [str(gstate), f.giants],
+			gstate.count(1) == 1 and gstate.count(2) == 3)
+	check("the giant is drawn as one (%s)" % str(f.draw._mmis.keys().filter(func(k): return str(k).contains("giant"))),
+			f.draw._mmis.has("pumpkin:giant"))
+	var xq := f.store.get_plot(xm)
+	var xtr := FarmPlant.traits(xq)
+	check("a cross sprouted between the two ripe wheat plants (%s, G%d Y%d H%d)" % [xq.crop, xtr.x, xtr.y, xtr.z],
+			xq.crop == &"wheat" and xtr.x >= 1 and xtr.y >= 2)
+	# The giant's picture, then picked.
+	var gm: Vector3 = f._top_middle(field[0]) + Vector3(stud, 0, stud)
+	var gcam := gm + Vector3(-3.0, 2.2, -3.0)
+	var gd := (gm - gcam).normalized()
+	w._fly_to(gcam - Vector3(0, 1.6, 0), Vector3(gd.x, 0, gd.z))
+	w.walker.pitch = asin(clampf(gd.y, -1.0, 1.0))
+	if w._hud_layer != null:
+		w._hud_layer.visible = false
+	await w._frames(50)
+	await w._shot(UserPaths.DEV + "farm_giant.png")
+	if w._hud_layer != null:
+		w._hud_layer.visible = true
+	var pk0 := _count(inv, &"pumpkin")
+	_hold(&"hoe")
+	w.builder.target = {"cell": Vector3i(field[4].x * 2, top, field[4].z * 2), "normal": Vector3i.UP}
+	w.builder.place_target()
+	var pk1 := _count(inv, &"pumpkin")
+	check("picking the giant gives many pumpkins (%d)" % (pk1 - pk0), pk1 - pk0 >= 8
+			and int(f.store.get_plot(field[0]).get("giant", 0)) == 0)
+	# The traits wheat: ripe by now; its harvest's seeds carry G5 Y2 (or one better).
+	var tq := f.store.get_plot(tw)
+	FarmPlant.settle(tq, w.world_time)
+	var ripe_tw := FarmPlant.is_ripe(tq)
+	w.builder.target = {"cell": Vector3i(tw.x * 2, top, tw.z * 2), "normal": Vector3i.UP}
+	w.builder.place_target()
+	# The replant uses the harvest's own seeds (the bags may be full by now:
+	# a traits stack needs a slot of its own).
+	var rq := f.store.get_plot(tw)
+	var rtr := FarmPlant.traits(rq)
+	check("its harvest's seeds carry the traits: replanted G%d Y%d H%d (ripe: %s)" % [rtr.x, rtr.y, rtr.z, ripe_tw],
+			ripe_tw and rq.crop == &"wheat" and int(rq.stage) == 0 and rtr.x >= 5 and rtr.y >= 2)
+	var lab := ItemCatalog.label(ItemStack.make(&"wheat_seeds", 3, {"g": 5, "y": 2}))
+	check("a seed's label shows its traits: \"%s\"" % lab, lab.contains("G5 Y2 H0"))
+
 	# --- away: out of reach, the clock runs, the plot is not touched; back, it
 	# is where one settle puts it
 	var away_b := field[4]
 	FarmPlant.settle(f.store.get_plot(away_b), w.world_time)
 	var before: Dictionary = f.store.get_plot(away_b).duplicate()
 	w._fly_to(mid + Vector3(400.0, 60.0, 0.0), Vector3.FORWARD)
-	await w._frames(40)
+	await w._frames(10)
+	# Until the farm has seen the player go (its in-reach list, once a second).
+	for _i in 600:
+		if not f._near.has(away_b):
+			break
+		await w._frames(1)
 	w.world_time += FarmPlant.DAY * 0.8
 	await w._frames(90)
 	check("while away the plot was not settled", is_equal_approx(float(f.store.get_plot(away_b).t), float(before.t)))
@@ -525,6 +642,16 @@ func _fields_settle(f: MineFarming) -> void:
 			break
 		await w._frames(1)
 	await w._frames(2)
+
+
+## Seeds of `id` carrying growth 5+ and yield 2+ (a traits stack).
+func _count_traits(inv: Inventory, id: StringName) -> int:
+	var n := 0
+	for a in inv.all_addrs():
+		var st := inv.get_slot(a)
+		if st != null and st.id == id and int(st.data.get("g", 0)) >= 5 and int(st.data.get("y", 0)) >= 2:
+			n += st.count
+	return n
 
 
 func _count(inv: Inventory, id: StringName) -> int:

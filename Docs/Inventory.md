@@ -4,7 +4,13 @@ Ported from zylanntest's `game/inventory/` (its README is the design this
 follows), shaped to brickcity: content packs, MenuScreen, no renderer
 read-backs, and the arsenal left alone.
 
-Status: stages 1-12 built (round three, 2026-11-24: guns as items, materials and shapes, Terraria crafting); 2026-11-25 Minecraft's menus and Bedrock's recipe book (section 14).
+Status: stages 1-12 built (round three, 2026-11-24: guns as items, materials and shapes, Terraria crafting);
+2026-11-25 Minecraft's menus and Bedrock's recipe book (section 14); round four (2026-11-25: off-hand
+up/down, quick slot, two-handed guns, off-hand pistol) -- see its section in 4.
+
+**Sections 1 and 2 below are the first round's.** There is no B mode switch any
+more (stage 10): the selected slot is in the hands, a gun or anything else;
+B is now the quick slot and C the off-hand (round four).
 
 ## 1. Two systems, one pair of hands
 
@@ -344,6 +350,71 @@ and runs its own hands. Nothing here changes how a gun fires
 
 Later: multiplayer authority.
 
+### Round four: both hands and the quick slot (2026-11-25, decided with the user)
+
+The question was how guns, the off-hand and aiming fit together. Rejected
+on the way: "a two-handed item hides the off-hand" alone (a pistol could
+never aim with anything in the off-hand, since RMB would be the off-hand's);
+everything two-handed (the off-hand would be pointless); a combat/building
+mode switch (B, the old way: guns not in the inventory again). The two
+hotbars stay the "modes" the player wants: bar 1 combat, bar 2 building is
+a layout, not a rule.
+
+**What was built:**
+
+- **Off-hand up or down** (`Inventory.offhand_up`, saved). C toggles it
+  (pad: hold LB). Down: RMB is the main hand's (aim a gun, place a block) --
+  plain Minecraft minus its off-hand. Up, with something in the active
+  off-hand slot: RMB uses the off-hand item instead -- places its block,
+  device or chest, fires its pistol. Nothing is ever hidden by a rule the
+  player did not choose. X held still picks which of the two off-hand
+  slots (pad: hold Y).
+- **Two-handed items lower the off-hand by themselves**: a gun of any class
+  but pistol and revolver (`hand: "two"`) in the main hand. The flag is
+  kept, so going back to a one-handed item brings the off-hand back up.
+  `Inventory.offhand()` is the off-hand in use: null while down, empty or
+  lowered.
+- **What may go in the off-hand** (`hand`): `any` (the default for a pack
+  item with none) = blocks, pistols, revolvers, every wiring device and
+  cable, chests, buckets and fluids, pickaxes, seeds and crops; `off` =
+  shields (none yet); `right` = the wrench, grenades, hoe, scythe, watering
+  can, backpacks, stations; `two` = the other guns. RMB with a non-gun in
+  the off-hand, up, is its place/pour (`place_target` on the off-hand).
+- **The quick slot** (`Inventory.quick`, one slot, saved; area `quick`):
+  B pulls it out (pad: hold RB) -- it is the main hand until put away:
+  B again, a tap of X or a turn of the wheel (pad: an RB/LB tap, a Y tap)
+  only put it away -- the toolbar slot it left comes back, the bar is not
+  swapped, the slot not stepped; 1-9 put it away and take that slot. Empty:
+  B does nothing. Meant for a grenade, a special gun or tool.
+- **Pad** (no pad support exists elsewhere yet: moving, looking and the
+  triggers are for later): LB/RB tap step the slot, hold (350 ms) = off-hand
+  up/down / quick slot; Y tap = other bar (or put the quick slot away),
+  hold = the other off-hand slot. A tap acts on release, so a hold never
+  also steps.
+- **The off-hand pistol**: its own GunController (`MineHands.off_gun`),
+  RMB its trigger, its rounds kept in its stack like the main gun's; it
+  reloads by itself when empty, and with R. Its trigger rules are the
+  gun's own (GunFireMode): a pistol that charges fires on the release, so a
+  long hold charges instead. It is drawn low on the left
+  of the view (no left arm pose yet: later, with ViewArms). Dual pistols
+  are a main pistol + an off-hand pistol, up: LMB right, RMB left, no
+  sights.
+- **HUD**: the off-hand slots left of the bars, dim while down (or lowered
+  by a two-handed item); the quick slot right of the bars, outlined while
+  out; the caption names both hands ("Pickaxe  |  off: Stone").
+- **Filling them**: the screen has no off-hand or quick slots (section 14):
+  C over a slot swaps it with the active off-hand slot, B with the quick
+  slot; over an empty slot the hand's item lands there.
+- **Never by themselves**: pickups, crafting, shift-click and the cursor
+  going back never put an item into an empty off-hand slot (a stack of the
+  same kind there is topped up by a pickup).
+- Shields: an `off` item needs blocking, which does not exist yet -- later.
+- Tests: inventory_probe (the off-hand rules, pickups never into it, the
+  quick slot and up flag saved); `--gate=inventory` 4a (stone laid from the
+  off-hand with C and RMB), 4b (the off-hand pistol fires on RMB taps, a
+  rifle lowers it, it comes back), 4c (B, X, the wheel, 3; saved).
+  2026-11-26: probe 141 ok, gate PASS (109 checks).
+
 ## 5. Tests
 
 - `tools/probes/inventory_probe.gd` (headless): stage 1 rules, the builder's
@@ -481,10 +552,12 @@ ingredient lists, not shapes, so the grid only shows them.
   leaves it, a click elsewhere too. Otherwise every key is the screen's (E,
   Tab, Escape, Q, 1-9 as before).
 
-**No off-hand.** Gone from the screen, the HUD and the rules: no X hold
-(X just swaps the hotbars), crafting and shift-click no longer use it, the
-hotbars take every item. An old save's off-hand items are moved into the
-inventory on load (`from_dict`); the save keeps the empty `offhand` array.
+**No off-hand slots in the screen** (the user: no armour, off-hand or player
+figure there). The off-hand itself came back the same day in play (round
+four, section 4, decided with the user in another chat): it is filled
+Minecraft's way -- C over a slot in the screen swaps it with the active
+off-hand slot, B with the quick slot (`Inventory.swap_slots`) -- and the HUD
+shows both. Crafting and pickups still never put anything there by themselves.
 
 **Not done (Minecraft has it):** 3x3 shapes, the result onto the cursor.
 Furnaces smelt over time since section 15.
