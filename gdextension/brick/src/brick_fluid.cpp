@@ -3243,6 +3243,28 @@ Vector3i BrickFluid::cell_of(Vector3 p) {
             (int)std::floor(p.z / STUD_M));
 }
 
+bool BrickFluid::any_fluid(Vector3i lo, Vector3i hi, int fluid) {
+    const int x0 = std::min(lo.x, hi.x), x1 = std::max(lo.x, hi.x);
+    const int b0 = std::min(lo.y, hi.y), b1 = std::max(lo.y, hi.y);
+    const int z0 = std::min(lo.z, hi.z), z1 = std::max(lo.z, hi.z);
+    // A box is a plot's reach, not a region: refuse anything huge.
+    if ((int64_t)(x1 - x0 + 1) * (b1 - b0 + 1) * (z1 - z0 + 1) > 65536) {
+        return false;
+    }
+    MainLock lk;
+    for (int b = b0; b <= b1; ++b) {
+        for (int z = z0; z <= z1; ++z) {
+            for (int x = x0; x <= x1; ++x) {
+                const Cell c = rcell(x, b, z);
+                if (c_wet(c) && c_fluid(c) == fluid) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 Dictionary BrickFluid::cell_info(Vector3i cell) {
     MainLock lk;
     const Cell c = rcell(cell.x, cell.y, cell.z);
@@ -3678,6 +3700,7 @@ void BrickFluid::_bind_methods() {
     ClassDB::bind_static_method("BrickFluid", D_METHOD("request_mesh", "tx", "tz"), &BrickFluid::request_mesh);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("drawn_tiles"), &BrickFluid::drawn_tiles);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("cell_info", "cell"), &BrickFluid::cell_info);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("any_fluid", "lo", "hi", "fluid"), &BrickFluid::any_fluid);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("cell_of", "p"), &BrickFluid::cell_of);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("fluid_at", "p"), &BrickFluid::fluid_at);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("surface_at", "p"), &BrickFluid::surface_at);

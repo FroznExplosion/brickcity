@@ -54,6 +54,10 @@ const SAPLING_CHANCE := 0.5
 const SAPLING_SPACING := 3
 ## A scarecrow keeps most birds off plots within this (metres).
 const SCARE_M := 8.0
+## A plot's light is asked again only when the ground changed since it was
+## last asked (`terrain_changed`), or after this long (seconds) anyway --
+## the sky light fill was the refresh's second cost (Docs/MineFarming.md 19).
+const LIGHT_AGAIN := 30.0
 ## Soil a hoe tills, and the fertility each starts with.
 const SOIL_FERTILITY := {"grass": 60.0, "dirt": 55.0, "podzol": 80.0, "dry grass": 40.0,
 		"lush grass": 75.0, "cold grass": 50.0, "dark grass": 70.0}
@@ -72,6 +76,13 @@ var fertilised := 0
 var weeded := 0
 ## Fields and enclosure (stage 5): grouped plots, a flood on a worker.
 var fields := FarmFields.new()
+## Bumped by every terrain edit (`terrain_changed`): a plot's light is asked
+## again only when it moved on.
+var _terrain_ver := 0
+## Where the scarecrows stand (terrain frame), gathered once a second.
+var _scarecrows: Array[Vector3] = []
+var _scare_in := 0.0
+var _scare_count := -1
 
 var _stud := 0.35
 var _plate := 0.14
@@ -132,6 +143,10 @@ func step(delta: float, eye: Vector3) -> void:
 	if _near_in <= 0.0:
 		_near_in = 1.0
 		_find_near(eye)
+	_scare_in -= delta
+	if _scare_in <= 0.0:
+		_scare_in = 1.0
+		_gather_scarecrows()
 	if not _near.is_empty():
 		for _i in mini(SETTLE_PER_FRAME, _near.size()):
 			_settle_i = (_settle_i + 1) % _near.size()
@@ -209,6 +224,7 @@ func _apply_field(f: Dictionary) -> void:
 ## looked at again (a wall built or broken).
 func terrain_changed() -> void:
 	fields.dirty = true
+	_terrain_ver += 1
 
 
 ## Animals trampled it (FarmPlant's event): the tilled brick is dirt again.
@@ -220,15 +236,27 @@ func _packed(plot: Dictionary) -> void:
 	log_lines.append("animals trampled %s" % plot.b)
 
 
-## Is a scarecrow standing within SCARE_M of the plot?
+## Is a scarecrow standing within SCARE_M of the plot? (From the list
+## gathered once a second: the chests were walked for every plot.)
 func _scared(b: Vector3i) -> bool:
+	if host.chests != null and host.chests.count() != _scare_count:
+		_gather_scarecrows()     # one put down or taken away just now
 	var at := _top_middle(b)
-	var chests: MineChests = host.chests
-	for key in chests.chests:
-		if chests.item_of(key) == &"scarecrow" \
-				and chests.box_of(chests.chests[key].block).get_center().distance_to(at) <= SCARE_M:
+	for sc in _scarecrows:
+		if sc.distance_to(at) <= SCARE_M:
 			return true
 	return false
+
+
+func _gather_scarecrows() -> void:
+	_scarecrows.clear()
+	var chests: MineChests = host.chests
+	if chests == null:
+		return
+	_scare_count = chests.count()
+	for key in chests.chests:
+		if chests.item_of(key) == &"scarecrow":
+			_scarecrows.append(chests.box_of(chests.chests[key].block).get_center())
 
 
 # ---------------------------------------------------------------------------
@@ -738,12 +766,39 @@ func refresh(b: Vector3i) -> void:
 				trample(plot)
 				return
 	var t := now()
+	var u0 := Time.get_ticks_usec()
 	FarmPlant.settle(plot, t)
-	var wet := _wet_at(b)
-	var mid := _top_middle(b) + Vector3(0, 0.25, 0)
-	var sky := clampf(BrickTerrain.sky_light_at(mid) / 15.0, 0.0, 1.0)
-	var lamp := clampf(BrickTerrain.block_light_at(mid) / 15.0, 0.0, 1.0)
+	var u1 := Time.get_ticks_usec()
+	# Water: looked at again only when some water changed (BrickFluid's
+	# change count) or the ground did, since this plot was last looked at.
+	var wet := bool(plot.wet)
+	var cc := BrickFluid.change_count()
+	if int(plot.get("_water_cc", -1)) != cc or int(plot.get("_water_ver", -1)) != _terrain_ver:
+		wet = _wet_at(b)
+		plot["_water_cc"] = cc
+		plot["_water_ver"] = _terrain_ver
+	var u2 := Time.get_ticks_usec()
+	# Light: asked again only when the ground changed or LIGHT_AGAIN passed
+	# (kept on the plot, not saved: a reload asks once).
+	var sky := float(plot.sky)
+	var lamp := float(plot.lamp)
+	var u3 := u2
+	var since := Time.get_ticks_msec() / 1000.0 - float(plot.get("_light_at", -1e9))
+	if int(plot.get("_light_ver", -1)) != _terrain_ver or since >= LIGHT_AGAIN:
+		var mid := _top_middle(b) + Vector3(0, 0.25, 0)
+		sky = clampf(BrickTerrain.sky_light_at(mid) / 15.0, 0.0, 1.0)
+		u3 = Time.get_ticks_usec()
+		lamp = clampf(BrickTerrain.block_light_at(mid) / 15.0, 0.0, 1.0)
+		plot["_light_ver"] = _terrain_ver
+		plot["_light_at"] = Time.get_ticks_msec() / 1000.0
+	var u4 := Time.get_ticks_usec()
 	var scared := _scared(b)
+	var u5 := Time.get_ticks_usec()
+	_prof("settle", u1 - u0)
+	_prof("water", u2 - u1)
+	_prof("sky light", u3 - u2)
+	_prof("block light", u4 - u3)
+	_prof("scarecrow", u5 - u4)
 	var changed: bool = wet != bool(plot.wet) or absf(sky - float(plot.sky)) > 0.01 \
 			or absf(lamp - float(plot.lamp)) > 0.01 or scared != bool(plot.get("scared", false))
 	plot.wet = wet
@@ -752,7 +807,29 @@ func refresh(b: Vector3i) -> void:
 	plot.scared = scared
 	if changed:
 		store.touch(b)
+	var u6 := Time.get_ticks_usec()
 	_set_soil(plot, t)
+	_prof("soil swap", Time.get_ticks_usec() - u6)
+
+
+## What a plot refresh's parts cost (us): name -> [count, total, worst].
+var prof := {}
+
+
+func _prof(key: String, us: int) -> void:
+	var e: Array = prof.get(key, [0, 0, 0])
+	e[0] += 1
+	e[1] += us
+	e[2] = maxi(e[2], us)
+	prof[key] = e
+
+
+func prof_line() -> String:
+	var parts := PackedStringArray()
+	for k in prof:
+		var e: Array = prof[k]
+		parts.append("%s mean %.0f worst %d us (%d)" % [k, float(e[1]) / maxi(e[0], 1), e[2], e[0]])
+	return ", ".join(parts)
 
 
 func _lost(plot: Dictionary, why: String) -> void:
@@ -770,12 +847,10 @@ func _lost(plot: Dictionary, why: String) -> void:
 func _wet_at(b: Vector3i) -> bool:
 	@warning_ignore("integer_division")
 	var course := b.y / 3
-	for cy in [course, course + 1]:
-		for x in range(b.x * 2 - WET_STUDS, b.x * 2 + 2 + WET_STUDS):
-			for z in range(b.z * 2 - WET_STUDS, b.z * 2 + 2 + WET_STUDS):
-				if int(BrickFluid.cell_info(Vector3i(x, cy, z)).fluid) == 1:
-					return true
-	return false
+	# One call, one lock (BrickFluid.any_fluid): it was ~200 cell_info calls,
+	# each a Dictionary, ~0.2 ms a plot (Docs/MineFarming.md 19).
+	return BrickFluid.any_fluid(Vector3i(b.x * 2 - WET_STUDS, course, b.z * 2 - WET_STUDS),
+			Vector3i(b.x * 2 + 1 + WET_STUDS, course + 1, b.z * 2 + 1 + WET_STUDS), 1)
 
 
 ## Builder breaks (terrain_edited): plots whose soil went are dropped at once.

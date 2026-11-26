@@ -1799,6 +1799,18 @@ func drop_from_player(s: ItemStack) -> void:
 
 ## The world menu's Survival box (Docs/Inventory.md 7): this world's game
 ## mode, at once, saved with its changes.
+## Farm trouble on or off for this world (Docs/MineFarming.md 18): every plot
+## is brought up to now first, so the time already passed keeps the old rule.
+func set_farm_trouble(on: bool) -> void:
+	if on == FarmPlant.trouble:
+		return
+	if farming != null:
+		farming.settle_all()
+	FarmPlant.trouble = on
+	_world_dirty = true
+	print("[mine] farm trouble: %s" % ("on" if on else "off"))
+
+
 func set_survival(on: bool) -> void:
 	survival = on
 	builder.inv.creative = not on
@@ -2052,6 +2064,10 @@ func _load_inventory() -> void:
 	survival = bool(world.get("survival", not bool(world.get("creative", true))))
 	var fl = world.get("felled", [])
 	_felled_load = fl if fl is Array else []
+	# Farm trouble, this world's (on unless it was turned off). A gate keeps
+	# its own (farm_gate.gd turns it off for its certain checks).
+	if not _gate:
+		FarmPlant.trouble = bool(world.get("farm_trouble", true))
 	var pl = world.get("planted", [])
 	_planted_load = pl if pl is Array else []
 	# Buildings stamped into the ground (Docs/TerrainBuildings.md): their
@@ -2169,6 +2185,7 @@ func save_edits(wait := false) -> void:
 	var inv_save := {"format": 3, "survival": survival,
 			"felled": _trees.felled_list() if _trees != null else _felled_load, "time": world_time,
 			"planted": _trees.planted_list() if _trees != null else _planted_load,
+			"farm_trouble": FarmPlant.trouble,
 			"buildings": MineBuildings.to_save(), "towns": MineBuildings.towns_to_save()}
 	_time_saved = world_time
 	var farm_regions: Array = farming.store.take_dirty() if farming != null else []
