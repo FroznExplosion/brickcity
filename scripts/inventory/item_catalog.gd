@@ -14,7 +14,10 @@ extends RefCounted
 
 const KINDS := ["block", "fluid", "bucket", "source_bucket", "chest", "station", "tool", "backpack", "gun", "grenade",
 		"hoe", "seed", "scythe", "can", "fertiliser", "wire", "device", "wrench", "misc"]
-## Which hand an item may be in (zylanntest's HandUse).
+## Which hand an item may be in (zylanntest's HandUse). Since 2026-11-26
+## only "two" limits a slot: a two-handed item never goes in the off-hand
+## (Inventory.slot_accepts); "right" and "off" say how an item is meant to
+## be held (a shield "off"), every hand slot takes them.
 const HANDS := ["any", "right", "off", "two"]
 ## The gun classes held in one hand (PlayerView.ONE_HAND draws them so).
 const ONE_HANDED_GUNS: Array[StringName] = [&"pistol", &"revolver"]
