@@ -1,11 +1,11 @@
 {
 	"items": {
-		"cable": { "name": "Cable tile", "kind": "wire", "max_stack": 999, "hand": "any", "colour": "#b0603a", "glyph": "~",
-			"description": "A smooth 1x1 tile with a cable on it. Right-click the top of the ground to lay one; cables that touch carry a signal, up or down a step of a brick. A shot cuts it (Docs/MineWiring.md)." },
+		"cable": { "name": "Wire", "kind": "wire", "max_stack": 999, "hand": "any", "colour": "#b0603a", "glyph": "~",
+			"description": "A smooth 1x1 tile with a wire on it. Right-click the top of the ground to lay one; wires that touch carry a signal, up or down a step of a brick. A shot cuts it (Docs/MineWiring.md)." },
 		"lever": { "name": "Lever", "kind": "device", "model": "lever", "max_stack": 64, "hand": "any", "colour": "#8a8a8e", "glyph": "/",
-			"description": "Place it beside a cable. Right-click it to switch it on or off: on, it powers the cables and devices touching it." },
+			"description": "Place it beside a wire. Right-click it to switch it on or off: on, it powers the wires and devices touching it." },
 		"lamp": { "name": "Lamp", "kind": "device", "model": "lamp", "max_stack": 64, "hand": "any", "colour": "#f2d68a", "glyph": "o",
-			"description": "A clear brick that lights while a powered cable or a device touches it." },
+			"description": "A clear brick that lights while a powered wire or a device touches it." },
 		"button": { "name": "Button", "kind": "device", "model": "button", "max_stack": 64, "hand": "any", "colour": "#c0201a", "glyph": "b",
 			"description": "Right-click it: it powers what touches it for one second." },
 		"pressure_tile": { "name": "Pressure tile", "kind": "device", "model": "pressure", "max_stack": 64, "hand": "any", "colour": "#9e998c", "glyph": "_",
@@ -27,18 +27,20 @@
 		"pulse": { "name": "Pulse", "kind": "device", "model": "gate", "max_stack": 64, "hand": "any", "colour": "#2fb8c4", "glyph": "p",
 			"description": "When its back turns on, the output is on for 2, 5, 10 or 20 ticks. Right-click it to set the length." },
 		"wrench": { "name": "Wrench", "kind": "wrench", "max_stack": 1, "hand": "right", "colour": "#b8bcc4", "glyph": "W",
-			"description": "In the hand: every cable shows through walls, and what you look at tells its level, inputs and output. Right-click a gate or trip hook to turn it; shift + right-click a device to take it back." },
+			"description": "In the hand: every wire shows through walls, and what you look at tells its level, inputs and output. Right-click a gate or trip hook to turn it; shift + right-click a device to take it back." },
 		"door": { "name": "Door", "kind": "device", "model": "door", "max_stack": 16, "hand": "any", "colour": "#8c5e33", "glyph": "D",
 			"description": "2 studs wide, 14 plates tall, laid on ground across your view. Opens while anything beside it is powered, shuts when the power goes; right-click to open or shut it by hand." },
 		"trapdoor": { "name": "Trapdoor", "kind": "device", "model": "trapdoor", "max_stack": 16, "hand": "any", "colour": "#8c5e33", "glyph": "T",
 			"description": "A 2x2 floor a plate thick, held by ground beside or under it. Powered (or right-clicked), it swings down open: whoever stood on it falls." },
 		"observer": { "name": "Observer", "kind": "device", "model": "observer", "max_stack": 64, "hand": "any", "colour": "#5a5c66", "glyph": "O",
-			"description": "Watches the stud in front of it (its face): when the ground, a cable or a device there changes, it powers what is at its back for 2 ticks. Placed facing away from you." },
+			"description": "Watches the stud in front of it (its face): when the ground, a wire or a device there changes, it powers what is at its back for 2 ticks. Placed facing away from you." },
 		"gate_tile": { "name": "Gate tile", "kind": "device", "model": "gatetile", "max_stack": 64, "hand": "any", "colour": "#386b7a", "glyph": "G",
 			"description": "A solid brick that turns passable (see-through, nothing to stand on) while powered. Gate tiles touching side by side or stacked open together: a wall that opens, a bridge that drops. Stands on ground or on/beside another gate tile." },
 		"sequencer": { "name": "Sequencer", "kind": "device", "model": "gate", "max_stack": 64, "hand": "any", "colour": "#d97333", "glyph": "S",
 			"description": "When its back turns on, it runs a program of on and off steps out of its front (the arrow). Right-click to pick the program; the wrench shows it. Placed facing away from you." },
 		"number_display": { "name": "Number display", "kind": "device", "model": "display", "max_stack": 64, "hand": "any", "colour": "#66ff73", "glyph": "#",
-			"description": "A 2-stud brick that shows the level (0-15) of what touches it, on its front." }
+			"description": "A 2-stud brick that shows the level (0-15) of what touches it, on its front." },
+		"redstone_ore": { "name": "Wire ore",
+			"description": "Ore with copper-red veins: what wire is made from." }
 	}
 }

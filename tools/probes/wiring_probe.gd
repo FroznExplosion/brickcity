@@ -454,7 +454,7 @@ func _wrench(w: MineWiring) -> void:
 	w.place_device(Vector3i(4, 0, 0), &"and_gate", false, false, 0)
 	_ticks(w, 2)
 	var t := w.readout({"cable": Vector3i(1, 0, 0)})
-	_ok("cable readout: level, cables, devices (%s)" % t, t.contains("level 15") and t.contains("4 cables")
+	_ok("cable readout: level, cables, devices (%s)" % t, t.contains("level 15") and t.contains("4 wires")
 			and t.contains("2 devices"))
 	var gt := w.readout({"device": Vector3i(4, 0, 0)})
 	_ok("gate readout: facing and inputs (%s)" % gt, gt.contains("faces +x") and gt.contains("back 15"))
@@ -636,6 +636,8 @@ func _items() -> void:
 	for id in MineWiring.DEVICES:
 		every = every and ItemCatalog.has(id) and ItemCatalog.kind(id) == "device"
 	_ok("every device is an item of kind device, and the wrench", every and ItemCatalog.kind(&"wrench") == "wrench")
+	_ok("in game it is called Wire, and the ore Wire ore (names decided 2026-11-26)", str(ItemCatalog.get_def(&"cable").name) == "Wire"
+			and ItemCatalog.has(&"redstone_ore") and str(ItemCatalog.get_def(&"redstone_ore").name) == "Wire ore")
 	_ok("their kinds: wire, device", ItemCatalog.kind(&"cable") == "wire" and ItemCatalog.kind(&"lever") == "device")
 	for id in [&"cable", &"lever", &"lamp", &"button", &"pressure_tile", &"trip_hook", &"and_gate", &"wrench"]:
 		var m := ItemIcons._model(ItemCatalog.get_def(id))

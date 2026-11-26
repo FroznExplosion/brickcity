@@ -257,6 +257,13 @@ the wire is a brick.
 
 ## 9. Open questions for the user
 
+**Decided 2026-11-26 (the user):** in game it is **wire / wiring**: the
+cable tile item is named "Wire" (id `cable` kept, so saves stand), the
+generated `redstone ore` shows as "Wire ore" (`data/items/wiring.json`;
+`MAT_REDSTONE` stays in code), the wrench says "Wire -- level ...".
+Technic-style rotating power and other new systems are **parked**: finish
+the build order (section 10) first, then plan whether they are still wanted.
+
 **Defaults taken until the user says otherwise (2026-11-25):** the wire is
 the section 3.3 mix (decided); nets carry a **level 0-15** (hydraulic
 pressure needs one, section 11); pistons **hop** over studs, slide on tiles;
