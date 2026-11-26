@@ -1082,7 +1082,7 @@ func readout(target: Dictionary) -> String:
 		for c in devices:
 			if device_nets(c).has(id):
 				n_dev += 1
-		return "Cable net -- level %d | %d cables | %d devices on it" % [int(nets[id].level),
+		return "Wire -- level %d | %d wires | %d devices on it" % [int(nets[id].level),
 				nets[id].cells.size(), n_dev]
 	return ""
 
