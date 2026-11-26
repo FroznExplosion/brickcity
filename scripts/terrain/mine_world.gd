@@ -5869,11 +5869,30 @@ func _run_sea_gate() -> void:
 	water.sea.push_waves()
 	# A river mouth: a river column under the sea line near the coast.
 	var river := Vector2i(1 << 30, 0)
-	for r in range(16, 900, 16):
+	for r in range(16, 6000, 16):
 		for a in 24:
 			var p := coast + Vector2i(Vector2(cos(a * TAU / 24.0), sin(a * TAU / 24.0)) * r)
-			var bn: String = _biome_names[BrickTerrain.biome_at(p.x, p.y)]
-			if bn.contains("River") and BrickTerrain.surface_plate(p.x, p.y) < sea_b * 3:
+			# Narrow sea (what plays as a river, whatever its biome): a
+			# brick under the sea line, dry ground within 24 studs both ways
+			# along x or along z (water 5-17 m wide).
+			if BrickTerrain.surface_plate(p.x, p.y) >= (sea_b - 1) * 3:
+				continue
+			var dry := func(q: Vector2i) -> bool: return BrickTerrain.surface_plate(q.x, q.y) >= sea_b * 3
+			var narrow_x := false
+			var narrow_z := false
+			for ax in 2:
+				var stepv := Vector2i(1, 0) if ax == 0 else Vector2i(0, 1)
+				var lo_dry := false
+				var hi_dry := false
+				for k in range(7, 25):
+					lo_dry = lo_dry or dry.call(p - stepv * k)
+					hi_dry = hi_dry or dry.call(p + stepv * k)
+				if lo_dry and hi_dry:
+					if ax == 0:
+						narrow_x = true
+					else:
+						narrow_z = true
+			if narrow_x != narrow_z:
 				river = p
 				break
 		if river.x != 1 << 30:
@@ -5885,8 +5904,33 @@ func _run_sea_gate() -> void:
 		await _frames(150)
 		print("[sea-gate] river mouth at %s, water there %d" % [river, water.fluid_at(rm - Vector3(0, 0.2, 0))])
 		await _shot(dev + "sea_river.png")
+		# Rivers calm (MineWaterNext.md 11): the river's surface over 4 s
+		# moves a few cm (the ripple), where open sea a coast away swings
+		# much more. The CPU's height, the one swimmers and floaters ride.
+		var rlo := INF
+		var rhi := -INF
+		var slo := INF
+		var shi := -INF
+		var sea_p := Vector2((coast.x + dir.x * 120.0) * stud, (coast.y + dir.y * 120.0) * stud)
+		for i in 40:
+			var tt := float(i) * 0.1
+			var hr := BrickWave.height_at(rm.x, rm.z, tt)
+			var hs := BrickWave.height_at(sea_p.x, sea_p.y, tt)
+			rlo = minf(rlo, hr)
+			rhi = maxf(rhi, hr)
+			slo = minf(slo, hs)
+			shi = maxf(shi, hs)
+		print("[sea-gate] river calm: river swings %.3f m (want < 0.08), open sea %.3f m, shore distance %.1f m" % [
+				rhi - rlo, shi - slo, BrickWave.shore_distance(rm.x, rm.z)])
+		_fly_to(rm + Vector3(-6, 2.5, -6), Vector3(1, 0, 1).normalized())
+		walker.pitch = -0.25
+		await _frames(90)
+		await _shot(dev + "sea_river_low.png")
+		# Back to the coast: the channel below digs there.
+		_fly_to(Vector3((coast.x + 0.5) * stud, level + 6.0, (coast.y + 0.5) * stud), Vector3(dir.x, 0, dir.y))
+		await _frames(200)
 	else:
-		print("[sea-gate] no river under the sea line within 900 studs of the coast")
+		print("[sea-gate] no river under the sea line within 6000 studs of the coast")
 	# A channel dug off the sea, 3 studs wide, 14 long, two bricks under the
 	# sea line: from just off the shore into the dry land, and the sea runs in.
 	var back := -dir

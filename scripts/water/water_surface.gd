@@ -259,6 +259,7 @@ func push_waves() -> void:
 	_mat.set_shader_parameter("shore_band", BrickWave.shore_band_uniform())
 	_mat.set_shader_parameter("swell_blend", BrickWave.swell_blend_uniform())
 	_mat.set_shader_parameter("shore_calm", BrickWave.shore_calm_uniform())
+	_mat.set_shader_parameter("river_calm", BrickWave.get_river_calm())
 
 
 func set_lod_debug(on: bool) -> void:

@@ -9324,6 +9324,56 @@ Vector4 BrickWave::shore_band_uniform() {
         (float)(Math_TAU / BAND_PERIOD), (float)BAND_REACH);
 }
 
+namespace {
+bool g_river_calm = false;
+constexpr double RIVER_OPEN_R = 12.0;   ///< metres looked out for open water
+constexpr double RIVER_NARROW_LO = 3.5; ///< open within it under this: a river, calm
+constexpr double RIVER_NARROW_HI = 9.0; ///< ...over this: the sea's full swell
+constexpr double RIVER_AMP = 0.03;      ///< the ripple, metres
+constexpr double RIVER_LEN = 4.0;       ///< metres between its crests
+constexpr double RIVER_SPEED = 0.8;     ///< metres a second, downstream
+constexpr double RIVER_AHEAD = 30.0;    ///< metres looked along the banks for the wider way
+/// How much of the swell narrow water keeps (0 a river .. 1 open water),
+/// and the ripple running along it. water's sea_wave.gdshaderinc
+/// river_shape, the same samples of the same field.
+double river_shape(double x, double z, double dist, double t, double &narrow) {
+    narrow = 1.0;
+    if (!g_river_calm || dist >= RIVER_OPEN_R) {
+        return 0.0;
+    }
+    double open = dist;
+    open = std::max(open, field_distance(x + RIVER_OPEN_R, z));
+    open = std::max(open, field_distance(x - RIVER_OPEN_R, z));
+    open = std::max(open, field_distance(x, z + RIVER_OPEN_R));
+    open = std::max(open, field_distance(x, z - RIVER_OPEN_R));
+    narrow = smoothstep_d(RIVER_NARROW_LO, RIVER_NARROW_HI, open);
+    if (narrow >= 1.0) {
+        return 0.0;
+    }
+    // Along the banks: across the distance's slope, the way the water widens.
+    const double e = 2.8;
+    const double gx = field_distance(x + e, z) - field_distance(x - e, z);
+    const double gz = field_distance(x, z + e) - field_distance(x, z - e);
+    double ax = -gz, az = gx;
+    const double l = std::sqrt(ax * ax + az * az);
+    if (l < 1e-6) {
+        return 0.0;
+    }
+    ax /= l;
+    az /= l;
+    if (field_distance(x - ax * RIVER_AHEAD, z - az * RIVER_AHEAD)
+            > field_distance(x + ax * RIVER_AHEAD, z + az * RIVER_AHEAD)) {
+        ax = -ax;
+        az = -az;
+    }
+    const double k = Math_TAU / RIVER_LEN;
+    return RIVER_AMP * (1.0 - narrow) * std::sin(k * (ax * x + az * z) - k * RIVER_SPEED * t);
+}
+} // namespace
+
+void BrickWave::set_river_calm(bool on) { g_river_calm = on; }
+bool BrickWave::get_river_calm() { return g_river_calm; }
+
 double BrickWave::height_at(double x, double z, double t) {
     // One field query a sample, for the shore ramp. That is an fBm evaluation
     // where there used to be none, so this is a per-BODY call and not a
@@ -9347,8 +9397,10 @@ double BrickWave::height_at(double x, double z, double t) {
     }
     // The swell, shaped by the groups and dying in the shallows, and the
     // shore band on top of it: the same expression the shader draws.
-    return g_sea_level + taper * group_factor(x, z, t) * swell_near_shore(dist) * swell
-            + band_value(x, z, t);
+    double narrow = 1.0;
+    const double ripple = river_shape(x, z, dist, t, narrow);
+    return g_sea_level + taper * group_factor(x, z, t) * swell_near_shore(dist) * swell * narrow
+            + band_value(x, z, t) + ripple;
 }
 
 /// The surface as the pieces actually sit. Gameplay uses the CONTINUOUS height
@@ -9430,6 +9482,8 @@ void BrickWave::_bind_methods() {
         &BrickWave::set_shore_calm);
     ClassDB::bind_static_method("BrickWave", D_METHOD("shore_calm_uniform"),
         &BrickWave::shore_calm_uniform);
+    ClassDB::bind_static_method("BrickWave", D_METHOD("set_river_calm", "on"), &BrickWave::set_river_calm);
+    ClassDB::bind_static_method("BrickWave", D_METHOD("get_river_calm"), &BrickWave::get_river_calm);
     ClassDB::bind_static_method("BrickWave", D_METHOD("band_depth", "x", "z"),
         &BrickWave::band_depth);
     ClassDB::bind_static_method("BrickWave", D_METHOD("shore_distance", "x", "z"),

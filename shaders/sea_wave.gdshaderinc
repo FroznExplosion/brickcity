@@ -22,6 +22,10 @@ uniform float open_sea_depth = 8.0;
 uniform bool water_outside_field = false;
 uniform float swash_delay = 1.4;   // seconds of delay per metre above still water
 uniform float swash_loss = 0.5;    // metres of the wave lost per metre climbed
+// RIVERS CALM (the mine world, Docs/MineWaterNext.md 11; BrickWave
+// set_river_calm, river_shape -- the same numbers): narrow water loses the
+// swell and carries a small ripple downstream. Off: the sea as it was.
+uniform bool river_calm = false;
 // The swell. `cell_m` is the spacing of the vertices drawing it: a wave under
 // ~4 samples a wavelength lands between vertices and the surface boils, so on
 // the coarse rings of the sheet the short waves fade out (MvsC's
@@ -120,6 +124,38 @@ float pool_calm_at(vec2 p) {
     return textureLod(pool_calm, q, 0.0).g;
 }
 
+// How much swell narrow water keeps (narrow, 0 a river .. 1 open water)
+// and the ripple along its banks toward the wider water.
+float river_shape(vec2 p, float dist, float t, out float narrow) {
+    narrow = 1.0;
+    if (!river_calm || dist >= 12.0) {
+        return 0.0;
+    }
+    float open = dist;
+    open = max(open, lattice_distance(p + vec2(12.0, 0.0)));
+    open = max(open, lattice_distance(p - vec2(12.0, 0.0)));
+    open = max(open, lattice_distance(p + vec2(0.0, 12.0)));
+    open = max(open, lattice_distance(p - vec2(0.0, 12.0)));
+    narrow = smoothstep(3.5, 9.0, open);
+    if (narrow >= 1.0) {
+        return 0.0;
+    }
+    float e = 2.8;
+    float gx = lattice_distance(p + vec2(e, 0.0)) - lattice_distance(p - vec2(e, 0.0));
+    float gz = lattice_distance(p + vec2(0.0, e)) - lattice_distance(p - vec2(0.0, e));
+    vec2 a = vec2(-gz, gx);
+    float l = length(a);
+    if (l < 1e-6) {
+        return 0.0;
+    }
+    a /= l;
+    if (lattice_distance(p - a * 30.0) > lattice_distance(p + a * 30.0)) {
+        a = -a;
+    }
+    float k = 6.2831853 / 4.0;
+    return 0.03 * (1.0 - narrow) * sin(k * dot(a, p) - k * 0.8 * t);
+}
+
 float surface_offset(vec2 p, float t, float taper, float cell_m) {
     float above = lattice_ground(p) - sea_level;
     if (above > 0.0) {
@@ -136,6 +172,8 @@ float surface_offset(vec2 p, float t, float taper, float cell_m) {
     // water, a quarter at the beach (BrickWave swell_near_shore). No depth
     // clamp -- `taper` is 1.
     float calm = shore_calm.x + (1.0 - shore_calm.x) * smoothstep(0.0, shore_calm.y, dist);
-    return (wave_raw_lod(p, t, cell_m, dist) * taper * group_factor(p, t) * calm + band)
+    float narrow;
+    float ripple = river_shape(p, dist, t, narrow);
+    return (wave_raw_lod(p, t, cell_m, dist) * taper * group_factor(p, t) * calm * narrow + band + ripple)
             * pool_calm_at(p) - max(above, 0.0) * swash_loss;
 }
