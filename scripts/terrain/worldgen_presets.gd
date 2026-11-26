@@ -47,6 +47,9 @@ const DEFAULT_BRICKS := {
 	## The game draws, breaks and holds these bricks (off: the old 2x4
 	## pattern). Off until the gates pass on it (Docs/TerrainRegions.md 12).
 	"fitted": false,
+	## A connected group of ground this many cells or more, let go, floats
+	## instead of falling (0: never). Building materials still fall.
+	"float_cells": 500,
 	"bands": [{
 		"below_m": 12.0,
 		"shapes": {

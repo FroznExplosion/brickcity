@@ -297,6 +297,7 @@ struct FitParams {
     /// stagger; 1: no stagger). Below 0: off.
     double stagger = -1.0;
     double cross = 1.0;         ///< chance a tile edge / section boundary may be crossed
+    int float_cells = 500;      ///< a group let go this big floats (0: never)
     int medium_max = 8;         ///< the biggest footprint (cells) in medium ground
     int offset = 7;             ///< odd courses' squares shifted by this
     bool merge = true;          ///< 1x1s merged into a 1-wide neighbour after a region
@@ -1218,6 +1219,7 @@ FitParams parse(const Dictionary &d) {
     p.cave_reach = (int)d.get("cave_reach", 2);
     p.mixed = (bool)d.get("mixed", true);
     p.cross = (double)d.get("cross", 1.0);
+    p.float_cells = (int)d.get("float_cells", 500);
     p.medium_max = (int)d.get("medium_max", 8);
     p.seed = (int)d.get("seed", 1);
     p.offset = (int)d.get("offset", 7);
@@ -1785,6 +1787,11 @@ bool brick::generated_top(int x, int z, int &plate, int &mat) {
     plate = t->plate[i];
     mat = t->mat[i];
     return true;
+}
+
+int brick::fit_float_cells() {
+    const std::shared_ptr<const FitParams> P = world_params();
+    return P ? P->float_cells : 500;
 }
 
 bool brick::fit_enabled() {

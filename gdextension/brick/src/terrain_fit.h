@@ -71,6 +71,9 @@ bool fit_top(TopFitMemo &memo, int x, int course, int z, uint64_t cls,
 /// Column (x, z)'s GENERATED top plate and the material there (edits
 /// ignored), kept by tile. False without the biome generator.
 bool generated_top(int x, int z, int &plate, int &mat);
+/// A group let go of at least this many cells floats (the world's
+/// "float_cells"; 0 never). Docs/TerrainRegions.md 11.
+int fit_float_cells();
 
 /// Drops every kept region (new settings, a new world).
 void fitted_clear();

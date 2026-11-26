@@ -761,3 +761,20 @@ has more top pieces, so more of them (60 a tile, the old 28).
 Open (the user, 2026-11-26): should building materials be left out of the
 "a group of 500+ cells floats" rule (stage D) so an undermined building
 still tips? Left open; building cells reach the collapse as placed blocks.
+
+### 12.4 Stage D in the collapse (2026-11-26)
+
+- **Big groups float** (the user, section 11), with the fit on: a group the
+  survey lets go of `float_cells` cells or more (preset `bricks.float_cells`,
+  500; menu Bricks tab) stays where it is; the survey reports `floated`.
+  Groups holding a building material still fall (open question, 12.3).
+  `terrain_collapse_probe --fitted`: a ~640-cell stone arm floats, the
+  180-cell long arm falls.
+- **A tall brick as one body: built, OFF** (`TALL_BODIES` in
+  terrain_collapse.cpp). On, the survey makes a fitted tall brick one solver
+  body (archetype `h` courses tall; its groups still listed a course an
+  entry, so ground_collapse.gd is unchanged), but `terrain_collapse_probe`'s
+  "weak studs" (stud strength 0.001) then lets two ground bricks beside the
+  pillar go with the arm -- every body was placed, so the solver's stress
+  walk treats the tall body differently; not yet understood. Off, a tall
+  brick is a body a course, as before.
