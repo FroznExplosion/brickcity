@@ -289,7 +289,8 @@ Small stages, each with a probe and a gate, each merged:
 2b. Ponder-style dioramas: a little animated scene per part, played from
    the inventory (section 12).
 3. Door, trapdoor, gate tile; observer (from `terrain_edited`); sequencer
-   brick; number tile.
+   brick; number tile. **Door, trapdoor, observer built 2026-11-25** (section
+   15); gate tile, sequencer, number tile are stage 3b.
 4. Piston: up first (unclutch + group + limit), then sideways with the hop,
    the stand-in slide, the kinematic shove; sticky piston. Moving groups are
    contraptions (section 12): one body, riders carried by contact.
@@ -529,6 +530,41 @@ the button darkens it for its second, the wrench's readout and x-ray, the
 wrench turning a gate, a held RMB not turning a lever, the player standing
 on a tile and crossing a string, all saved. Picture
 `user://dev/wiring_gates.png`.
+
+## 15. Stage 3a, built (2026-11-25): door, trapdoor, observer
+
+- **Devices of more than one stud.** A DEVICES entry may have `w` (studs to
+  the right of its facing) and `d` (studs to its front); `footprint` gives
+  its bottom cells, `cells_of` every plate cell it fills, and an occupancy
+  map (`_occupied`, cell -> its device) answers "what is here" for cables,
+  devices and strings. `device_box` covers the footprint. Support per kind
+  (`_supported`): a trapdoor by ground under or beside any of its cells,
+  everything else by ground under every bottom cell. A multi-stud device is
+  not turned by the wrench (taken up and laid again instead).
+- **Door**: 2 studs wide (to the right of its facing), 14 plates tall (the
+  room modules' door height), laid across the player's view. A wooden panel
+  with a window and a handle hangs from a hinge at its left edge with its
+  collider (WORLD): open, the hinge turns 90 degrees to the front, collider
+  and all. Power from any side of its two studs turning on opens it,
+  turning off shuts it (`power_in`); RMB opens or shuts it by hand between.
+- **Trapdoor**: 2 x 2 studs, a plate thick, hinged at its back edge; open,
+  it swings down (collider too), so whoever stood on it falls. Held by the
+  ground beside it, so it lies over a pit. The same power and hand rules.
+- **Observer**: a brick facing a way; it watches the stud in front of it,
+  its height. Ground edits there (`check`'s edit box, from
+  `terrain_edited`), a cable laid or taken there, a device's cells placed or
+  taken there: 15 out of its BACK for 2 ticks (`OBSERVER_TICKS`). Not for a
+  whole check, and not for loading a world.
+- Saved: a door's or trapdoor's open state is its `on`.
+
+Tests: `wiring_probe` 102 ok (stage 3a: the door's cells, no cable in it,
+power open/shut, RMB, no wrench turn, breaking when its ground goes; the
+trapdoor over a pit, not in mid-air, opened by a lever a step up; the
+observer's 2-tick pulse at its back only, nothing for an edit elsewhere, a
+pulse for a cable laid in front, none for a load). `--gate=wiring`: a door
+laid by the builder faces across the view and a lever swings its panel and
+collider open and shut; a real ground edit flashes an observer's lamp; a
+trapdoor over a dug pit opens from a lever; all back after a reload.
 
 ## Sources
 

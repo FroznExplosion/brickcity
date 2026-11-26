@@ -29,6 +29,12 @@ extends RefCounted
 ##   pressure  the player standing on a pressure tile lights its lamp; off it,
 ##             dark again.
 ##   trip      the player crossing a trip string lights its lamp.
+## Stage 3 (Docs/MineWiring.md 15):
+##   door      laid with the builder across the camera's view; a lever beside
+##             it swings it open (its collider turns with it), off shuts it.
+##   observer  a real ground edit in the stud it watches flashes the lamp at
+##             its back.
+##   trapdoor  over a dug pit, held by the ground beside it; a lever opens it.
 ## Preloaded by mine_world.gd (`--gate=wiring`).
 
 var w: Node = null
@@ -235,6 +241,55 @@ func run(host: Node) -> void:
 	check("walked on: dark", not wr.is_lit(lamp5))
 	await _picture(Vector3((x0 + 8) * stud, y * plate, z3 * stud), Vector3(-2.0, 2.4, -3.4), "wiring_gates.png")
 
+	# --- stage 3: door, observer, trapdoor (Docs/MineWiring.md 15)
+	var zd := z0 - 1
+	var door := Vector3i(x0 + 2, y, zd)
+	w._fly_to(Vector3((x0 - 1) * stud, y * plate, zd * stud), Vector3(1, 0, 0))
+	w.walker.pitch = -0.3
+	await w._frames(4)
+	_hold(&"door")
+	w.builder.target = {"cell": Vector3i(door.x, top, door.z), "normal": Vector3i.UP}
+	check("RMB with a door lays one across the view (facing +x)", w.builder.place_target() and wr.devices.has(door)
+			and int(wr.devices[door].facing) == 0)
+	var dlever := Vector3i(x0 + 1, y, zd)
+	wr.place_device(dlever, &"lever")
+	await w._frames(14)
+	var hinge := (wr.devices[door].node as Node3D).get_node("Turn/Hinge") as Node3D
+	check("shut: its panel square", not wr.is_open(door) and is_zero_approx(hinge.rotation.y))
+	wr.use_device(dlever)
+	await w._frames(14)
+	check("the lever on: open, the panel (and its collider) swung", wr.is_open(door) and absf(hinge.rotation.y - PI * 0.5) < 0.01)
+	wr.use_device(dlever)
+	await w._frames(14)
+	check("the lever off: shut", not wr.is_open(door))
+	# Observer watching a stud of the patch; a lamp at its back.
+	var ob := Vector3i(x0 + 6, y, zd)
+	wr.place_device(ob, &"observer", false, false, 0)
+	var oblamp := Vector3i(x0 + 5, y, zd)
+	wr.place_device(oblamp, &"lamp")
+	await w._frames(14)
+	w.terrain_edited(BrickTerrain.fill_box(Vector3i(x0 + 7, y, zd), Vector3i(x0 + 7, y + 2, zd), BrickTerrain.MAT_STONE, false))
+	var seen := false
+	for i in 20:
+		await w._frames(1)
+		seen = seen or wr.is_lit(oblamp)
+	check("a real ground edit in front of the observer flashed the lamp at its back", seen)
+	await w._frames(14)
+	check("and the flash is over", not wr.is_lit(oblamp))
+	# Trapdoor over a pit dug in the patch.
+	var px := x0 + 10
+	w.terrain_edited(BrickTerrain.fill_box(Vector3i(px, top - 5, zd), Vector3i(px + 1, top, zd + 1), 0, false))
+	await w._frames(14)
+	var trap := Vector3i(px, top, zd)
+	check("a trapdoor over the pit, held by the ground beside it", wr.place_device(trap, &"trapdoor", false, false, 0))
+	var tlever := Vector3i(px + 2, y, zd)
+	wr.place_device(tlever, &"lever")
+	await w._frames(14)
+	check("shut", not wr.is_open(trap))
+	wr.use_device(tlever)
+	await w._frames(14)
+	check("the lever on: the trapdoor swung down open", wr.is_open(trap))
+
 	# --- save: generated again
 	var n_cables: int = wr.cables.size()
 	var n_dev: int = wr.devices.size()
@@ -246,6 +301,8 @@ func run(host: Node) -> void:
 			and wr.is_lit(lamp2))
 	check("the NOT gate still faces +x and lights its lamp; the string is back", wr.devices.has(gate)
 			and int(wr.devices[gate].facing) == 0 and wr.is_lit(lamp3) and wr.pairs.get(ha, Vector3i.ZERO) == hb)
+	check("the door is back, shut; the trapdoor back, open", wr.devices.has(door) and not wr.is_open(door)
+			and wr.devices.has(trap) and wr.is_open(trap))
 
 	print("[wiring-gate] %s" % ("WIRING-GATE PASS" if fails.is_empty() else "WIRING-GATE FAIL: " + "; ".join(fails)))
 	w.get_tree().quit(0 if fails.is_empty() else 1)
