@@ -351,6 +351,9 @@ func _land_survey() -> void:
 	var t0 := Time.get_ticks_usec()
 	_let_sand_go(r.sand, r.sand_mats)
 	for g in r.groups:
+		# Resting on a piston's body or its head: held up (Docs/MineWiring.md 18).
+		if world.wiring != null and world.wiring.holds(g):
+			continue
 		_let_group_go(g)
 	worst_apply_ms = maxf(worst_apply_ms, (Time.get_ticks_usec() - t0) / 1000.0)
 

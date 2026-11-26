@@ -1311,6 +1311,36 @@ func piston_group(seeds: Array, step: Vector3i, line: bool) -> Dictionary:
 	return {"bricks": order}
 
 
+## Does a loose group the collapse found rest on a piston -- on its body's
+## top, or on its head's top while out? Then the collapse leaves it standing.
+## `g`: the survey's bricks, 6 ints each (x, bottom plate, z, sx, sz, mat).
+func holds(g: PackedInt32Array) -> bool:
+	var tops := {}
+	for c in devices:
+		var d: Dictionary = devices[c]
+		if str(DEVICES[d.item].kind) != "piston":
+			continue
+		tops[c + Vector3i(0, COURSE, 0)] = true
+		if bool(d.on):
+			var f := int(d.facing)
+			tops[c + piston_step(f) + Vector3i(0, COURSE, 0)] = true
+	if tops.is_empty():
+		return false
+	for i in range(0, g.size() - 5, 6):
+		for dz in g[i + 4]:
+			for dx in g[i + 3]:
+				if tops.has(Vector3i(g[i] + dx, g[i + 1], g[i + 2] + dz)):
+					return true
+	return false
+
+
+## Ask the host's collapse to look at a box (plate cells): what it holds up
+## may have gone.
+func _survey(lo: Vector3i, hi: Vector3i) -> void:
+	if host != null and "collapse" in host and host.collapse != null:
+		host.collapse.queue({"box_lo": lo, "box_hi": hi})
+
+
 ## The box (metres) round some bricks.
 func _bricks_box(bricks: Array) -> AABB:
 	var box := AABB()
@@ -1353,9 +1383,13 @@ func _piston_push(c: Vector3i) -> bool:
 
 
 ## Power fell: the head comes in; a sticky one brings the brick at its face
-## back with it (with what is clutched on it). What will not come stays.
+## back with it (with what is clutched on it). What will not come stays --
+## and what only the head held up is surveyed, so it falls.
 func _piston_pull(c: Vector3i) -> void:
 	var d: Dictionary = devices[c]
+	var f0 := int(d.facing)
+	var hc := head_cells(c, f0, 2 if f0 == FACE_UP else 1)
+	_survey(hc[0] - Vector3i(1, 1, 1), hc[COURSE - 1] + Vector3i(1, COURSE + 1, 1))
 	if not bool(DEVICES[d.item].get("sticky", false)):
 		return
 	var f := int(d.facing)

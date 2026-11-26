@@ -659,6 +659,80 @@ What the code has to do, from what the ground gives (section 6, 1):
 Order: C++ binding -> group + move + stall (no animation) with tests -> the
 stand-in animation and hop -> the player shove -> sticky piston.
 
+## 18. Stage 4, built (2026-11-26): pistons
+
+- **C++:** `BrickTerrain.placed_rect(x, course, z)` -> `Vector4i(rx, rz, sx,
+  sz)`, the placed brick holding that cell, or zeros (over `placed_at`).
+- **Piston** (`piston`) and **sticky piston** (`sticky_piston`), kind
+  `piston` in `DEVICES`: a 1-stud brick with a collider. It faces a way or
+  **up** (`FACE_UP` = 4, a fifth facing); the builder lays it facing up when
+  the camera looks steeply down (`facing_for`, y < -0.75); the wrench turns
+  +x, +z, -x, -z, up, +x (not while out). Power from any side but its front
+  (`piston_power`); facing up, every side.
+- **The push** (`_piston_push`, step 3a of the tick): power rising pushes
+  what the head meets (`head_cells`, the stud in front at its height, or the
+  course above). Air in front: the head goes out anyway. The group
+  (`piston_group`): the placed bricks the head meets, every placed brick
+  clutched on a group brick's top studs (repeated), and every placed brick
+  in the way. It **stalls** (the head stays in, `last_stall` / the
+  wrench's readout says why, and it tries again each tick) for generated
+  ground in front or in any cell the group moves into (bedrock is generated
+  ground), a cable or device there, a chest there, a move under way there,
+  or more than 12 bricks. A step is **1 stud** sideways or **1 course** up
+  (the plan's "2 studs" of 6.4 was for 2-stud blocks; 1 stud keeps any
+  brick on the lattice). At most 4 pushes start in a tick
+  (`PUSHES_PER_TICK`); the rest wait one.
+- **The move** (`_move`, `_land`): the group's cells cleared at once
+  (`clear_fn`, the edit marked `anchored` so the collapse waits); a stand-in
+  (`_standin`: the bricks as boxes in one MultiMesh, studs on their tops in
+  another, a kinematic body of the same boxes to stand on) waits until the
+  tiles have rebuilt without the bricks (`tiles_fresh`, at most 0.35 s),
+  then slides 0.2 s -- straight up or down, straight across when hanging,
+  the **hop** (up a plate, across, pressed down) when it rests on studs --
+  then the bricks are laid (`lay_fn`), marked one brick each again
+  (`mark_fn`), and ONE `terrain_edited` covers the old and new places
+  (collapse, water, observers, `check` all follow). The stand-in goes when
+  the tiles show the new place (at most 0.35 s). Two edits, not the plan's
+  one: written at once, the old tile and the stand-in drew the brick twice
+  for 0.15 s; cleared first, it is never twice and never missing.
+  A save (`to_save`) lays any move under way first (`finish_moves`): no
+  brick is lost to a save mid-slide. Without a host (the probe) a move is
+  written at once.
+- **Held up by the piston:** the collapse leaves a loose group standing
+  when one of its bricks rests on a piston's top or on its head's top while
+  out (`MineWiring.holds`, asked by `ground_collapse.gd` for each group a
+  survey lets go). Without it a brick laid on a piston, or pushed up by one,
+  fell at once (a device is not ground). When the head comes in, a survey
+  over what it held is queued (`_survey`): a plain piston that lifted a
+  brick lets it fall. That is the trap of 6.1.
+- **The player** (`_carry`, each frame of the slide): feet on the moving
+  group's top are carried along and kept on it (lifted with it); beside it
+  as it moves across, shoved by the same step; inside a rising group's box,
+  lifted onto it. `MineWorld.shove_player_local(by)` moves the pawn or the
+  walker. AI pawns are not moved.
+- **Sticky** (`_piston_pull`): power falling, the brick past the head (and
+  what is clutched on it, no line) comes back a step; if it will not (a
+  device or ground in the way, too many), the head comes in alone.
+- Items `piston`, `sticky_piston` (`wiring.json`, model `piston`: a grey
+  body, the head plate in the item's colour). Saved: facing (4 for up) and
+  `on` (out).
+- **Not yet:** smooth tiles are not told from studs (a sideways move hops
+  whenever it rests on anything); pistons do not move chests, devices,
+  cables, sand columns or fallen pieces; a block laid into an out head's
+  stud is not refused; the stand-in is lit as outdoors in caves; the
+  stand-in is boxes with studs, not the bevelled bricks.
+
+Tests: `wiring_probe` 143 ok (stage 4, on placed bricks of the
+probe's own -- `rect_fn`, `clear_fn`, `lay_fn`, `mark_fn` are the probe's
+ground: up a course and still one brick; a plain piston leaves it; a stack
+of 3 rides, a brick under an overhang does not; 12 move and 13 stall and it
+retries; generated ground on the top or over the head stalls; sideways the
+brick in its line goes too and a cable left without ground breaks; a lamp
+in the way stalls; power at the front does not count; sticky pulls back
+sideways and down; 4 pushes a tick then the fifth; facing up when looking
+down, a gate never; the wrench's turn order; saved). `--gate=wiring` stage
+4, real placed bricks: GATE_LINE
+
 ## Sources
 
 - Minecraft quasi-connectivity: <https://techmcdocs.github.io/pages/GameMechanics/QuasiConnectivity>,
