@@ -101,7 +101,7 @@ var gate_keys := false
 ## A farm tool's RMB drag (Docs/MineFarming.md stage 3): the plate cell it
 ## began on, or empty when none is held.
 var farm_from := {}
-const FARM_DRAG := ["hoe", "seed", "scythe", "can"]
+const FARM_DRAG := ["hoe", "seed", "scythe", "can", "fertiliser"]
 ## Trees are looked at (Docs/Inventory.md 13); a gate aiming at the ground
 ## beside one turns it off.
 var aim_trees := true
@@ -448,13 +448,13 @@ func farm_drag_end() -> bool:
 	var k := str(d.get("kind", ""))
 	var h := inv.hand()
 	var budget := 1 << 30
-	if k == "seed" and not inv.creative:
+	if (k == "seed" or k == "fertiliser") and not inv.creative:
 		budget = h.count if h != null else 0
 	elif k == "can":
 		budget = int(h.data.get("water", 0)) if h != null else 0
 	var n: int = host.farming.area(k, a, b, d.id, budget)
 	if n > 0:
-		if k == "seed":
+		if k == "seed" or k == "fertiliser":
 			inv.consume_hand(n)
 		elif k == "can" and h != null:
 			_set_data(h, "water", int(h.data.get("water", 0)) - n)
@@ -645,6 +645,13 @@ func _fell(cell: Vector2i, at: Vector3) -> bool:
 				var left := inv.add_item(ItemStack.make(id, int(got[k])))
 				if left != null:
 					host.drops.spawn(left, at)
+		# Its sapling, half the time (Docs/MineFarming.md 17).
+		var sap := MineFarming.sapling_of(int(got.get("variant", -1)))
+		if sap != &"" and randf() < MineFarming.SAPLING_CHANCE:
+			var left2 := inv.add_item(ItemStack.make(sap, 1))
+			if left2 != null:
+				host.drops.spawn(left2, at)
+			log_blocks.append("found %s" % sap)
 	return true
 
 
@@ -767,6 +774,15 @@ func place_target() -> bool:
 			var n3: int = host.farming.area("scythe", c, c)
 			target = {}
 			return n3 > 0
+		if k == "fertiliser":
+			var c5: Vector3i = target.get("cell", Vector3i.ZERO)
+			var n5: int = host.farming.area("fertiliser", c5, c5, d.id, 1)
+			if n5 > 0:
+				inv.consume_hand(1)
+				placed += 1
+				log_blocks.append("fertilise %s %s" % [d.id, c5])
+			target = {}
+			return n5 > 0
 		if k == "can":
 			var h := inv.hand()
 			var left := int(h.data.get("water", 0)) if h != null else 0

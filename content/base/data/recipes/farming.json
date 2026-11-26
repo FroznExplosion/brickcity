@@ -1,7 +1,66 @@
 {
 	"recipes": [
-		{ "name": "Hoe", "inputs": { "wood": 12, "#stone": 12 }, "station": "workbench", "output": "hoe" },
-		{ "name": "Scythe", "inputs": { "wood": 12, "iron_ore": 18 }, "station": "workbench", "output": "scythe" },
-		{ "name": "Watering can", "inputs": { "iron_ore": 18 }, "station": "furnace", "output": "watering_can" }
+		{
+			"name": "Hoe",
+			"inputs": {
+				"wood": 12,
+				"#stone": 12
+			},
+			"station": "workbench",
+			"output": "hoe"
+		},
+		{
+			"name": "Scythe",
+			"inputs": {
+				"wood": 12,
+				"iron_ore": 18
+			},
+			"station": "workbench",
+			"output": "scythe"
+		},
+		{
+			"name": "Watering can",
+			"inputs": {
+				"iron_ore": 18
+			},
+			"station": "furnace",
+			"output": "watering_can"
+		},
+		{
+			"name": "Compost bin",
+			"inputs": {
+				"wood": 24
+			},
+			"station": "workbench",
+			"output": "compost_bin"
+		},
+		{
+			"name": "Compost from leaves",
+			"inputs": {
+				"leaves": 48
+			},
+			"station": "compost_bin",
+			"output": "compost",
+			"count": 4
+		},
+		{
+			"name": "Compost from crops",
+			"inputs": {
+				"#crop": 6
+			},
+			"station": "compost_bin",
+			"output": "compost",
+			"count": 4
+		},
+		{
+			"name": "Grow mix",
+			"inputs": {
+				"compost": 4,
+				"coal_ore": 2
+			},
+			"station": "workbench",
+			"output": "grow_mix",
+			"count": 4
+		}
 	]
 }

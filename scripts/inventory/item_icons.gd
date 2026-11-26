@@ -163,6 +163,8 @@ static func _model(d: Dictionary) -> Node3D:
 	# Produce (a carrot, a pumpkin): a round brick with a leafy top.
 	if str(d.get("model", "")) == "produce":
 		kind = "produce"
+	elif str(d.get("model", "")) == "sapling":
+		kind = "sapling"
 	match kind:
 		"produce":
 			_part(inner, _cyl(0.45, 0.45, 0.6, 18), _mat(col, 0.4), Vector3(0, 0.3, 0))
@@ -214,7 +216,13 @@ static func _model(d: Dictionary) -> Node3D:
 			_part(inner, _cyl(0.16, 0.16, 0.16), _mat(Color(0.75, 0.75, 0.78), 0.3), Vector3(0, 0.7, 0))
 			_part(inner, _box(Vector3(0.08, 0.45, 0.12)), _mat(Color(0.75, 0.75, 0.78), 0.3), Vector3(0.24, 0.55, 0))
 		"station":
-			if str(d.get("model", "")) == "furnace":
+			if str(d.get("model", "")) == "bin":
+				# A slatted wooden box, open at the top, dark compost in it.
+				var m := _mat(col, 0.8)
+				for i in 4:
+					_part(inner, _box(Vector3(1.0, 0.16, 1.0)), m, Vector3(0, 0.1 + i * 0.22, 0))
+				_part(inner, _box(Vector3(0.86, 0.04, 0.86)), _mat(Color(0.22, 0.15, 0.1), 0.9), Vector3(0, 0.84, 0))
+			elif str(d.get("model", "")) == "furnace":
 				# A stone box, a dark mouth with a glow in it, a chimney.
 				_part(inner, _box(Vector3(1.0, 0.9, 0.8)), _mat(col, 0.8), Vector3(0, 0.45, 0))
 				_part(inner, _box(Vector3(0.5, 0.32, 0.04)), _mat(Color(1.0, 0.45, 0.1), 0.3, 1.0, true),
@@ -248,8 +256,13 @@ static func _model(d: Dictionary) -> Node3D:
 			_part(inner, _cyl(0.32, 0.36, 0.6), m, Vector3(0, 0.3, 0))
 			_part(inner, _cyl(0.05, 0.07, 0.6), m, Vector3(0.42, 0.42, 0), Basis(Vector3.BACK, deg_to_rad(-55.0)))
 			_part(inner, _box(Vector3(0.08, 0.08, 0.5)), m, Vector3(-0.1, 0.72, 0), Basis(Vector3.UP, PI * 0.5))
-		"seed":
-			# A little heap of seeds.
+		"sapling":
+			# A short trunk and a leafy block on it (Docs/MineFarming.md 17).
+			_part(inner, _cyl(0.1, 0.12, 0.6), _mat(Color(0.45, 0.3, 0.16), 0.7), Vector3(0, 0.3, 0))
+			_part(inner, _box(Vector3(0.6, 0.45, 0.6)), _mat(col, 0.6), Vector3(0, 0.75, 0))
+			_part(inner, _box(Vector3(0.36, 0.2, 0.36)), _mat(col.lightened(0.1), 0.6), Vector3(0, 1.05, 0))
+		"seed", "fertiliser":
+			# A little heap of seeds (or compost).
 			var m := _mat(col, 0.5)
 			for i in 7:
 				var a := TAU * float(i) / 7.0

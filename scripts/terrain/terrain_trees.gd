@@ -85,6 +85,11 @@ var _solid_at := Vector3.INF
 ## the player cut down. `_place` leaves them out, so a cell streamed in again
 ## keeps them gone; the mine world saves them with the world.
 var felled := {}
+## Trees grown from saplings (Docs/MineFarming.md 17): trunk cell (x, z) ->
+## [plate y it stands on + 1, variant]. Streamed in with their cell like the
+## seed's trees (even where a felled one stood), felled the same way, saved
+## with the world (`planted_list`).
+var planted := {}
 
 
 func setup(p_camera: Camera3D, p_material: Material) -> void:
@@ -219,7 +224,8 @@ func _stream_step() -> void:
 		if _cells.has(c):
 			continue
 		var cell_rect := Rect2i(c * STREAM_CELL, Vector2i(STREAM_CELL, STREAM_CELL))
-		var rows := _place(Trees.scatter(cell_rect, world_seed, 4000, _chance_at, _variant_at))
+		var rows := _place(Trees.scatter(cell_rect, world_seed, 4000, _chance_at, _variant_at)
+				+ _planted_in(cell_rect))
 		_cells[c] = rows
 		count += rows.size()
 		for row in rows:
@@ -310,7 +316,7 @@ func _exit_tree() -> void:
 func _place(spots: Array) -> Array:
 	var rows := []
 	for spot in spots:
-		if felled.has(Vector2i(spot.cell.x, spot.cell.z)):
+		if felled.has(Vector2i(spot.cell.x, spot.cell.z)) and not spot.get("planted", false):
 			continue
 		var variant: int = spot.variant
 		var key := "tree_%d" % variant
@@ -377,6 +383,7 @@ func ray(from: Vector3, dir: Vector3, reach: float) -> Dictionary:
 ## stands there (it is still remembered as felled).
 func fell(cell: Vector2i) -> int:
 	felled[cell] = true
+	planted.erase(cell)
 	var lists: Array = []
 	if streaming:
 		var cell_m := float(STREAM_CELL) * BrickWorld.get_stud_metres()
@@ -409,6 +416,64 @@ func fell(cell: Vector2i) -> int:
 				_solid_at = Vector3.INF
 			return int(row.variant)
 	return -1
+
+
+## The planted trees whose trunks stand in `rect` (studs), as spots.
+func _planted_in(rect: Rect2i) -> Array:
+	var out := []
+	for c in planted:
+		if rect.has_point(c):
+			out.append({"cell": Vector3i(c.x, int(planted[c][0]), c.y), "variant": int(planted[c][1]), "planted": true})
+	return out
+
+
+## A sapling grown (Docs/MineFarming.md 17): a tree of `variant` whose trunk
+## corner is `cell` (x, plate it stands on + 1, z), drawn at once if its
+## stream cell is in, collided like the rest, remembered in `planted`.
+func plant_tree(cell: Vector3i, variant: int) -> void:
+	var k := Vector2i(cell.x, cell.z)
+	planted[k] = [cell.y, posmod(variant, Trees.VARIANTS)]
+	var spot := {"cell": cell, "variant": posmod(variant, Trees.VARIANTS), "planted": true}
+	if not streaming:
+		count += _place([spot]).size()
+		return
+	var cell_m := float(STREAM_CELL) * BrickWorld.get_stud_metres()
+	var stud := BrickWorld.get_stud_metres()
+	var c := Vector2i(floori(cell.x * stud / cell_m), floori(cell.z * stud / cell_m))
+	if not _cells.has(c):
+		return                    # streamed in with its cell
+	var rows := _place([spot])
+	(_cells[c] as Array).append_array(rows)
+	count += rows.size()
+	for row in rows:
+		var lod := _sets[row.key] as ImpostorLod
+		if camera != null:
+			var here := to_local(camera.global_position)
+			lod.update(here, SETS_BUDGET_US)
+			_sorted_at[row.key] = here
+	if _solid.has(c):
+		_unsolid(c)
+	_solid_at = Vector3.INF
+
+
+## The planted trees as the save keeps them: [[x, y, z, variant], ...].
+func planted_list() -> Array:
+	var out := []
+	for c in planted:
+		out.append([c.x, int(planted[c][0]), c.y, int(planted[c][1])])
+	out.sort()
+	return out
+
+
+## The planted trees of a save (`planted_list`'s shape), before the trees
+## stream in (MineWorld.generate).
+func set_planted(list) -> void:
+	planted.clear()
+	if not (list is Array):
+		return
+	for e in list:
+		if e is Array and (e as Array).size() == 4:
+			planted[Vector2i(int(e[0]), int(e[2]))] = [int(e[1]), int(e[3])]
 
 
 ## The felled trees as the save keeps them: [[x, z], ...].

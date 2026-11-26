@@ -1,7 +1,7 @@
 # Farming in the mine world -- plan
 
 Planned 2026-11-25; stages 1 and 2 BUILT the same day (section 15), stage 3
-on 2026-11-26 (section 16). The
+on 2026-11-26 (section 16), stage 4 the same day (section 17). The
 scene is `scenes/terrain_test.tscn` (Docs/MineWorld.md). The user's answers
 to the questions are in section 14.
 
@@ -381,7 +381,7 @@ written from the crop table and the growth rules), `farm_gate.gd`.
 Crops: wheat, carrot, potato, beans (give fertility back), pumpkin (thirsty,
 slow), berry bush (regrows); items in content/base/data/items/farming.json.
 
-**Not yet** (later stages): compost and fertilisers, more crops, animals and enclosure, birds, weeds, blight,
+**Not yet** (later stages): animals and enclosure, birds, weeds, blight,
 breeding, giant crops, automation, death.
 
 **Tests.** `farm_probe` (headless, 55 checks): the materials and shader
@@ -434,3 +434,39 @@ old rows load, the recipes, the area cap. --gate=farm +7: a hoe drag tills
 drag waters exactly the dry ones (all dark after), four days on (the can's water lasts one) a scythe drag
 harvests and replants all 8, a scythe click takes the ripe 3 x 3, a harvest
 too big for the inventory lands in a chest by the field.
+
+## 17. Built (2026-11-26): stage 4, more plants
+
+**New crops** (crops.json): corn (grain, tall, thirsty and hungry, planted
+from a cob), cabbage (the leaf family: quickest, shade-happy, light on the
+soil), melon (gourd, the thirstiest). Nine crops over six families now.
+Models: `corn` (two stalks, cobs), `head` (stacked round plates), and the
+gourd shape in melon green.
+
+**Saplings -> real trees.** Oak, dark oak, birch and acacia saplings (one
+per tree variant, `tree` in their crop) are planted with RMB on the top of
+plain grass or dirt -- no hoe (`ground: "soil"`: a plot on plain soil,
+`MineFarming._soil_plot`, its four tops within a brick). They grow like any
+crop (drawn as a `sapling`: trunk and leaf block); when ripe the plot goes and
+`TerrainTrees.plant_tree` stands a real tree there: drawn, collided, felled
+and yielding like the seed's own. Grown trees are a `planted` list (trunk
+cell -> [plate, variant]) streamed in with their cell (even where a felled
+tree stood) and saved in the world file (`planted`). Felling any tree in
+survival gives its sapling half the time. A drag plants saplings 3 plots
+apart. Seeds of crops are refused on plain soil.
+
+**Compost and grow mix** (kind `fertiliser`, fields `fertility`,
+`boost_days`). A compost bin (24 wood at a workbench) is a station: within
+4 m of it, 48 leaves or 6 of any crop (tag `crop`, on every produce) make 4
+compost. Compost on a plot: +30 fertility. Grow mix (4 compost + 2 coal ore
+at a workbench): +10 fertility and x1.5 growth for 2 days (`boost_until`, a
+cut in `settle` like a can's water, so still exact). Both by click or drag.
+Plot rows now have 20 fields (boost_until, ground); older rows load.
+
+**Tests.** farm_probe 100: exact across a grow mix's end (corn, cabbage),
+boosted ripens sooner, rows keep ground and boost, a sapling per tree kind on
+plain soil, a sapling grows up, the recipes, every produce composts.
+--gate=farm adds: a sapling on plain grass (seeds refused there), corn,
+cabbage and melon planted, compost crafted at a bin, compost raises a plot's
+fertility, a grow mix drag boosts 8 plots, the sapling grows into a planted
+tree and is felled; picture user://dev/farm_stage4.png.

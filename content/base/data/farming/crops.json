@@ -46,6 +46,65 @@
 			"found": [{ "material": "grass", "chance": 0.015 }, { "material": "lush grass", "chance": 0.03 }],
 			"tips": "Slow and thirsty: on dry soil it barely grows, so dig it next to water. Wants full sun and rich soil, and takes a lot out of it. A well kept pumpkin gives extra seeds."
 		},
+		"corn": {
+			"name": "Corn", "family": "grain", "seed": "corn", "produce": "corn",
+			"stages": 6, "stage_hours": 6, "dry_rate": 0.35, "light": 0.8, "drain": 14,
+			"likes": ["Plains", "Savanna", "Jungle"], "dislikes": ["Snowy Plains", "Snowy Taiga", "Taiga"],
+			"yield": [2, 4], "seeds_back": [0, 0],
+			"look": { "shape": "corn", "leaf": "#4f9a32", "ripe": "#f2cc3a" },
+			"found": [{ "material": "lush grass", "chance": 0.03 }, { "material": "dry grass", "chance": 0.02 }],
+			"tips": "Tall, thirsty and hungry, but the biggest grain harvest. Planted from a cob. Rotate it with beans to keep the soil up."
+		},
+		"cabbage": {
+			"name": "Cabbage", "family": "leaf", "seed": "cabbage_seeds", "produce": "cabbage",
+			"stages": 4, "stage_hours": 4, "dry_rate": 0.5, "light": 0.35, "drain": 6,
+			"likes": ["Meadow", "Birch Forest", "Forest"], "dislikes": ["Desert", "Badlands", "Savanna"],
+			"yield": [1, 2], "seeds_back": [1, 2],
+			"look": { "shape": "head", "leaf": "#6fae4a", "ripe": "#9fd27a" },
+			"found": [{ "material": "grass", "chance": 0.03 }, { "material": "cold grass", "chance": 0.03 }],
+			"tips": "The quickest crop and the only leaf crop: fine in shade, light on the soil. Good between hungrier crops in a rotation."
+		},
+		"melon": {
+			"name": "Melon", "family": "gourd", "seed": "melon_seeds", "produce": "melon",
+			"stages": 6, "stage_hours": 6, "dry_rate": 0.2, "light": 0.85, "drain": 16,
+			"likes": ["Jungle", "Savanna"], "dislikes": ["Snowy Plains", "Snowy Taiga", "Taiga", "Meadow"],
+			"yield": [1, 1], "seeds_back": [1, 2],
+			"look": { "shape": "gourd", "leaf": "#3d8a2f", "ripe": "#3f9a3a" },
+			"found": [{ "material": "lush grass", "chance": 0.02 }],
+			"tips": "The thirstiest crop of all: on dry soil it hardly grows. Warm, sunny, wet and rich soil, then a big green melon."
+		},
+		"oak_tree": {
+			"name": "Oak sapling", "family": "tree", "seed": "oak_sapling", "produce": "", "tree": 0, "ground": "soil",
+			"stages": 5, "stage_hours": 8, "dry_rate": 0.6, "light": 0.55, "drain": 0,
+			"likes": ["Forest", "Plains", "Jungle"], "dislikes": ["Desert", "Snowy Plains"],
+			"yield": [0, 0], "seeds_back": [0, 0],
+			"look": { "shape": "sapling", "leaf": "#5e9e3b", "ripe": "#5e9e3b" },
+			"tips": "Planted on grass or dirt (no hoe needed). When grown it becomes a real tree: fell it for wood and leaves, and maybe a new sapling."
+		},
+		"dark_oak_tree": {
+			"name": "Dark oak sapling", "family": "tree", "seed": "dark_oak_sapling", "produce": "", "tree": 1, "ground": "soil",
+			"stages": 5, "stage_hours": 9, "dry_rate": 0.6, "light": 0.45, "drain": 0,
+			"likes": ["Dark Forest", "Taiga", "Snowy Taiga"], "dislikes": ["Desert", "Savanna"],
+			"yield": [0, 0], "seeds_back": [0, 0],
+			"look": { "shape": "sapling", "leaf": "#2f6e34", "ripe": "#2f6e34" },
+			"tips": "A dark-leaved tree that copes with shade and cold. Planted on grass or dirt; grows into a real tree."
+		},
+		"birch_tree": {
+			"name": "Birch sapling", "family": "tree", "seed": "birch_sapling", "produce": "", "tree": 2, "ground": "soil",
+			"stages": 5, "stage_hours": 7, "dry_rate": 0.65, "light": 0.55, "drain": 0,
+			"likes": ["Birch Forest", "Meadow"], "dislikes": ["Desert", "Jungle"],
+			"yield": [0, 0], "seeds_back": [0, 0],
+			"look": { "shape": "sapling", "leaf": "#7ab84a", "ripe": "#7ab84a" },
+			"tips": "The quickest tree. Planted on grass or dirt; grows into a real tree."
+		},
+		"acacia_tree": {
+			"name": "Acacia sapling", "family": "tree", "seed": "acacia_sapling", "produce": "", "tree": 3, "ground": "soil",
+			"stages": 5, "stage_hours": 10, "dry_rate": 0.8, "light": 0.7, "drain": 0,
+			"likes": ["Savanna", "Badlands", "Jungle"], "dislikes": ["Snowy Plains", "Snowy Taiga", "Taiga"],
+			"yield": [0, 0], "seeds_back": [0, 0],
+			"look": { "shape": "sapling", "leaf": "#7e8a2e", "ripe": "#7e8a2e" },
+			"tips": "The tallest tree, slow, and happy dry. Planted on grass or dirt; grows into a real tree."
+		},
 		"berry_bush": {
 			"name": "Berry bush", "family": "bush", "seed": "berries", "produce": "berries",
 			"stages": 5, "stage_hours": 6, "dry_rate": 0.75, "light": 0.3, "drain": 4, "regrow_to": 3,
