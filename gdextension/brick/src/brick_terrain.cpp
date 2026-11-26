@@ -3316,6 +3316,14 @@ PackedInt32Array BrickTerrain::get_placed() {
     return out;
 }
 
+Vector4i BrickTerrain::placed_rect(int x, int course, int z) {
+    int rx = 0, rz = 0, sx = 0, sz = 0;
+    if (!placed_at(x, course, z, rx, rz, sx, sz)) {
+        return Vector4i();
+    }
+    return Vector4i(rx, rz, sx, sz);
+}
+
 int BrickTerrain::set_placed(const PackedInt32Array &cells) {
     int n = 0;
     for (int64_t i = 0; i + 3 < cells.size(); i += 4) {
@@ -8878,6 +8886,8 @@ void BrickTerrain::_bind_methods() {
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("mark_placed", "lo", "hi", "material"),
         &BrickTerrain::mark_placed);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_placed"), &BrickTerrain::get_placed);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("placed_rect", "x", "course", "z"),
+        &BrickTerrain::placed_rect);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_placed", "cells"),
         &BrickTerrain::set_placed);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_bond_top", "on"),

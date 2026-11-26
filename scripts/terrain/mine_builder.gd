@@ -1109,7 +1109,7 @@ func _place_wiring(k: String, id: StringName) -> bool:
 	else:
 		# A device faces away from the player placing it.
 		var cam: Camera3D = host._eye_camera()
-		var f := MineWiring.facing_of(host.global_transform.basis.inverse() * -cam.global_transform.basis.z) if cam != null else 0
+		var f := MineWiring.facing_for(id, host.global_transform.basis.inverse() * -cam.global_transform.basis.z) if cam != null else 0
 		var dbox: AABB = host.wiring.device_box(cell, id, f)
 		if not _box_hits_player(dbox) and not host.chests.overlaps(dbox):
 			ok = host.wiring.place_device(cell, id, false, false, f)

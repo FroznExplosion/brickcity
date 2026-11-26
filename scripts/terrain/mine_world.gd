@@ -1857,6 +1857,16 @@ func player_feet_local() -> Vector3:
 	return Vector3.INF
 
 
+## Move the player by `by` (terrain frame): a piston's moving bricks carry or
+## shove whoever is in their way (Docs/MineWiring.md 18).
+func shove_player_local(by: Vector3) -> void:
+	var g := global_transform.basis * by
+	if on_foot and pawn != null:
+		pawn.body.global_position += g
+	elif walker != null:
+		(walker as Node3D).global_position += g
+
+
 ## A stack thrown from the player (Q in the screen, a held stack with no
 ## room on close): it lands a little in front.
 func drop_from_player(s: ItemStack) -> void:
