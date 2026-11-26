@@ -3100,16 +3100,21 @@ func _run_inventory_gate() -> void:
 		_fly_to(box.get_center() + Vector3(0, 2.4, 0), Vector3(0, 0, -1))
 		walker.pitch = -1.45
 		await _frames(10)
+		# Only what the shot makes counts: generating again may have topped up
+		# the farming kit, and what did not fit lies at the spawn already.
+		var before: Array = drops.drops.duplicate()
 		_mine(to_global(box.get_center()), Vector3.DOWN, null)
 		await _frames(5)
-		check.call("a shot breaks the chest, its soil drops (creative: not the chest) (chests %d, drops %s)" % [
-				chests.count(), str(drops.drops.map(func(d): return (d.stack as ItemStack).id))],
-				chests.count() == 0 and drops.count() == 1
-				and (drops.drops[0].stack as ItemStack).id == &"soil")
+		var fresh: Array = drops.drops.filter(func(d): return not before.has(d))
+		check.call("a shot breaks the chest, its soil drops (creative: not the chest) (chests %d, new drops %s)" % [
+				chests.count(), str(fresh.map(func(d): return (d.stack as ItemStack).id))],
+				chests.count() == 0 and fresh.size() == 1
+				and (fresh[0].stack as ItemStack).id == &"soil")
 		await _frames(60)
-		var drop_at: Vector3 = drops.drops[0].pos if drops.count() > 0 else box.get_center()
+		var soil_drop = fresh[0] if fresh.size() > 0 else null
+		var drop_at: Vector3 = soil_drop.pos if soil_drop != null else box.get_center()
 		check.call("the drop came to rest on the ground (%.2f m over the chest's floor)"
-				% (drop_at.y - box.position.y), drops.count() > 0 and bool(drops.drops[0].rest)
+				% (drop_at.y - box.position.y), soil_drop != null and bool(soil_drop.rest)
 				and absf(drop_at.y - box.position.y) < 0.5)
 		await _shot(UserPaths.DEV + "inv_drop.png")
 		var had := 0
@@ -3129,7 +3134,7 @@ func _run_inventory_gate() -> void:
 			if a.area in [&"hotbar_0", &"hotbar_1", &"main"] and inv.get_slot(a) == null:
 				free_n += 1
 		check.call("walking over it picks it up (soil %d -> %d; %d free slots, drops %d)" % [had, now_has, free_n, drops.count()],
-				drops.count() == 0 and now_has > had)
+				soil_drop != null and not drops.drops.has(soil_drop) and now_has > had)
 		# The ground under a second chest goes: it breaks.
 		_fly_to(box.get_center() + Vector3(0, 2.4, 0), Vector3(0, 0, -1))
 		walker.pitch = -1.45
