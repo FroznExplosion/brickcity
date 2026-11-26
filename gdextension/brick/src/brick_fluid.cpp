@@ -1210,7 +1210,19 @@ int rain_top(int x, int z) {
     return pk->top[(size_t)(x - tx * SX) + (size_t)SX * (size_t)(z - tz * SX)];
 }
 
+/// SNOW AND ICE (Docs/MineWaterNext.md 10): a column is cold where the
+/// generator lays snow on it (a snowy biome's top, or over the snow line).
+/// Rain there falls as snow and leaves no water; calm water there freezes.
+bool g_cold_test = false;   ///< every column cold (probes)
+std::unordered_map<int64_t, bool> g_cold_tiles;   ///< tile -> cold (its middle column)
+bool cold_column(int x, int z) {
+    if (g_cold_test) return true;
+    if (!biomes_on()) return false;
+    return biome_column((uint32_t)BrickTerrain::get_seed(), x, z).snow;
+}
+
 void rain_drop(int x, int z) {
+    if (cold_column(x, z)) { ++g_rain_soaked; return; }
     const int tp = rain_top(x, z);
     if (tp == INT_MIN) return;
     int b = fdiv(tp + 1, 3);
@@ -2788,6 +2800,7 @@ double BrickFluid::reset(double sea_m, bool sea_on) {
     g_parked.clear();
     g_parked_bytes = 0;
     g_level_due.clear();
+    g_cold_tiles.clear();
     g_sec_epoch.fetch_add(1);
     g_tile_secs.clear();
     g_due.clear();
@@ -2857,6 +2870,85 @@ void BrickFluid::rain(Vector3 centre, double radius_m, double drops) {
 int64_t BrickFluid::rain_landed() { return g_rain_landed; }
 
 int64_t BrickFluid::rain_soaked() { return g_rain_soaked; }
+
+bool BrickFluid::cold_at(int x, int z) { return cold_column(x, z); }
+
+void BrickFluid::set_cold_test(bool on) {
+    g_cold_test = on;
+    g_cold_tiles.clear();
+}
+
+PackedInt32Array BrickFluid::freeze_scan(int tiles, int max_out) {
+    // Water that freezes: the open top cell of calm water (still or a
+    // source, not the sea's) under the sky, in a cold tile (its middle
+    // column's), of a few random tiles of the sim ring with water in them.
+    PackedInt32Array out;
+    if (max_out <= 0 || tiles <= 0) return out;
+    MainLock lk;
+    std::unordered_map<int64_t, bool> &cold_tiles = g_cold_tiles;
+    if (cold_tiles.size() > 4096) cold_tiles.clear();
+    std::vector<int64_t> wet;
+    for (const auto &e : g_tile_secs) {
+        const int tx = (int)((int32_t)((uint32_t)(e.first >> 28) << 4) >> 4);
+        const int tz = (int)((int32_t)((uint32_t)(e.first & 0xFFFFFFF) << 4) >> 4);
+        if (dist2_centre(tx * SX + SX / 2, tz * SX + SX / 2) > g_sim_r * g_sim_r) continue;
+        bool any = false;
+        for (int sb : e.second) {
+            const Section *sc = sec_find(tx, sb, tz);
+            if (sc != nullptr && sc->wet > 0) { any = true; break; }
+        }
+        if (!any) continue;
+        auto ct = cold_tiles.find(e.first);
+        if (ct == cold_tiles.end()) ct = cold_tiles.emplace(e.first, cold_column(tx * SX + SX / 2, tz * SX + SX / 2)).first;
+        if (ct->second) wet.push_back(e.first);
+    }
+    if (wet.empty()) return out;
+    struct Cand { int x, lo, hi, z; };
+    std::vector<Cand> cand;
+    // Distinct tiles, at random.
+    for (size_t i = wet.size(); i > 1; --i) std::swap(wet[i - 1], wet[hmix(++g_rain_seq * 0x27D4EB2FU) % i]);
+    for (int t = 0; t < tiles && t < (int)wet.size(); ++t) {
+        const int64_t key = wet[t];
+        const int tx = (int)((int32_t)((uint32_t)(key >> 28) << 4) >> 4);
+        const int tz = (int)((int32_t)((uint32_t)(key & 0xFFFFFFF) << 4) >> 4);
+        auto ts = g_tile_secs.find(key);
+        if (ts == g_tile_secs.end()) continue;
+        for (int sb : ts->second) {
+            const Section *sc = sec_find(tx, sb, tz);
+            if (sc == nullptr || sc->wet <= 0) continue;
+            for (int lz = 0; lz < SX; ++lz) {
+                for (int lx = 0; lx < SX; ++lx) {
+                    if (!sc->ready[lx + SX * lz]) continue;
+                    for (int lb = SB - 1; lb >= 0; --lb) {
+                        const Cell &c = sc->c[Section::idx(lx, lb, lz)];
+                        if (!c_wet(c)) continue;
+                        if (c_fluid(c) != F_WATER || c_ocean(c)) break;
+                        if (c_kind(c) != K_STILL && c_kind(c) != K_SOURCE) break;
+                        const int x = tx * SX + lx, z = tz * SX + lz, b = sb * SB + lb;
+                        const Cell a = rcell(x, b + 1, z);
+                        if (c_wet(a)) break;
+                        // Under the sky: nothing solid over it.
+                        if (rain_top(x, z) >= (b + 1) * 3) break;
+                        const int f_pl = floor_u(c.solid) / U;
+                        const int top_pl = (floor_u(c.solid) + c.amt) / U;
+                        if (top_pl > f_pl) cand.push_back({ x, b * 3 + f_pl, b * 3 + top_pl - 1, z });
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    for (int i = 0; i < max_out && !cand.empty(); ++i) {
+        const size_t j = hmix(++g_rain_seq * 0x165667B1U) % cand.size();
+        out.push_back(cand[j].x);
+        out.push_back(cand[j].lo);
+        out.push_back(cand[j].hi);
+        out.push_back(cand[j].z);
+        cand[j] = cand.back();
+        cand.pop_back();
+    }
+    return out;
+}
 
 void BrickFluid::set_keep_inland(double metres) {
     g_keep_inland_m = std::max(0.0, metres);
@@ -3580,6 +3672,9 @@ void BrickFluid::_bind_methods() {
     ClassDB::bind_static_method("BrickFluid", D_METHOD("rain", "centre", "radius_m", "drops"), &BrickFluid::rain);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("rain_landed"), &BrickFluid::rain_landed);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("rain_soaked"), &BrickFluid::rain_soaked);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("cold_at", "x", "z"), &BrickFluid::cold_at);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("set_cold_test", "on"), &BrickFluid::set_cold_test);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("freeze_scan", "tiles", "max_out"), &BrickFluid::freeze_scan);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("request_mesh", "tx", "tz"), &BrickFluid::request_mesh);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("drawn_tiles"), &BrickFluid::drawn_tiles);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("cell_info", "cell"), &BrickFluid::cell_info);

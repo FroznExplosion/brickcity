@@ -154,7 +154,7 @@ ores by name).
 
 ## 7. Not yet
 
-Flowers and tall grass, clouds, villages and structures, animals, enemies. (Falling sand: Docs/TerrainCollapse.md; water: Docs/MineWater.md; chests and the inventory: Docs/Inventory.md.)
+Flowers and tall grass, clouds, villages and structures, animals, enemies. (Falling sand: Docs/TerrainCollapse.md; water: Docs/MineWater.md; chests and the inventory: Docs/Inventory.md; cable tiles, levers, lamps: Docs/MineWiring.md.)
 
 ## 8. Build mode
 
@@ -386,6 +386,7 @@ made the difference.
 | `-- --gate=cave` | land in a reachable cave, still standing 200 ticks later |
 | `-- --gate=menu` | the generation menu and the pause menu clicked with real mouse events |
 | `-- --gate=look [--look=parts]` | the close view under different settings (the fuzz hunt) |
+| `-- --gate=wiring` | cable tiles, a lever, lamps: laid, aimed, lit, a shot cuts a run, saved (Docs/MineWiring.md 13) |
 
 ## 13. Cave floors are collided
 
@@ -1277,5 +1278,12 @@ passed `--gate=deep` and `--gate=handover`), and fire into falling sand.
   view. Not worth its memory (a CPU copy of every block's arrays, a second
   GPU copy). (GDScript trap met on the way: append_array on a packed array
   held in an Array appends to a copy; append to a local and store it back.)
-  Left, if wanted: a coarser step for ring 0 (fewer triangles at 45-180 m;
-  a look change, the user's call).
+  DISTANT GROUND DETAIL (the user, 2026-11-25: detailed by default,
+  configurable): a Video setting, High / Medium / Low (TerrainCoarse.detail;
+  each level samples every far block 2x coarser). Changing it in play lays a
+  new far tier out on the workers and swaps it in (_follow_far, as a
+  re-anchor). Far triangles 327k / 116k / 39k. `--gate=gpu --far-detail=N`
+  (quiet, not held back): the far tier High 0.78 ms on foot, 1.10 ms 25 m up;
+  Low 0.12 and 0.22 -- the frame's GPU 7.04 -> 5.79 and 4.80 -> 3.67 ms.
+  `--gate=gpu --header-only --far-detail=N` prints the tier's counts and
+  saves mine_far_detail_N.png (over the trees, across the hand-over).

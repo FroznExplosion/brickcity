@@ -351,6 +351,16 @@ func update_target() -> void:
 		_outline.global_transform = Transform3D(Basis.from_scale(box.size * 1.01),
 				host.to_global(box.position - box.size * 0.005))
 		return
+	# A device (lever, lamp) nearer than the ground (Docs/MineWiring.md).
+	if host.wiring != null:
+		var dv: Dictionary = host.wiring.ray_device(from, dir, REACH)
+		if not dv.is_empty() and (target.is_empty() or float(dv.dist) < from.distance_to(target.position)):
+			target = {"device": dv.cell, "position": dv.point}
+			var dbox: AABB = host.wiring.device_box(dv.cell)
+			_outline.visible = true
+			_outline.global_transform = Transform3D(Basis.from_scale(dbox.size * 1.02),
+					host.to_global(dbox.position - dbox.size * 0.01))
+			return
 	# A tree nearer than the ground (Docs/Inventory.md 13): its trunk or its
 	# canopy, outlined; LMB fells it.
 	var tr: Dictionary = host.tree_ray(from, dir, REACH) if aim_trees else {}
@@ -366,6 +376,17 @@ func update_target() -> void:
 		return
 	if not farm_from.is_empty():
 		_outline_area(farm_from.cell, target.cell)
+		return
+	# A cable tile on the top looked at: it is what LMB breaks (the ground's
+	# target stays, so a block is still laid there).
+	if host.wiring != null and Vector3i(target.normal) == Vector3i.UP \
+			and host.wiring.cables.has(Vector3i(target.cell) + Vector3i.UP):
+		var cc: Vector3i = Vector3i(target.cell) + Vector3i.UP
+		target["cable"] = cc
+		var cbox: AABB = host.wiring.cable_box(cc)
+		_outline.visible = true
+		_outline.global_transform = Transform3D(Basis.from_scale(cbox.size * 1.02),
+				host.to_global(cbox.position - cbox.size * 0.01))
 		return
 	var b := _block_of(target.cell)
 	var lo := _cell_lo(b)
@@ -537,6 +558,18 @@ func break_target() -> bool:
 		log_blocks.append("break chest %s" % target.chest)
 		target = {}
 		return true
+	if target.has("device"):
+		host.wiring.remove_device(target.device)
+		broken += 1
+		log_blocks.append("break device %s" % target.device)
+		target = {}
+		return true
+	if target.has("cable"):
+		host.wiring.remove_cable(target.cable)
+		broken += 1
+		log_blocks.append("break cable %s" % target.cable)
+		target = {}
+		return true
 	if target.has("tree"):
 		return _fell(target.tree, target.position)
 	# A crop on tilled soil: harvested if ripe, else pulled (MineFarming).
@@ -556,6 +589,7 @@ func break_target() -> bool:
 	log_blocks.append("break %s" % _block_of(target.cell))
 	var at := _cell_lo(_block_of(target.cell)) + _block_size_m() * 0.5
 	host.terrain_edited(res)
+	MineRain.melt(material, c[0], c[1])
 	if host.farming != null:
 		host.farming.cells_changed(c[0], c[1])
 	target = {}
@@ -650,6 +684,8 @@ func _land_picks() -> void:
 		broken += 1
 		log_blocks.append("pick %d plates" % removed)
 		host.terrain_edited(res)
+		if res.has("box_lo"):
+			MineRain.melt(int(job[2]), res.box_lo, res.box_hi)
 		var id := ItemCatalog.block_item(int(job[2]))
 		if not inv.creative and id != &"":
 			inv.add_item(ItemStack.make(id, removed))
@@ -677,8 +713,17 @@ func place_target() -> bool:
 			host.open_chest(target.chest)
 		target = {}
 		return true
+	if target.has("device"):
+		# RMB on a lever turns it, whatever is in the hand (Docs/MineWiring.md).
+		var used: bool = host.wiring.use_device(target.device)
+		if used:
+			log_blocks.append("use device %s" % target.device)
+		target = {}
+		return used
 	var d := hand_def()
 	var k := str(d.get("kind", ""))
+	if k == "wire" or k == "device":
+		return _place_wiring(k, d.id)
 	# Farming (MineFarming): a ripe crop is picked whatever is in the hand;
 	# a hoe tills, a seed plants.
 	if host.farming != null:
@@ -729,7 +774,8 @@ func place_target() -> bool:
 	var dd := dims()
 	if not inv.creative and inv.hand().count < dd.x * dd.y * dd.z:
 		return false
-	if _blocks_player(to) or host.chests.overlaps(AABB(_cell_lo(to), _block_size_m())):
+	if _blocks_player(to) or host.chests.overlaps(AABB(_cell_lo(to), _block_size_m())) \
+			or (host.wiring != null and host.wiring.overlaps(AABB(_cell_lo(to), _block_size_m()))):
 		return false
 	if floats_on_water(to):
 		log_blocks.append("refused on water %s" % to)
@@ -861,6 +907,12 @@ func pick_target() -> void:
 	if target.has("tree"):
 		inv.pick(&"wood")
 		return
+	if target.has("device"):
+		inv.pick(host.wiring.devices[target.device].item)
+		return
+	if target.has("cable"):
+		inv.pick(&"cable")
+		return
 	# The material that lays it, set to that colour.
 	var m := int(target.material)
 	var fam := ItemCatalog.block_item(m)
@@ -894,6 +946,26 @@ func _place_chest() -> bool:
 	return true
 
 
+## A cable tile or a device on the face looked at: the plate cell past it
+## (Docs/MineWiring.md). A cable needs ground under it; a device too.
+func _place_wiring(k: String, id: StringName) -> bool:
+	if target.has("cable") or not target.has("cell"):
+		return false
+	var cell: Vector3i = Vector3i(target.cell) + Vector3i(target.normal)
+	var ok := false
+	if k == "wire":
+		ok = host.wiring.place_cable(cell)
+	elif not _box_hits_player(host.wiring.device_box(cell)) and not host.chests.overlaps(host.wiring.device_box(cell)):
+		ok = host.wiring.place_device(cell, id)
+	if not ok:
+		return false
+	inv.consume_hand(1)
+	placed += 1
+	log_blocks.append("place %s %s" % [id, cell])
+	target = {}
+	return true
+
+
 ## Would a block there stand inside the player?
 func _blocks_player(block: Vector3i) -> bool:
 	return _box_hits_player(AABB(_cell_lo(block), _block_size_m()))
@@ -922,7 +994,10 @@ func _refresh_bar() -> void:
 		var dd := dims()
 		var cols: PackedInt32Array = d.get("colours", PackedInt32Array())
 		if cols.size() > 1:
-			what += " (%s)" % BrickTerrain.material_names()[lay_material(d)]
+			var lm := lay_material(d)
+			var mn := BrickTerrain.material_names()
+			# A building colour (MAT_FIL_BASE + filament) is named by its filament.
+			what += " (%s)" % (mn[lm] if lm < mn.size() else BrickWorld.get_material_colour_name(0, BrickTerrain.material_filament_index(lm)))
 		what += "  -  %s%s, %d cells" % [SHAPES[size_i][0], " turned" if turned and dd.x != dd.z else "",
 				dd.x * dd.y * dd.z]
 		keys = "Z shape  R turn  V colour  " + keys

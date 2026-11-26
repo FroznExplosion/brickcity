@@ -1,57 +1,78 @@
 class_name MineBuildings
 extends RefCounted
-## BUILDINGS AS GROUND (Docs/TerrainBuildings.md, stage 1): a city building
-## written into the mine world's terrain field, so it IS ground -- dug with
-## the pickaxe, shot, collapsing, lit, saved and drawn (the brick overlay's
-## real bevels near the eye, the coarse tier far off) by the systems the
-## ground already has, with nothing to tell them it is a building.
+## BUILDINGS AS GROUND (Docs/TerrainBuildings.md): a city building written
+## into the mine world's terrain field, so it IS ground -- dug with the
+## pickaxe, shot, collapsing, lit, saved and drawn (the brick overlay's real
+## bevels near the eye, the coarse tier far off) by the systems the ground
+## already has, with nothing to tell them it is a building.
 ##
-## The building is the city's own generator's (TowerRecipe, as the workshop's
-## TowerBlockout lays it): built for real into a scratch BrickWorld chunk and
-## read back brick by brick, so its walls, floors, columns, windows and
-## stairwell are the ones measured to stand. Each brick becomes the plate cells
-## of its box in the BUILDING material of its colour (brick_terrain.h
-## MAT_FIL_BASE + its filament: the city's colours, a city brick's strength in
-## the collapse), and is marked one placed brick (BrickTerrain.mark_placed), so
-## it breaks and falls whole. Glass (PETG, translucent) is left out: its
-## windows are open.
+## Two sources, read the same way (built for real into a scratch BrickWorld
+## chunk and read back brick by brick, so there is one description of how a
+## building is laid):
+## - the city's generator (TowerRecipe, as the workshop's TowerBlockout lays
+##   it): walls, floors, columns, windows, stairwell, and its rooms furnished
+##   the city's way (TowerBlockout._furnish: RoomManifest's furniture, as
+##   plain bricks) -- `stamp`;
+## - a workshop build (BuildRecipe, its generated towers and catalogue
+##   furniture expanded as the city placer does) -- `stamp_build`.
+## Each brick becomes the plate cells of its box in the BUILDING material of
+## its colour (brick_terrain.h MAT_FIL_BASE + its filament: the city's
+## colours, a city brick's strength in the collapse), and is marked one placed
+## brick (BrickTerrain.mark_placed) where it fills whole ground courses, so
+## it breaks and falls whole. A translucent brick (glass) becomes the GLASS
+## material (stage 5): see-through, and light passes it.
 ##
 ## The plot is levelled first: the footprint cleared from the building's base
 ## up past its roof, and stone laid under the base down to the lowest ground
 ## of the footprint, so the building stands on, and is joined to, the ground.
+##
+## TOWNS (stage 8): a world with "towns" on gets a few towers in some regions
+## (`town_at`), stamped when the player first comes near (`tend_towns`).
 
-## Brick material index of PETG, the translucent one (brick_grid.h): glass.
-const GLASS_MATERIAL := 4
 ## Plates of stone under the base past the footprint's lowest ground.
 const FOUNDATION_DEPTH := 3
 ## brick_terrain.h MAT_FIL_BASE: building material = this + filament index.
 const BUILDING_MATERIAL_BASE := 64
 
 static var _mat_ids := {}
+static var _glass := -1
 
 ## TIPPING (Docs/TerrainBuildings.md 4b): every stamped building, so an edit
 ## under one can ask whether it still balances. Each {lo, hi, base, weight
-## (Vector2i column -> cells stamped there), fallen}.
+## (Vector2i column -> its building cells now), bricks (its stamped bricks,
+## [lo, hi, material] in the field), fallen}. Saved with the world
+## (to_save / from_save).
 static var registry: Array = []
-## Balance checks made and buildings let go to tip, for the gate.
+## Balance checks made, buildings let go to tip, columns recounted after
+## damage (the weights follow it), for the gates.
 static var checks := 0
 static var toppled := 0
+static var recounted := 0
+## Bricks the last toppled building went as (the gate: it breaks landing).
+static var last_parts := 0
+## Cells of it cleared as no part of a falling course (the last topple).
+static var left_over := 0
 
 
-## The terrain material ids (BrickTerrain's enum, by name).
+## The terrain material ids (BrickTerrain's enum, by name: "MAT_STONE").
 static func _terrain_ids() -> Dictionary:
 	if _mat_ids.is_empty():
-		# BrickTerrain's Material enum, in order (brick_terrain.h): appended,
-		# never inserted, so the numbers hold.
-		var order := ["MAT_AIR", "MAT_GRASS", "MAT_DIRT", "MAT_SAND", "MAT_STONE", "MAT_DARK_STONE",
-				"MAT_ROAD", "MAT_SNOW", "MAT_GRAVEL", "MAT_SANDSTONE", "MAT_RED_SAND", "MAT_TERRA_ORANGE",
-				"MAT_TERRA_CREAM", "MAT_TERRA_RED", "MAT_CLAY", "MAT_BEDROCK", "MAT_COAL", "MAT_IRON",
-				"MAT_COPPER", "MAT_GOLD", "MAT_REDSTONE", "MAT_LAPIS", "MAT_DIAMOND", "MAT_PODZOL",
-				"MAT_DRY_GRASS", "MAT_LUSH_GRASS", "MAT_COLD_GRASS", "MAT_DARK_GRASS", "MAT_GRANITE",
-				"MAT_DIORITE", "MAT_ICE", "MAT_OBSIDIAN", "MAT_WOOD", "MAT_LEAVES"]
-		for i in order.size():
-			_mat_ids[order[i]] = i
+		var names := BrickTerrain.material_names()
+		for i in names.size():
+			_mat_ids["MAT_" + names[i].to_upper().replace(" ", "_")] = i
 	return _mat_ids
+
+
+## The GLASS terrain material (brick_terrain.h MAT_GLASS).
+static func glass_material() -> int:
+	if _glass < 0:
+		_glass = Array(BrickTerrain.material_names()).find("glass")
+	return _glass
+
+
+## A cell of a building: a building material or glass.
+static func is_building(m: int) -> bool:
+	return m >= BUILDING_MATERIAL_BASE or (m > 0 and m == glass_material())
 
 
 ## The building's plates onto the ground's: building plate -> [first ground
@@ -77,9 +98,9 @@ static func course_map(courses: int) -> Array:
 
 
 ## The tower's bricks as boxes of plate cells relative to its corner:
-## [lo (stud, plate, stud), hi (inclusive), terrain material]. Glass is left
-## out. `p`: TowerBlockout's parameters ({"x", "z", "courses", "rooms",
-## "windows", "stairs"}).
+## [lo (stud, plate, stud), hi (inclusive), terrain material, placed].
+## `p`: TowerBlockout's parameters ({"x", "z", "courses", "rooms",
+## "windows", "stairs", "furnish" (default true), "seed", "program"}).
 static func tower_cells(p: Dictionary) -> Array:
 	var world := BrickWorld.new()
 	var palette := TowerRecipe.bake_palette(world)
@@ -97,15 +118,80 @@ static func tower_cells(p: Dictionary) -> Array:
 		f.cell = Vector3i(stair.position.x, TowerRecipe.SLAB_PLATES, stair.position.y)
 		f.params = {"steps": StaircaseRecipe.steps_for_courses(int(p.courses)), "colour": 11}
 		f.build_into(world, c, StaircaseRecipe.flight_parts(palette))
+	# INTERIORS (stage 6): its rooms furnished as the city's are -- the
+	# manifest's furniture, plain bricks on the floors' studs.
+	if bool(p.get("furnish", true)):
+		var q := p.duplicate()
+		q["seed"] = int(p.get("seed", 1))
+		q["program"] = p.get("program", {})
+		TowerBlockout._furnish(world, c, palette, q, keep)
+	var ymap := course_map(int(p.courses))
+	var out := _read_chunk(world, c, ymap)
+	if bool(p.get("windows", true)):
+		out.append_array(_glaze(world, c, d, ymap))
+	world.release_chunk(c)
+	return out
+
+
+## Most plates a window is tall (a storey's wall band is 18).
+const WINDOW_MAX_PLATES := 18
+
+
+## GLASS in the windows (stage 5): the city draws its panes apart (painted
+## windows); here each opening in the outer wall -- a run of air with wall
+## above and below it in a perimeter column -- is filled with glass cells,
+## above the ground storey (its openings are its doors and shopfronts).
+static func _glaze(world: BrickWorld, c: int, d: Vector3i, ymap: Array) -> Array:
+	var glass := glass_material()
+	if glass <= 0:
+		return []
+	var out := []
+	var y0 := TowerRecipe.STOREY_PLATES + TowerRecipe.SLAB_PLATES
+	for z in d.z:
+		for x in d.x:
+			if x != 0 and z != 0 and x != d.x - 1 and z != d.z - 1:
+				continue
+			var y := y0
+			while y < d.y:
+				if world.is_solid(c, Vector3i(x, y, z)):
+					y += 1
+					continue
+				var a := y
+				while y < d.y and not world.is_solid(c, Vector3i(x, y, z)):
+					y += 1
+				if y >= d.y or y - a > WINDOW_MAX_PLATES or not world.is_solid(c, Vector3i(x, a - 1, z)):
+					continue
+				var ya: Array = ymap[clampi(a, 0, ymap.size() - 1)]
+				var yb: Array = ymap[clampi(y - 1, 0, ymap.size() - 1)]
+				out.append([Vector3i(x, int(ya[0]), z), Vector3i(x, int(yb[1]), z), glass, false])
+	return out
+
+
+## A workshop build's bricks, as tower_cells gives them. Its towers and its
+## catalogue furniture are expanded first (CityPlacer.hold's way). Frame 0
+## only (a build of several frames -- moving parts -- is laid as its first).
+static func recipe_cells(r: BuildRecipe) -> Array:
+	r = TowerBlockout.flatten(AssetPlacements.expand(r))
+	var world := BrickWorld.new()
+	var palette := TowerRecipe.bake_palette(world)
+	var c := world.create_chunk(Vector3i.ZERO, r.chunk_dims() + Vector3i.ONE)
+	r.build(world, c, palette)
+	var out := _read_chunk(world, c, [])
+	world.release_chunk(c)
+	return out
+
+
+## Every brick of chunk `c` as [lo, hi, material, placed]. `ymap`: a tower's
+## course_map, or [] (a build's plates as they are: a brick is placed when it
+## fills whole ground courses).
+static func _read_chunk(world: BrickWorld, c: int, ymap: Array) -> Array:
 	var ts := BrickWorld.ticks_per_stud()
 	var tp := BrickWorld.ticks_per_plate()
-	var ymap := course_map(int(p.courses))
+	var glass := glass_material()
 	var out := []
 	for id in world.get_block_count(c):
 		var box: Array = world.get_block_ticks(c, id)
 		if box.is_empty():
-			continue
-		if world.get_block_material(c, id) == GLASS_MATERIAL:
 			continue
 		# (min, size) in ticks.
 		var lo: Vector3i = box[0]
@@ -114,6 +200,12 @@ static func tower_cells(p: Dictionary) -> Array:
 		var a := Vector3i(lo.x / ts, lo.y / tp, lo.z / ts)
 		@warning_ignore("integer_division")
 		var b := Vector3i((hi.x + ts - 1) / ts - 1, (hi.y + tp - 1) / tp - 1, (hi.z + ts - 1) / ts - 1)
+		var mat := BUILDING_MATERIAL_BASE + world.get_block_colour(c, id)
+		if glass > 0 and BrickWorld.is_material_translucent(world.get_block_material(c, id)):
+			mat = glass
+		if ymap.is_empty():
+			out.append([a, b, mat, posmod(a.y, 3) == 0 and posmod(b.y + 1, 3) == 0])
+			continue
 		# Onto the ground's courses (course_map): a slab's 2 plates are one
 		# 3-plate course, so every wall brick sits on the ground's course
 		# lines and is kept whole. A slab's lower layer is laid but not
@@ -121,9 +213,7 @@ static func tower_cells(p: Dictionary) -> Array:
 		var ya: Array = ymap[clampi(a.y, 0, ymap.size() - 1)]
 		var yb: Array = ymap[clampi(b.y, 0, ymap.size() - 1)]
 		var place := not (bool(ya[2]) and int(ya[3]) == 0)
-		out.append([Vector3i(a.x, int(ya[0]), a.z), Vector3i(b.x, int(yb[1]), b.z),
-				BUILDING_MATERIAL_BASE + world.get_block_colour(c, id), place])
-	world.release_chunk(c)
+		out.append([Vector3i(a.x, int(ya[0]), a.z), Vector3i(b.x, int(yb[1]), b.z), mat, place])
 	return out
 
 
@@ -131,8 +221,29 @@ static func tower_cells(p: Dictionary) -> Array:
 ## the ground there. `host`: the mine world (terrain_edited). Returns
 ## {base (plate of its ground floor), lo, hi (its plate box), bricks, cells}.
 static func stamp(host: Node, corner: Vector2i, p: Dictionary) -> Dictionary:
-	var fx := int(p.x)
-	var fz := int(p.z)
+	return stamp_cells(host, corner, tower_cells(p))
+
+
+## A workshop build (a BuildRecipe file) written into the field, as `stamp`.
+## {} when it holds no bricks.
+static func stamp_build(host: Node, corner: Vector2i, path: String) -> Dictionary:
+	var r := BuildRecipe.load_from(path)
+	if r == null or not r.has_content():
+		return {}
+	return stamp_cells(host, corner, recipe_cells(r))
+
+
+## Bricks (tower_cells' form) written into the field at `corner`.
+static func stamp_cells(host: Node, corner: Vector2i, cells: Array) -> Dictionary:
+	if cells.is_empty():
+		return {}
+	var fx := 1
+	var fz := 1
+	var top0 := 0
+	for cbox: Array in cells:
+		fx = maxi(fx, (cbox[1] as Vector3i).x + 1)
+		fz = maxi(fz, (cbox[1] as Vector3i).z + 1)
+		top0 = maxi(top0, (cbox[1] as Vector3i).y)
 	var t_min := 1 << 30
 	var t_max := -(1 << 30)
 	for z in range(corner.y, corner.y + fz):
@@ -142,19 +253,19 @@ static func stamp(host: Node, corner: Vector2i, p: Dictionary) -> Dictionary:
 			t_max = maxi(t_max, sp)
 	# The ground floor on whole courses, a plate over the highest ground.
 	var base := (floori(float(t_max + 1) / 3.0) + 1) * 3
-	var cells := tower_cells(p)
-	var top := base
-	for cbox: Array in cells:
-		top = maxi(top, base + (cbox[1] as Vector3i).y)
+	var top := base + top0
 	var ids := _terrain_ids()
 	var lo := Vector3i(corner.x, base, corner.y)
 	var hi := Vector3i(corner.x + fx - 1, top, corner.y + fz - 1)
 	# The plot: cleared above the base, stone under it to the ground.
 	host.terrain_edited(BrickTerrain.fill_box(Vector3i(lo.x, base, lo.z), Vector3i(hi.x, top + 6, hi.z), 0, false))
 	host.terrain_edited(BrickTerrain.fill_box(Vector3i(lo.x, t_min - FOUNDATION_DEPTH, lo.z),
-			Vector3i(hi.x, base - 1, hi.z), int(ids.MAT_STONE), false))
+			Vector3i(hi.x, base - 1, hi.z), int(ids.get("MAT_STONE", 4)), false))
 	var n := 0
 	var placed := 0
+	var glass_cells := 0
+	var glass := glass_material()
+	var laid := []
 	for cbox: Array in cells:
 		var a: Vector3i = cbox[0]
 		var b: Vector3i = cbox[1]
@@ -166,6 +277,9 @@ static func stamp(host: Node, corner: Vector2i, p: Dictionary) -> Dictionary:
 		# ground's course lines stays bond cells).
 		if bool(cbox[3]):
 			placed += BrickTerrain.mark_placed(blo, bhi, int(cbox[2]))
+		laid.append([blo, bhi, int(cbox[2])])
+		if int(cbox[2]) == glass:
+			glass_cells += int(res.get("changed", 0))
 		host.terrain_edited(res)
 	# Its weight by column, for the balance (after_edit).
 	var weight := {}
@@ -177,21 +291,23 @@ static func stamp(host: Node, corner: Vector2i, p: Dictionary) -> Dictionary:
 			for x in range(a.x, b.x + 1):
 				var k := Vector2i(corner.x + x, corner.y + z)
 				weight[k] = int(weight.get(k, 0)) + h
-	registry.append({"lo": lo, "hi": hi, "base": base, "weight": weight, "fallen": false})
+	registry.append({"lo": lo, "hi": hi, "base": base, "weight": weight, "bricks": laid, "fallen": false})
 	return {"base": base, "lo": lo, "hi": hi, "bricks": cells.size(), "cells": n, "ground": t_min,
-			"placed": placed}
+			"placed": placed, "glass": glass_cells}
 
 
 # ---------------------------------------------------------------------------
 # Tipping.
 
-## The ground changed (`res`, an edit's result): any building whose base the
-## edit reached is asked whether it still balances. Its weight's middle (the
-## columns' stamped cells) must lie inside what holds it -- the columns whose
-## bottom brick still stands on solid ground. If it does not, the whole
-## building is let go as ONE piece (ground_collapse's falling pieces): resting
-## on what is left of its support, it leans over the edge and falls, as a
-## building does that is undermined on one side. Tension alone (the survey)
+## The ground changed (`res`, an edit's result). An edit INTO a building
+## recounts the columns it reached (its weight follows the damage: a side
+## shot away moves its middle). Then, if the edit reached its base or changed
+## its weight, it is asked whether it still balances. Its weight's middle
+## must lie inside what holds it -- the columns whose bottom brick still
+## stands on solid ground. If it does not, the whole building is let go as
+## ONE piece of its own bricks (ground_collapse's falling pieces, at a city
+## brick's strength so it breaks where it lands): resting on what is left of
+## its support, it leans over the edge and falls. Tension alone (the survey)
 ## never tips anything: whole bricks bridge the gap and it hangs.
 static func after_edit(host: Node, res: Dictionary) -> void:
 	if registry.is_empty() or not res.has("box_lo"):
@@ -203,13 +319,35 @@ static func after_edit(host: Node, res: Dictionary) -> void:
 			continue
 		var lo: Vector3i = b.lo
 		var hi: Vector3i = b.hi
-		# Under or round its base: two studs out, below its ground floor.
-		if ehi.x < lo.x - 2 or elo.x > hi.x + 2 or ehi.z < lo.z - 2 or elo.z > hi.z + 2 \
-				or elo.y > int(b.base) + 3:
+		if ehi.x < lo.x - 2 or elo.x > hi.x + 2 or ehi.z < lo.z - 2 or elo.z > hi.z + 2 or elo.y > hi.y:
+			continue
+		var changed := false
+		var base := int(b.base)
+		if ehi.y >= base:
+			for z in range(maxi(elo.z, lo.z), mini(ehi.z, hi.z) + 1):
+				for x in range(maxi(elo.x, lo.x), mini(ehi.x, hi.x) + 1):
+					var k := Vector2i(x, z)
+					if not b.weight.has(k):
+						continue
+					var w := _column_weight(x, z, base, hi.y)
+					recounted += 1
+					if w != int(b.weight[k]):
+						b.weight[k] = w
+						changed = true
+		if not changed and elo.y > base + 3:
 			continue
 		checks += 1
 		if not balances(b):
 			_topple(host, b)
+
+
+## A column's building cells now, from its base to its top.
+static func _column_weight(x: int, z: int, y0: int, y1: int) -> int:
+	var n := 0
+	for y in range(y0, y1 + 1):
+		if is_building(BrickTerrain.solid_at(x, y, z)):
+			n += 1
+	return n
 
 
 ## Does it still stand on its own support?
@@ -220,6 +358,8 @@ static func balances(b: Dictionary) -> bool:
 	var support := PackedVector2Array()
 	for k: Vector2i in b.weight:
 		var w := float(b.weight[k])
+		if w <= 0.0:
+			continue
 		sum += (Vector2(k) + Vector2(0.5, 0.5)) * w
 		mass += w
 		# Its bottom brick there, on solid ground.
@@ -230,6 +370,11 @@ static func balances(b: Dictionary) -> bool:
 		return true   # nothing under it: the survey drops it whole
 	var middle := sum / mass
 	var hull := Geometry2D.convex_hull(support)
+	# Which way it would go: from what holds it toward its middle.
+	var held := Vector2.ZERO
+	for v in support:
+		held += v
+	b["lean"] = middle - held / support.size()
 	if hull.size() < 3:
 		return false
 	# Inside, and not on the edge (a weight over the edge falls).
@@ -246,29 +391,272 @@ static func _inside_by(p: Vector2, hull: PackedVector2Array, margin: float) -> b
 	return true
 
 
-## Let the whole building go as one piece: every whole course cell of its
-## materials in its box (ground_collapse lets a group go a course tall).
+## Radians a second a toppled building is let go turning at (_topple).
+const TIP_SPIN := 0.35
+
+
+## The parts a falling piece is laid in (ground_collapse._part), largest first.
+const _PARTS := [Vector2i(4, 2), Vector2i(2, 4), Vector2i(2, 2), Vector2i(2, 1), Vector2i(1, 2), Vector2i(1, 1)]
+
+
+## Let the whole building go as one piece, in ITS OWN bricks: each stamped
+## brick still whole in the field, a course at a time, in the falling parts'
+## sizes (a long wall brick as 2x4s along it); bonded across courses as it
+## was laid, so a landing shears it where it hits (PlanetPieces.
+## _break_on_landing) rather than it lying whole. Any other whole course
+## cell of it left (bricks cut by damage) goes as a 1x1.
 static func _topple(host: Node, b: Dictionary) -> void:
 	var collapse = host.get("collapse")
 	if collapse == null:
 		return
 	b.fallen = true
+	var taken := {}
+	var g := PackedInt32Array()
+	for br: Array in b.get("bricks", []):
+		var blo: Vector3i = br[0]
+		var bhi: Vector3i = br[1]
+		var m := int(br[2])
+		if posmod(blo.y, 3) != 0 or posmod(bhi.y + 1, 3) != 0:
+			continue
+		for y in range(blo.y, bhi.y + 1, 3):
+			_tile_course(blo.x, bhi.x, blo.z, bhi.z, y, m, taken, g)
 	var lo: Vector3i = b.lo
 	var hi: Vector3i = b.hi
-	var g := PackedInt32Array()
-	var c0 := floori(float(lo.y) / 3.0)
-	var c1 := floori(float(hi.y) / 3.0)
-	for c in range(c0, c1 + 1):
+	for c in range(floori(float(lo.y) / 3.0), floori(float(hi.y) / 3.0) + 1):
 		var y := c * 3
 		for z in range(lo.z, hi.z + 1):
 			for x in range(lo.x, hi.x + 1):
+				if taken.has(Vector3i(x, y, z)):
+					continue
 				var m := BrickTerrain.solid_at(x, y, z)
-				if m < BUILDING_MATERIAL_BASE:
-					continue
-				if BrickTerrain.solid_at(x, y + 1, z) != m or BrickTerrain.solid_at(x, y + 2, z) != m:
-					continue
-				g.append_array([x, y, z, 1, 1, m])
+				if is_building(m) and _whole(x, y, z, m):
+					g.append_array([x, y, z, 1, 1, m])
+					taken[Vector3i(x, y, z)] = true
 	if g.is_empty():
 		return
+	# What is not a whole course of it (a glass run, a furniture plate, a
+	# stair's step) goes too, as nothing: left in the ground it held the
+	# falling building up from inside, where it had stood.
+	var runs := PackedInt32Array()
+	for z in range(lo.z, hi.z + 1):
+		for x in range(lo.x, hi.x + 1):
+			var y := lo.y
+			while y <= hi.y:
+				if taken.has(Vector3i(x, floori(float(y) / 3.0) * 3, z)) 						or not is_building(BrickTerrain.solid_at(x, y, z)):
+					y += 1
+					continue
+				var y0 := y
+				while y <= hi.y and not taken.has(Vector3i(x, floori(float(y) / 3.0) * 3, z)) 						and is_building(BrickTerrain.solid_at(x, y, z)):
+					y += 1
+				runs.append_array([x, z, y0, y - 1])
+	if not runs.is_empty():
+		var res: Dictionary = BrickTerrain.clear_runs(runs)
+		left_over = int(res.get("removed", 0))
+		host.terrain_edited(res)
 	toppled += 1
-	collapse.call("_let_group_go", g)
+	@warning_ignore("integer_division")
+	last_parts = g.size() / 6
+	# Started leaning its way: let go from rest, balanced on the edge, it can
+	# lie still long enough to count as settled (and be put away) before it
+	# tips. A slow turn about the edge, top toward its middle's side.
+	var lean: Vector2 = b.get("lean", Vector2.ZERO)
+	var spin := Vector3.ZERO
+	if lean.length() > 0.01:
+		spin = Vector3.UP.cross(Vector3(lean.x, 0.0, lean.y).normalized()) * TIP_SPIN
+	collapse.call("_let_group_go", g, 1.0, spin)
+	# Rubble lying on it or in it (a shot brick on its roof) is frozen still:
+	# immovable, it held the whole building up. Woken, it falls with it.
+	var pieces = collapse.get("pieces")
+	if pieces != null and host is Node3D:
+		var stud := BrickWorld.get_stud_metres()
+		var plate := BrickWorld.get_plate_metres()
+		var a := Vector3(lo.x * stud, lo.y * plate, lo.z * stud)
+		var size := Vector3((hi.x - lo.x + 1) * stud, (hi.y - lo.y + 1) * plate, (hi.z - lo.z + 1) * stud)
+		pieces.call("support_gone", AABB((host as Node3D).to_global(a), size).grow(0.5))
+
+
+## A course cell all of material `m` (its 3 plates).
+static func _whole(x: int, y: int, z: int, m: int) -> bool:
+	return BrickTerrain.solid_at(x, y, z) == m and BrickTerrain.solid_at(x, y + 1, z) == m \
+			and BrickTerrain.solid_at(x, y + 2, z) == m
+
+
+## One brick's course [x0..x1] x [z0..z1] at plate y, in falling parts: at
+## each free whole cell the largest part that fits whole and free.
+static func _tile_course(x0: int, x1: int, z0: int, z1: int, y: int, m: int, taken: Dictionary,
+		g: PackedInt32Array) -> void:
+	var whole := {}
+	for z in range(z0, z1 + 1):
+		for x in range(x0, x1 + 1):
+			if not taken.has(Vector3i(x, y, z)) and _whole(x, y, z, m):
+				whole[Vector2i(x, z)] = true
+	for z in range(z0, z1 + 1):
+		for x in range(x0, x1 + 1):
+			if not whole.has(Vector2i(x, z)):
+				continue
+			for s: Vector2i in _PARTS:
+				var fits := true
+				for dz in s.y:
+					for dx in s.x:
+						if not whole.has(Vector2i(x + dx, z + dz)):
+							fits = false
+				if not fits:
+					continue
+				for dz in s.y:
+					for dx in s.x:
+						whole.erase(Vector2i(x + dx, z + dz))
+						taken[Vector3i(x + dx, y, z + dz)] = true
+				g.append_array([x, y, z, s.x, s.y, m])
+				break
+
+
+# ---------------------------------------------------------------------------
+# Saved with the world.
+
+static func to_save() -> Array:
+	var out := []
+	for b: Dictionary in registry:
+		var w := []
+		for k: Vector2i in b.weight:
+			w.append_array([k.x, k.y, int(b.weight[k])])
+		var br := []
+		for e: Array in b.get("bricks", []):
+			var l: Vector3i = e[0]
+			var h: Vector3i = e[1]
+			br.append_array([l.x, l.y, l.z, h.x, h.y, h.z, int(e[2])])
+		var lo: Vector3i = b.lo
+		var hi: Vector3i = b.hi
+		out.append({"lo": [lo.x, lo.y, lo.z], "hi": [hi.x, hi.y, hi.z], "base": int(b.base),
+				"weight": w, "bricks": br, "fallen": bool(b.fallen)})
+	return out
+
+
+static func from_save(data) -> void:
+	registry.clear()
+	if not data is Array:
+		return
+	for d in data:
+		if not d is Dictionary:
+			continue
+		var w := {}
+		var wa: Array = d.get("weight", [])
+		for i in range(0, wa.size() - 2, 3):
+			w[Vector2i(int(wa[i]), int(wa[i + 1]))] = int(wa[i + 2])
+		var bricks := []
+		var ba: Array = d.get("bricks", [])
+		for i in range(0, ba.size() - 6, 7):
+			bricks.append([Vector3i(int(ba[i]), int(ba[i + 1]), int(ba[i + 2])),
+					Vector3i(int(ba[i + 3]), int(ba[i + 4]), int(ba[i + 5])), int(ba[i + 6])])
+		var lo: Array = d.get("lo", [0, 0, 0])
+		var hi: Array = d.get("hi", [0, 0, 0])
+		registry.append({"lo": Vector3i(int(lo[0]), int(lo[1]), int(lo[2])),
+				"hi": Vector3i(int(hi[0]), int(hi[1]), int(hi[2])), "base": int(d.get("base", 0)),
+				"weight": w, "bricks": bricks, "fallen": bool(d.get("fallen", false))})
+
+
+# ---------------------------------------------------------------------------
+# Towns (stage 8).
+
+## Studs a side of a town region: at most one town each.
+const TOWN_REGION := 768
+## Share of regions with a town.
+const TOWN_CHANCE := 0.4
+## A town's towers: a grid of plots this many studs apart (a street between).
+const PLOT := 32
+## Most ground a plot may climb (plates) and still be built on.
+const PLOT_SLOPE := 18
+## How near (studs) the player comes before a town is laid.
+const TOWN_NEAR := 260
+## Regions whose town is laid (or found to have none), "x,z" -> true.
+static var towns_done := {}
+## Towers waiting to be stamped, one a tend: [corner, params].
+static var _queue: Array = []
+
+
+## The town of region `r`, or {}: {"plots": [[corner, params], ...], "mid"},
+## all from the seed. Up to 3 x 3 plots round a spot near the region's
+## middle, each a tower of 2..10 floors (taller nearer the middle),
+## footprints 16..24 studs.
+static func town_at(seed: int, r: Vector2i) -> Dictionary:
+	var s := seed & 0x3FFFFFFF
+	if BrickTerrain.hashf(r.x, r.y, s ^ 0x70E1) >= TOWN_CHANCE:
+		return {}
+	var half := TOWN_REGION >> 1
+	var mid := r * TOWN_REGION + Vector2i(half, half) \
+			+ Vector2i(int((BrickTerrain.hashf(r.x, r.y, s ^ 0x51) - 0.5) * half),
+					int((BrickTerrain.hashf(r.x, r.y, s ^ 0x52) - 0.5) * half))
+	var n := 1 + int(BrickTerrain.hashf(r.x, r.y, s ^ 0x53) * 3.0)   # 1..3 a side
+	var plots := []
+	for j in n:
+		for i in n:
+			var k := s ^ (i * 7 + j * 131)
+			if n > 1 and BrickTerrain.hashf(r.x * 9 + i, r.y * 9 + j, k ^ 0x54) < 0.2:
+				continue   # an open lot
+			var fx := 16 + 4 * int(BrickTerrain.hashf(r.x + i, r.y + j, k ^ 0x55) * 3.0)
+			var fz := 16 + 4 * int(BrickTerrain.hashf(r.x + i, r.y + j, k ^ 0x56) * 3.0)
+			var off := Vector2(i - (n - 1) * 0.5, j - (n - 1) * 0.5)
+			var centre := 1.0 - (absf(off.x) + absf(off.y)) / float(n)
+			var floors := clampi(2 + int(BrickTerrain.hashf(r.x + i, r.y + j, k ^ 0x57) * 5.0 * (0.5 + centre))
+					+ int(centre * 3.0), 2, 10)
+			var corner := mid + Vector2i(int(off.x * PLOT) - (fx >> 1), int(off.y * PLOT) - (fz >> 1))
+			plots.append([corner, {"x": fx, "z": fz, "courses": floors * TowerRecipe.COURSES_PER_FLOOR,
+					"rooms": true, "windows": true, "stairs": true, "furnish": true,
+					"seed": int(BrickTerrain.hashf(r.x + i, r.y + j, k) * 100000.0)}])
+	return {"plots": plots, "mid": mid}
+
+
+## Lay the towns near stud `at` that are not laid yet: their towers queued,
+## one stamped a call (~0.1 s each), on level dry land only (a plot over the
+## sea or up a slope is left empty). `sea_plate`: the sea's surface plate.
+## Returns how many it stamped.
+static func tend_towns(host: Node, seed: int, at: Vector2i, sea_plate: int) -> int:
+	if _queue.is_empty():
+		var r0 := Vector2i(floori(float(at.x) / TOWN_REGION), floori(float(at.y) / TOWN_REGION))
+		for dz in range(-1, 2):
+			for dx in range(-1, 2):
+				var r := r0 + Vector2i(dx, dz)
+				var key := "%d,%d" % [r.x, r.y]
+				if towns_done.has(key):
+					continue
+				var t := town_at(seed, r)
+				if t.is_empty():
+					towns_done[key] = true
+					continue
+				if Vector2(t.mid).distance_to(Vector2(at)) > TOWN_NEAR:
+					continue
+				towns_done[key] = true
+				for pl: Array in t.plots:
+					_queue.append(pl)
+	if _queue.is_empty():
+		return 0
+	var pl: Array = _queue.pop_front()
+	var corner: Vector2i = pl[0]
+	var p: Dictionary = pl[1]
+	var t_min := 1 << 30
+	var t_max := -(1 << 30)
+	for z in range(corner.y, corner.y + int(p.z), 2):
+		for x in range(corner.x, corner.x + int(p.x), 2):
+			var sp := BrickTerrain.surface_plate(x, z)
+			t_min = mini(t_min, sp)
+			t_max = maxi(t_max, sp)
+	if t_max - t_min > PLOT_SLOPE or t_min <= sea_plate + 2:
+		return 0
+	stamp(host, corner, p)
+	return 1
+
+
+## Towers still waiting to be stamped.
+static func towns_queued() -> int:
+	return _queue.size()
+
+
+static func towns_to_save() -> Array:
+	return towns_done.keys()
+
+
+static func towns_from_save(data) -> void:
+	towns_done.clear()
+	_queue.clear()
+	if data is Array:
+		for k in data:
+			towns_done[str(k)] = true

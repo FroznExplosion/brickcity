@@ -148,8 +148,15 @@ enum Material {
     /// same brick with water near it, drawn darker.
     MAT_FARMLAND,
     MAT_WET_FARMLAND,
+    /// GLASS (Docs/TerrainBuildings.md 5): a building's windows, and a block
+    /// item. Solid to everything that edits, collapses and collides; light
+    /// passes it (the sky and block light fills), the overlay lays no brick
+    /// of it, and the terrain shader draws it see-through (TERRAIN_GLASS).
+    MAT_GLASS,
     MATERIAL_COUNT
 };
+
+inline bool material_is_glass(int m) { return m == MAT_GLASS; }
 
 /// Wood or leaves, any colour: what lava sets alight and water floats.
 inline bool material_is_wood(int m) {
@@ -231,6 +238,7 @@ inline int material_filament(int m) {
         case MAT_RED_LEAVES: return FIL_RED;
         case MAT_FARMLAND: return FIL_BROWN;      // dirt's; the shader furrows it
         case MAT_WET_FARMLAND: return FIL_BROWN;  // and darkens the wet one
+        case MAT_GLASS: return 44;         // sky blue
         default: return FIL_GREY;
     }
 }
@@ -239,7 +247,7 @@ inline bool material_is_farmland(int m) { return m == MAT_FARMLAND || m == MAT_W
 
 /// Road is paved and farmland tilled: no studs. Everything natural takes them.
 inline bool material_studded(int m) {
-    return m != MAT_ROAD && m != MAT_AIR && !material_is_farmland(m);
+    return m != MAT_ROAD && m != MAT_AIR && !material_is_farmland(m) && m != MAT_GLASS;
 }
 
 // --- hashing ---------------------------------------------------------------
@@ -592,6 +600,18 @@ void top_columns(int tx, int tz, std::vector<TopColumn> &out, bool *packed = nul
 uint64_t tile_version(int tx, int tz);
 /// Every tile's version changes (the world set up again).
 void bump_field_version();
+
+/// The GENERATED cells (no edits) of tile (tx, tz)'s own TILE x TILE columns,
+/// plates [y_lo, y_hi): vox[lx + TILE * (lz + TILE * (yp - y_lo))], material,
+/// 255 under the bedrock; gtop[lx + TILE * lz] the column's generated top
+/// plate. From the kept generated tiles and deep sections, made when not
+/// kept. Any thread. False without the biome generator (test fields): the
+/// region fit (terrain_fit.h) is then off. `field` gets the field's serial.
+bool generated_cells(int tx, int tz, int y_lo, int y_hi, std::vector<uint8_t> &vox,
+        std::vector<int16_t> &gtop, uint32_t *field = nullptr,
+        int lx0 = 0, int lx1 = TILE, int lz0 = 0, int lz1 = TILE);
+/// The field's serial: changes with the world (seed, generator, params).
+uint32_t field_serial();
 
 /// A tile's top course packed into pieces (pack_tile's output): `owner` is
 /// TILE x TILE, x fastest, the piece owning each column's top course or -1.

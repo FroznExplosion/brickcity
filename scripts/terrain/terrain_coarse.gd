@@ -44,6 +44,20 @@ const FIRST := 16
 ## How many doublings at most. Six takes a 4-tile block to 128 (5.6 km).
 const LEVELS := 6
 
+## DISTANT GROUND DETAIL (the Video setting, Docs/MineWorld.md 21 item 6):
+## 0 High (as laid out), 1 Medium, 2 Low -- every block sampled 2x or 4x
+## coarser, a quarter or a sixteenth of the triangles. Read when a tier is
+## built; the mine world builds a fresh one when it changes.
+static var detail := 0
+## The `detail` this tier was built at.
+var built_detail := 0
+
+
+## A block's sample step at the current detail, never coarser than it is wide.
+static func detail_step(step: int, span_tiles: int) -> int:
+	return mini(step << clampi(detail, 0, 2), span_tiles * BrickTerrain.get_tile_studs())
+
+
 ## Print how many blocks each span got (the heightfield bench).
 var verbose := false
 ## The tile the rings are laid out round. The origin for a world that stays
@@ -134,6 +148,7 @@ func build_begin(reach_tiles: int, material: Material, hole := Rect2i(), split_t
 	_material = material
 	_hole = hole
 	_split_to = split_to
+	built_detail = detail
 	if reach_tiles <= 0:
 		return false
 	var has_hole := hole.size.x > 0 and hole.size.y > 0
@@ -194,7 +209,7 @@ func build_begin(reach_tiles: int, material: Material, hole := Rect2i(), split_t
 	# moment the camera walked away from it.
 	for level in range(levels - 1, -1, -1):
 		var span: int = SPAN << level
-		var step: int = STEP << level
+		var step: int = detail_step(STEP << level, SPAN << level)
 		var inner: int = 0 if level == 0 else (FIRST << (level - 1))
 		for bz in range(-reach, reach, span):
 			for bx in range(-reach, reach, span):
@@ -229,7 +244,7 @@ func build_begin(reach_tiles: int, material: Material, hole := Rect2i(), split_t
 				continue
 			blocks.append(c)
 			spans.append(1)
-			steps.append(STEP)
+			steps.append(detail_step(STEP, 1))
 			covered[c] = true
 
 	# Laid out round the origin; placed round the anchor.
@@ -719,7 +734,7 @@ func _refine_for(detail: Rect2i) -> void:
 				@warning_ignore("integer_division")
 				baked[k] = BrickTerrain.build_coarse(new_rects[k].position.x,
 					new_rects[k].position.y, new_rects[k].size.x,
-					STEP * (new_rects[k].size.x / SPAN))
+					detail_step(STEP * (new_rects[k].size.x / SPAN), new_rects[k].size.x))
 			else:
 				var i: int = ring_live[span][k]
 				var r: Rect2i = rects[i]
@@ -776,7 +791,7 @@ func _apply_refine() -> void:
 		if arrays.is_empty():
 			continue
 		@warning_ignore("integer_division")
-		var step: int = STEP * (new_rects[k].size.x / SPAN)
+		var step: int = detail_step(STEP * (new_rects[k].size.x / SPAN), new_rects[k].size.x)
 		var mi := _block_node(arrays, step,
 				"CoarseSplit_%d_%d" % [new_rects[k].position.x, new_rects[k].position.y])
 		mi.position = Vector3(new_rects[k].position.x * tile_studs * stud, 0.0,
@@ -848,8 +863,7 @@ func relod(at: Vector3, wait := true) -> void:
 		while level < LEVELS - 1 and d >= (FIRST << level):
 			level += 1
 		# A block is never sampled coarser than it is wide.
-		var step: int = maxi(STEP << level, 1)
-		step = mini(step, r.size.x * BrickTerrain.get_tile_studs())
+		var step: int = detail_step(maxi(STEP << level, 1), r.size.x)
 		if step != _all_steps[i]:
 			redo.append(i)
 			want.append(step)
