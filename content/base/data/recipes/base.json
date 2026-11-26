@@ -7,15 +7,15 @@
 		{ "name": "Ice", "inputs": { "snow": 24 }, "station": "workbench", "output": "ice", "count": 12 },
 		{ "name": "Chest", "inputs": { "wood": 96 }, "station": "workbench", "output": "chest" },
 		{ "name": "Small Backpack", "inputs": { "soil": 48 }, "output": "small_backpack" },
-		{ "name": "Medium Backpack", "inputs": { "small_backpack": 1, "iron_ore": 36 }, "station": "workbench",
+		{ "name": "Medium Backpack", "inputs": { "small_backpack": 1, "iron_ingot": 3 }, "station": "workbench",
 			"output": "medium_backpack", "keep_contents": true },
-		{ "name": "Large Backpack", "inputs": { "medium_backpack": 1, "gold_ore": 36 }, "station": "workbench",
+		{ "name": "Large Backpack", "inputs": { "medium_backpack": 1, "gold_ingot": 3 }, "station": "workbench",
 			"output": "large_backpack", "keep_contents": true },
-		{ "name": "Pickaxe", "inputs": { "wood": 12, "#stone": 24, "iron_ore": 12 }, "station": "workbench", "output": "pickaxe" },
-		{ "name": "Bucket", "inputs": { "iron_ore": 24 }, "station": "furnace", "output": "bucket" },
-		{ "name": "Source bucket", "inputs": { "bucket": 1, "gold_ore": 12 }, "station": "furnace", "output": "source_bucket" },
-		{ "name": "Mega Pickaxe", "inputs": { "pickaxe": 1, "diamond_ore": 36 }, "station": "furnace", "output": "mega_pickaxe" },
-		{ "name": "Grenades", "inputs": { "coal_ore": 12, "iron_ore": 6 }, "station": "furnace", "output": "grenade", "count": 4 },
+		{ "name": "Pickaxe", "inputs": { "wood": 12, "#stone": 24, "iron_ingot": 1 }, "station": "workbench", "output": "pickaxe" },
+		{ "name": "Bucket", "inputs": { "iron_ingot": 2 }, "station": "workbench", "output": "bucket" },
+		{ "name": "Source bucket", "inputs": { "bucket": 1, "gold_ingot": 1 }, "station": "workbench", "output": "source_bucket" },
+		{ "name": "Mega Pickaxe", "inputs": { "pickaxe": 1, "diamond_ore": 36 }, "station": "workbench", "output": "mega_pickaxe" },
+		{ "name": "Grenades", "inputs": { "coal_ore": 12, "iron_ingot": 1 }, "station": "workbench", "output": "grenade", "count": 4 },
 		{ "name": "Obsidian", "inputs": { "lava_source": 1, "water_source": 1 }, "output": "obsidian", "count": 12 }
 	]
 }
