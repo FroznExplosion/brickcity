@@ -141,9 +141,22 @@ not move its middle yet (the weights are the stamp's).
   across it split round it as bond cells, `_cut`), a double door hung in
   it, and stone steps (a brick each, two studs deep, up to 4) down to the
   ground outside. `"entrance": false` in the parameters leaves it shut.
-- **7, far view.** Partly: windows are glass cells now, not air, so the
-  coarse tier keeps them as sky-blue cells on the block. The far view from
-  bricks (Docs/Structures.md) is still the city's alone.
+- **7, far view (2026-11-26).** Past the near tiles a tower was a coarse
+  block of its roof's colour. `MineBuildingsFar` (a child of the mine world)
+  draws each stamped building's FACADE from its bricks in the field: each
+  wall a grid of studs x courses, coloured by the outermost building cell
+  within 3 studs of the wall (glass blue, an opening dark), merged along
+  rows; the roof each column's top cell. A hair outside the box, over the
+  coarse block (which lies inside the footprint: its cell takes the min of
+  its corners). Shown only while the building's tile is not a near tile;
+  made again after an edit reaches it (`far_dirty`), one building a tend
+  (0.25 s); plain vertex colours, no shadow, ~1000 triangles a 6-floor
+  tower. Not lit by the sky-light grid (the far tier has none either).
+- **6d, room streaming.** The fittings (doors, lamps, levers) of a stamped
+  building have a visibility range (70 m) and each lamp's light a distance
+  fade (28 m), so the renderer culls a town's hundreds of them far off.
+  Their colliders stay. (The rooms themselves are ground: the near tiles
+  draw them, as they draw any cave.)
 - **8, placing.** `MineBuildings.stamp_build(host, corner, path)`: any
   workshop build (BuildRecipe; its towers and catalogue furniture expanded as
   the city placer does) stamped the same way (a brick placed where it fills

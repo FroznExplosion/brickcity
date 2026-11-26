@@ -354,8 +354,32 @@ static func _hang_doors(wiring, dw: Dictionary, at: Callable) -> int:
 		hung = [hung[0]]
 	for h: Array in hung:
 		if wiring.place_device(h[0], &"door", false, false, int(h[1])):
+			_stream(wiring, h[0])
 			n += 1
 	return n
+
+
+## ROOM STREAMING for a building's fittings (Docs/TerrainBuildings.md 6d):
+## their meshes drawn only within FITTINGS_RANGE_M of the eye, a lamp's light
+## fading out by LIGHT_FADE_M -- the renderer culls both, so a town's
+## hundreds of doors and lamps cost nothing far off. Their colliders stay
+## (a door is shut or open wherever it is seen from).
+const FITTINGS_RANGE_M := 70.0
+const LIGHT_FADE_M := 28.0
+
+
+static func _stream(wiring, c: Vector3i) -> void:
+	var d: Dictionary = wiring.devices.get(c, {})
+	var node: Node = d.get("node")
+	if node == null:
+		return
+	for g in node.find_children("*", "GeometryInstance3D", true, false):
+		(g as GeometryInstance3D).visibility_range_end = FITTINGS_RANGE_M
+		(g as GeometryInstance3D).visibility_range_end_margin = 5.0
+	for l in node.find_children("*", "Light3D", true, false):
+		(l as Light3D).distance_fade_enabled = true
+		(l as Light3D).distance_fade_begin = LIGHT_FADE_M
+		(l as Light3D).distance_fade_length = 8.0
 
 
 ## A lamp on the floor of `room`, near its middle, a lever beside it (the
@@ -375,6 +399,8 @@ static func _lamp_in(wiring, room: Room, at: Callable) -> int:
 			if wiring.can_place_device(c + side, &"lever"):
 				wiring.place_device(c, &"lamp")
 				wiring.place_device(c + side, &"lever")
+				_stream(wiring, c)
+				_stream(wiring, c + side)
 				return 1
 	return 0
 
@@ -478,6 +504,9 @@ static func after_edit(host: Node, res: Dictionary) -> void:
 			continue
 		var changed := false
 		var base := int(b.base)
+		# Its far facade is made again (MineBuildingsFar).
+		if ehi.y >= base:
+			b["far_dirty"] = true
 		if ehi.y >= base:
 			for z in range(maxi(elo.z, lo.z), mini(ehi.z, hi.z) + 1):
 				for x in range(maxi(elo.x, lo.x), mini(ehi.x, hi.x) + 1):
