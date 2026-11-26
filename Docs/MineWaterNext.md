@@ -281,6 +281,10 @@ The user: still and source water should look the same; rain puddles too
 - Every calm water top -- still (ponds, puddles, rain pools), sources, lakes,
   rivers -- is drawn as flat brick TILES (no studs) with joints; running
   water (flow, falls) stays smooth and keeps its stud grid. Lava unchanged.
+- **1 x 1 since 2026-11-25** (the user, from play in Stony Peaks: the 4 x 4
+  tiles read as a floor laid over the water): `PIECE = 1`, every water top a
+  one-stud tile with its joints; a lake bobs stud by stud. The rule below is
+  kept, bigger pieces are that one number.
 - **Layout fixed by world position** (`piece_rect`): a 4 x 4 block of studs
   is one tile when its whole top is alike (same kind, height, and easing);
   else it splits in two -- 4 x 2 or 2 x 4 by the block's parity -- each half
