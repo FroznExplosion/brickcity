@@ -300,6 +300,24 @@
 				"crop"
 			],
 			"description": "Food. Right-click tilled soil in a jungle to plant one."
+		},
+		"sprinkler": {
+			"name": "Sprinkler",
+			"kind": "station",
+			"model": "sprinkler",
+			"hand": "right",
+			"colour": "#7f97a8",
+			"glyph": "*",
+			"description": "Place it in a field: every plot within 3 plots of it (7 x 7) stays wet. No water source needed."
+		},
+		"collector": {
+			"name": "Collector",
+			"kind": "chest",
+			"model": "collector",
+			"hand": "right",
+			"colour": "#6f5a3a",
+			"glyph": "K",
+			"description": "Place it in a field: it harvests the ripe crops within 4 plots (9 x 9) into its own 27 slots and replants them from the seeds it holds. Right-click to open it."
 		}
 	}
 }

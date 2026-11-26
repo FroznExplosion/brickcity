@@ -618,3 +618,36 @@ cactus fruit refused outside its biomes, four 3-star pumpkins merging into a
 giant (chance set to 1 for the gate), drawn as one, picked for 14 pumpkins
 (user://dev/farm_giant.png). The "away" check now waits until the farm has
 noticed the player left (its in-reach list is rebuilt once a second).
+
+## 21. Built (2026-11-27): stage 7, automation
+
+**Sprinkler** (3 iron ingots at a workbench; a placed station, its own
+model): every plot within 3 plots of it (a 7 x 7 square, within 6 plates up
+or down) counts as wet -- no water source. Joined to the plot's own water
+in the refresh (`_sprinkled`; the cached water look stays separate, so a
+sprinkler put down counts at once). The look line says "wet (sprinkler)".
+
+**Collector** (a chest, 4 iron ingots and 1 gold ingot at a workbench; a
+placed chest of 27 slots with its own model, opened like a chest): when a
+plot within 4 plots of it (9 x 9) is refreshed ripe, the collector harvests
+it into its own slots and replants it from a seed it holds (the harvest's own
+traits first, else any). It leaves giants and saplings, and does nothing
+while it has no empty slot (the crop waits ripe). It works in reach only, as
+the plot refresh does; a field left alone simply waits ripe (nothing rots),
+and is collected when the player comes back. Sprinklers, collectors and
+scarecrows are gathered together once a second, and again whenever the
+number of placed things changes.
+
+**Not built**: a farmhand that walks the rounds needs a creature to walk
+(the creature work); the collector does its job for now.
+
+**Tests.** farm_probe 140 (+4): the items and their kinds (the collector is
+a container), the recipes, the collector's slot filling and seed finding.
+--gate=farm 73 (+3): a sprinkler turns a dry plot wet and dark; a collector
+given wheat seeds, corn and beans harvests the ripe plots in reach (5: wheat,
+pumpkins, a melon and their seeds) and replants from what it holds; it is
+then broken so the 'away' check sees plain growth.
+
+**All stages of section 12 are built.** Set aside, by the user's choice:
+what crops are for (selling, health, hunger, crafting), real animals, crops
+dying, and a farmhand.

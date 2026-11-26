@@ -21,6 +21,7 @@ const HOW := [
 	"   BREEDING: leave a tilled plot bare between two ripe plants of the same crop (in a line). While you are near, it may sprout a cross: each trait the better parent's, and half the time one point more.",
 	"   COMPANIONS: some crops grow 15% faster next to others (beans by corn or wheat, carrots by cabbage...). GIANTS: a 2x2 of pumpkins or melons, all ripe at 3 stars, may merge into one giant -- worth twice what the four plots give.",
 	"   BIOME CROPS: cactus fruit only in desert, badlands or savanna; frostberries only where it snows; pineapple only in jungle.",
+	"   AUTOMATION: a SPRINKLER (3 iron ingots at a workbench) keeps every plot within 3 plots of it wet, no water needed. A COLLECTOR (a chest, 4 iron and 1 gold ingot at a workbench) harvests the ripe crops within 4 plots into its own slots and replants them from the seeds it holds -- put seeds in it, come back to a full bin. It leaves giants for you, and waits when it is full.",
 	"7  QUALITY: every stage spent dry (for thirsty crops), too dark, on poor soil or in a biome it dislikes is a stress point. 0-1 points: 3 stars, 50% more; 4 or more: 1 star, less.",
 	"8  CAREFUL: landing on a field from 3 bricks up or more tramples that plot back to dirt (the seed pops out). Walking and jumping on it are fine.",
 	"9  TIME: crops grow on the world's clock while you play -- also where you are not, far across the world -- but not while the game is closed. Look at a plot to see its stage, time to ripe and what holds it back.",

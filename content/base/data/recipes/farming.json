@@ -78,6 +78,24 @@
 			},
 			"output": "mulch",
 			"count": 6
+		},
+		{
+			"name": "Sprinkler",
+			"inputs": {
+				"iron_ingot": 3
+			},
+			"station": "workbench",
+			"output": "sprinkler"
+		},
+		{
+			"name": "Collector",
+			"inputs": {
+				"chest": 1,
+				"iron_ingot": 4,
+				"gold_ingot": 1
+			},
+			"station": "workbench",
+			"output": "collector"
 		}
 	]
 }

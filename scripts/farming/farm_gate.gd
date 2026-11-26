@@ -46,6 +46,10 @@ extends RefCounted
 ##             its biomes; four 3-star pumpkins merge into a giant (chance set
 ##             to 1 here), drawn as one, and picked for many pumpkins
 ##             (user://dev/farm_giant.png).
+##   stage 7   a sprinkler wets dry plots in reach (dark soil, no water near);
+##             a collector given seeds harvests ripe crops in reach into its
+##             slots and replants from them (then it is taken away, so the
+##             'away' check below sees plain growth).
 ##   save      the world generated again (saved, loaded): the plots, their
 ##             state and the clock come back.
 ##   pictures  user://dev/farm_field.png, farm_guide.png.
@@ -537,6 +541,48 @@ func run(host: Node) -> void:
 			ripe_tw and rq.crop == &"wheat" and int(rq.stage) == 0 and rtr.x >= 5 and rtr.y >= 2)
 	var lab := ItemCatalog.label(ItemStack.make(&"wheat_seeds", 3, {"g": 5, "y": 2}))
 	check("a seed's label shows its traits: \"%s\"" % lab, lab.contains("G5 Y2 H0"))
+
+	# --- stage 7: a sprinkler and a collector
+	var dry_b: Vector3i = field[8]          # by the field's dry edge, far from the channel
+	var dryq := f.store.get_plot(dry_b)
+	FarmPlant.settle(dryq, w.world_time)
+	dryq.wet_until = 0.0
+	f.refresh(dry_b)
+	var dry_was_wet := bool(f.store.get_plot(dry_b).wet)
+	w.chests.place(Vector3i(bx0 + 3, top + 1, bz0 + 2), [], true, &"sprinkler")
+	f.refresh(dry_b)
+	check("a sprinkler wets a dry plot in reach (before: %s, after: %s, dark: %s)" % [dry_was_wet,
+			f.store.get_plot(dry_b).wet, BrickTerrain.solid_at(dry_b.x * 2, top, dry_b.z * 2) == BrickTerrain.MAT_WET_FARMLAND],
+			not dry_was_wet and bool(f.store.get_plot(dry_b).wet)
+			and BrickTerrain.solid_at(dry_b.x * 2, top, dry_b.z * 2) == BrickTerrain.MAT_WET_FARMLAND)
+	var cblk := Vector3i(bx0 + 5, top + 1, bz0 + 2)
+	w.chests.place(cblk, [], true, &"collector")
+	var ckey := MineChests.key_of(cblk)
+	var cslots: Array = w.chests.slots_of(ckey)
+	cslots[0] = ItemStack.make(&"wheat_seeds", 20)
+	cslots[1] = ItemStack.make(&"corn", 20)
+	cslots[2] = ItemStack.make(&"beans", 20)
+	w.world_time += FarmPlant.DAY * 3.0
+	await w._frames(5)
+	f.settle_all()
+	var col0 := f.collected
+	for b in f.store.plots.keys():
+		if not f.store.get_plot(b).is_empty():
+			f.refresh(b)
+	var ckinds := {}
+	for sl in cslots:
+		if sl is ItemStack:
+			ckinds[(sl as ItemStack).id] = int(ckinds.get((sl as ItemStack).id, 0)) + (sl as ItemStack).count
+	var cseeds_left := int(ckinds.get(&"wheat_seeds", 0)) + int(ckinds.get(&"corn", 0)) + int(ckinds.get(&"beans", 0))
+	check("a collector harvests ripe crops in reach into its slots (%d plots: %s)" % [f.collected - col0, str(ckinds)],
+			f.collected - col0 > 0 and ckinds.size() > 3)
+	var creplanted := 0
+	for b in f.store.plots:
+		var q: Dictionary = f.store.plots[b]
+		if q.crop != &"" and int(q.stage) == 0 and float(q.planted) >= w.world_time - 1.0:
+			creplanted += 1
+	check("and replants them from its seeds (%d creplanted)" % creplanted, creplanted > 0)
+	w.chests.break_chest(ckey, false)
 
 	# --- away: out of reach, the clock runs, the plot is not touched; back, it
 	# is where one settle puts it

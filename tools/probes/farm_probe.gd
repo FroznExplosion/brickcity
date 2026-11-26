@@ -67,6 +67,7 @@ func _init() -> void:
 	FarmPlant.trouble = false
 	_depth()
 	FarmPlant.trouble = true
+	_automation()
 	print("farm probe: %d ok, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -601,3 +602,23 @@ func _depth() -> void:
 	var old := FarmPlant.to_row(_plot(&"wheat"))
 	old.resize(31)
 	_ok("a 31-field row from stage 5 loads with no traits", FarmPlant.traits(FarmPlant.from_row(old)) == Vector3i.ZERO)
+
+
+
+## Stage 7: the sprinkler and the collector are items with recipes; the
+## collector's slot helpers merge and fill.
+func _automation() -> void:
+	print("automation")
+	_ok("sprinkler is a station, collector a chest (slots)", ItemCatalog.kind(&"sprinkler") == "station"
+			and ItemCatalog.kind(&"collector") == "chest" and MineChests.is_container(&"collector"))
+	var outs := []
+	for r in RecipeBook.all():
+		outs.append(str(r.output))
+	_ok("sprinkler and collector have recipes", outs.has("sprinkler") and outs.has("collector"))
+	var slots: Array = [ItemStack.make(&"wheat", 90), null, null]
+	var left := MineFarming._put_in(slots, &"wheat", 120, {})
+	_ok("a collector's slots fill its stacks, then empty slots (%d left)" % left, left == 0
+			and (slots[0] as ItemStack).count == 99 and (slots[1] as ItemStack).count == 99 and (slots[2] as ItemStack).count == 12)
+	var slots2: Array = [ItemStack.make(&"wheat_seeds", 5, {"g": 3}), ItemStack.make(&"wheat_seeds", 5)]
+	_ok("a seed is found by its traits, or any", MineFarming._find_in(slots2, &"wheat_seeds", {"g": 3}) == 0
+			and MineFarming._find_in(slots2, &"wheat_seeds", {}) == 1 and MineFarming._find_in(slots2, &"wheat_seeds", null) == 0)

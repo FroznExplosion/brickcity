@@ -165,6 +165,8 @@ static func _model(d: Dictionary) -> Node3D:
 		kind = "produce"
 	elif str(d.get("model", "")) == "sapling":
 		kind = "sapling"
+	elif str(d.get("model", "")) == "collector":
+		kind = "collector"
 	elif str(d.get("model", "")) == "ingot":
 		kind = "ingot"
 	match kind:
@@ -222,7 +224,18 @@ static func _model(d: Dictionary) -> Node3D:
 			_part(inner, _cyl(0.16, 0.16, 0.16), _mat(Color(0.75, 0.75, 0.78), 0.3), Vector3(0, 0.7, 0))
 			_part(inner, _box(Vector3(0.08, 0.45, 0.12)), _mat(Color(0.75, 0.75, 0.78), 0.3), Vector3(0.24, 0.55, 0))
 		"station":
-			if str(d.get("model", "")) == "scarecrow":
+			if str(d.get("model", "")) == "sprinkler":
+				# A pipe up from a base, a spinning head with four arms.
+				var m := _mat(col, 0.3)
+				_part(inner, _cyl(0.3, 0.36, 0.16), m, Vector3(0, 0.08, 0))
+				_part(inner, _cyl(0.06, 0.06, 0.8), m, Vector3(0, 0.55, 0))
+				_part(inner, _cyl(0.14, 0.14, 0.12), m, Vector3(0, 0.98, 0))
+				for i in 4:
+					var a := TAU * float(i) / 4.0
+					_part(inner, _box(Vector3(0.5, 0.05, 0.06)), m, Vector3(cos(a) * 0.26, 1.0, sin(a) * 0.26),
+							Basis(Vector3.UP, -a))
+				_part(inner, _cyl(0.05, 0.05, 0.05), _mat(Color(0.4, 0.65, 0.95), 0.1, 0.8), Vector3(0, 1.06, 0))
+			elif str(d.get("model", "")) == "scarecrow":
 				# A pole, a cross bar with a shirt on it, a straw head and hat.
 				var wood := _mat(Color(0.45, 0.3, 0.16), 0.7)
 				_part(inner, _box(Vector3(0.1, 1.4, 0.1)), wood, Vector3(0, 0.7, 0))
@@ -270,6 +283,14 @@ static func _model(d: Dictionary) -> Node3D:
 			_part(inner, _cyl(0.32, 0.36, 0.6), m, Vector3(0, 0.3, 0))
 			_part(inner, _cyl(0.05, 0.07, 0.6), m, Vector3(0.42, 0.42, 0), Basis(Vector3.BACK, deg_to_rad(-55.0)))
 			_part(inner, _box(Vector3(0.08, 0.08, 0.5)), m, Vector3(-0.1, 0.72, 0), Basis(Vector3.UP, PI * 0.5))
+		"collector":
+			# A wooden bin with a metal hopper on top and a little scoop arm
+			# (Docs/MineFarming.md 21).
+			_part(inner, _box(Vector3(1.0, 0.55, 0.8)), _mat(col, 0.6), Vector3(0, 0.28, 0))
+			_part(inner, _cyl(0.3, 0.42, 0.3, 4), _mat(Color(0.62, 0.64, 0.68), 0.3), Vector3(0, 0.7, 0),
+					Basis(Vector3.UP, PI * 0.25))
+			_part(inner, _box(Vector3(0.08, 0.5, 0.08)), _mat(Color(0.62, 0.64, 0.68), 0.3), Vector3(0.42, 0.8, 0),
+					Basis(Vector3.BACK, deg_to_rad(-30.0)))
 		"sapling":
 			# A short trunk and a leafy block on it (Docs/MineFarming.md 17).
 			_part(inner, _cyl(0.1, 0.12, 0.6), _mat(Color(0.45, 0.3, 0.16), 0.7), Vector3(0, 0.3, 0))

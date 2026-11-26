@@ -54,6 +54,14 @@ const SAPLING_CHANCE := 0.5
 const SAPLING_SPACING := 3
 ## A scarecrow keeps most birds off plots within this (metres).
 const SCARE_M := 8.0
+## Stage 7, automation (Docs/MineFarming.md 21): a sprinkler wets the plots
+## within this many plots of it (a square 7 x 7), no water source needed; a
+## collector harvests the ripe plots within this many (9 x 9) into its own
+## slots and replants them from what it holds. Both within this many plates
+## up or down.
+const SPRINKLER_PLOTS := 3
+const COLLECTOR_PLOTS := 4
+const AUTO_PLATES := 6
 ## Stage 6 (Docs/MineFarming.md 20). A bare tilled plot between two ripe
 ## plants of one crop (in a line) sprouts a cross of them about once in this
 ## many in-game days (while in reach).
@@ -84,6 +92,7 @@ var fertilised := 0
 var weeded := 0
 var crossed := 0
 var giants := 0
+var collected := 0
 ## Fields and enclosure (stage 5): grouped plots, a flood on a worker.
 var fields := FarmFields.new()
 ## Bumped by every terrain edit (`terrain_changed`): a plot's light is asked
@@ -91,6 +100,10 @@ var fields := FarmFields.new()
 var _terrain_ver := 0
 ## Where the scarecrows stand (terrain frame), gathered once a second.
 var _scarecrows: Array[Vector3] = []
+## Sprinklers and collectors: their block (the plots' 2-stud lattice, its
+## bottom plate), and a collector's chest key -- gathered with the scarecrows.
+var _sprinklers: Array[Vector3i] = []
+var _collectors: Array = []          ## [[block, key], ...]
 var _scare_in := 0.0
 var _scare_count := -1
 
@@ -260,13 +273,113 @@ func _scared(b: Vector3i) -> bool:
 
 func _gather_scarecrows() -> void:
 	_scarecrows.clear()
+	_sprinklers.clear()
+	_collectors.clear()
 	var chests: MineChests = host.chests
 	if chests == null:
 		return
 	_scare_count = chests.count()
 	for key in chests.chests:
-		if chests.item_of(key) == &"scarecrow":
-			_scarecrows.append(chests.box_of(chests.chests[key].block).get_center())
+		match chests.item_of(key):
+			&"scarecrow":
+				_scarecrows.append(chests.box_of(chests.chests[key].block).get_center())
+			&"sprinkler":
+				_sprinklers.append(chests.chests[key].block)
+			&"collector":
+				_collectors.append([chests.chests[key].block, key])
+
+
+func _in_reach(block: Vector3i, b: Vector3i, plots: int) -> bool:
+	return absi(block.x - b.x) <= plots and absi(block.z - b.z) <= plots \
+			and absi(block.y - (b.y + 1)) <= AUTO_PLATES
+
+
+## A sprinkler within reach of plot `b`?
+func _sprinkled(b: Vector3i) -> bool:
+	if host.chests != null and host.chests.count() != _scare_count:
+		_gather_scarecrows()
+	for sp in _sprinklers:
+		if _in_reach(sp, b, SPRINKLER_PLOTS):
+			return true
+	return false
+
+
+## The key of a collector with plot `b` in reach, or "".
+func _collector_for(b: Vector3i) -> String:
+	for c in _collectors:
+		if _in_reach(c[0], b, COLLECTOR_PLOTS):
+			return str(c[1])
+	return ""
+
+
+## A collector harvests a ripe plot into its own slots (Docs/MineFarming.md
+## 21) and replants it from a seed it holds (the harvest's own first). Only
+## when it has an empty slot: a full collector leaves the crop ripe.
+func _collect(plot: Dictionary, key: String) -> bool:
+	var chests: MineChests = host.chests
+	var slots: Array = chests.slots_of(key)
+	if not slots.has(null):
+		return false
+	var got := FarmPlant.harvest(plot, now())
+	if got.is_empty():
+		return false
+	var at := chests.box_of(chests.chests[key].block).get_center() + Vector3(0, 0.5, 0)
+	for pair in [[got.produce, int(got.count), got.produce_data], [got.seed, int(got.seeds), got.seed_data]]:
+		var left := _put_in(slots, pair[0], int(pair[1]), pair[2])
+		if left > 0:
+			host.drops.spawn(ItemStack.make(pair[0], left, pair[2]), at)
+	# Replant from its own slots.
+	if plot.crop == &"":
+		var data: Dictionary = got.seed_data if int(got.seeds) > 0 else got.produce_data
+		var i := _find_in(slots, got.seed, data)
+		if i < 0:
+			i = _find_in(slots, got.seed, null)
+		if i >= 0:
+			var st: ItemStack = slots[i]
+			FarmPlant.plant(plot, got.crop, now(), FarmPlant.traits_of(st.data))
+			st.count -= 1
+			if st.count <= 0:
+				slots[i] = null
+	store.touch(plot.b)
+	_draw_dirty = true
+	collected += 1
+	if host.has_method("world_items_changed"):
+		host.world_items_changed()
+	log_lines.append("collector %s took %s x%d at %s" % [key, got.crop, got.count, plot.b])
+	return true
+
+
+## Put n of `id` (with `data`) into `slots`: its stacks first, then empty
+## ones. How many did not fit.
+static func _put_in(slots: Array, id: StringName, n: int, data: Dictionary) -> int:
+	if n <= 0 or id == &"" or not ItemCatalog.has(id):
+		return 0
+	var cap := ItemCatalog.max_stack(id)
+	for o in slots:
+		if n <= 0:
+			break
+		if o is ItemStack and (o as ItemStack).id == id and (o as ItemStack).data == data:
+			var mv := mini(cap - (o as ItemStack).count, n)
+			if mv > 0:
+				(o as ItemStack).count += mv
+				n -= mv
+	for i in slots.size():
+		if n <= 0:
+			break
+		if slots[i] == null:
+			var mv := mini(cap, n)
+			slots[i] = ItemStack.make(id, mv, data)
+			n -= mv
+	return n
+
+
+## A slot holding `id` (with `data`, or any data when null), or -1.
+static func _find_in(slots: Array, id: StringName, data) -> int:
+	for i in slots.size():
+		var o = slots[i]
+		if o is ItemStack and (o as ItemStack).id == id and (data == null or (o as ItemStack).data == data):
+			return i
+	return -1
 
 
 # ---------------------------------------------------------------------------
@@ -962,12 +1075,17 @@ func refresh(b: Vector3i) -> void:
 	var u1 := Time.get_ticks_usec()
 	# Water: looked at again only when some water changed (BrickFluid's
 	# change count) or the ground did, since this plot was last looked at.
-	var wet := bool(plot.wet)
+	var water_wet := bool(plot.get("_water_wet", plot.wet))
 	var cc := BrickFluid.change_count()
 	if int(plot.get("_water_cc", -1)) != cc or int(plot.get("_water_ver", -1)) != _terrain_ver:
-		wet = _wet_at(b)
+		water_wet = _wet_at(b)
+		plot["_water_wet"] = water_wet
 		plot["_water_cc"] = cc
 		plot["_water_ver"] = _terrain_ver
+	# A sprinkler in reach wets it too (stage 7).
+	var sprinkled := _sprinkled(b)
+	plot["_sprinkled"] = sprinkled
+	var wet := water_wet or sprinkled
 	var u2 := Time.get_ticks_usec()
 	# Light: asked again only when the ground changed or LIGHT_AGAIN passed
 	# (kept on the plot, not saved: a reload asks once).
@@ -994,6 +1112,12 @@ func refresh(b: Vector3i) -> void:
 		_try_cross(plot, t)
 	_check_giant(plot)
 	_try_giant(plot)
+	# A collector in reach takes a ripe crop (stage 7; not a giant, not a tree).
+	if FarmPlant.is_ripe(plot) and int(plot.get("giant", 0)) == 0 \
+			and int(FarmPlant.crop_of(plot).get("tree", -1)) < 0:
+		var ck := _collector_for(b)
+		if ck != "":
+			_collect(plot, ck)
 	_prof("settle", u1 - u0)
 	_prof("water", u2 - u1)
 	_prof("sky light", u3 - u2)
@@ -1073,7 +1197,7 @@ func look_text(target: Dictionary) -> String:
 		return ""
 	var t := now()
 	FarmPlant.settle(plot, t)
-	var wet_words := "wet" if plot.wet else ("watered, %s left" % FarmPlant.span_words(float(plot.wet_until) - t)
+	var wet_words := ("wet (sprinkler)" if bool(plot.get("_sprinkled", false)) else "wet") if plot.wet else ("watered, %s left" % FarmPlant.span_words(float(plot.wet_until) - t)
 			if FarmPlant.wet_at(plot, t) else "dry")
 	var soil := "%s, %s, fertility %d" % ["Tilled soil" if str(plot.get("ground", "farm")) == "farm" else "Soil",
 			wet_words, roundi(float(plot.fert))]
