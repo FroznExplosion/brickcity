@@ -96,6 +96,8 @@ func _wiring() -> void:
 	var m := re.search(FileAccess.get_file_as_string("res://scripts/terrain/mine_world.gd"))
 	_ok("the crops' day is the mine world's", m != null and is_equal_approx(FarmPlant.DAY, float(m.get_string(1))))
 	_ok("the hoe is an item of its own kind", ItemCatalog.kind(&"hoe") == "hoe")
+	# The water look's one call (Docs/MineFarming.md 19).
+	_ok("BrickFluid.any_fluid is there", ClassDB.class_has_method("BrickFluid", "any_fluid"))
 
 
 func _crops() -> void:

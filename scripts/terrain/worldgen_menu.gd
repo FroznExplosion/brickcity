@@ -241,6 +241,14 @@ func _build_world_tab() -> void:
 	mode.toggled.connect(func(on: bool) -> void: host.set_survival(on))
 	p.add_child(mode)
 	p.add_child(_note("Survival: placing uses up what you hold and breaking gives you the bricks; no Creative tab. Creative: nothing runs out. For this world only, at once. Your inventory is your character's and comes with you from world to world."))
+	# Farm trouble (Docs/MineFarming.md 18): also this world's, at once.
+	var trouble := CheckBox.new()
+	trouble.name = "FarmTrouble"
+	trouble.text = "Farm trouble"
+	trouble.button_pressed = FarmPlant.trouble
+	trouble.toggled.connect(func(on: bool) -> void: host.set_farm_trouble(on))
+	p.add_child(trouble)
+	p.add_child(_note("Farm trouble: animals get into fields that are not closed in, birds peck ripe grain and beans, weeds come up, and one-crop fields can get blight. Off: crops only grow. For this world only, at once."))
 	_section(p, "Your changes")
 	p.add_child(_note("Blocks you break and place are saved for each seed and settings, every 30 s and when you leave or generate. Change a setting and it is a different world with its own changes."))
 	_button(p, "Forget changes to this world", func() -> void:

@@ -479,8 +479,8 @@ count); an event happens when the one reaches the other. `settle` now walks
 in steps to the next of: a can's water or grow mix running out, the stage's
 end, the next event, or now -- so an event lands at the same moment however
 often the plot is settled (farm_probe: 12 plots with every trouble on, once ==
-often == saved half way). `FarmPlant.trouble` off: no events (a setting is
-later work; the gate's other checks run with it off).
+often == saved half way). `FarmPlant.trouble` off: no events (the world menu's Farm trouble switch,
+section 19; the gate's other checks run with it off).
 
 | Trouble | Rate a plot a day | Needs | Does | Stops it |
 |---|---|---|---|---|
@@ -516,3 +516,52 @@ old rows load. --gate=farm: the field open, a stone ring closes it, a gap
 opens it (real floods), a scarecrow marks plots, LMB pulls weeds and keeps
 the crop, mulch goes on, an animals' trample turns a plot to dirt, and three
 days with trouble on bring events.
+
+## 19. Farm trouble switch; what a plot's look costs (2026-11-26)
+
+**The switch.** M (world generation) > Game mode > **Farm trouble**, under
+Survival: on by default, this world's, at once, saved in the world file
+(`farm_trouble`). `MineWorld.set_farm_trouble` settles every plot first, so
+the time already passed keeps the rule it had; then `FarmPlant.trouble`
+changes. A gate keeps its own setting (the world file is not read for it).
+
+**The plot look's cost** (`MineFarming.refresh`, one plot a frame within 64
+m: water, light, scarecrow, the tilled brick's wet/dry swap). Each part is
+timed (`MineFarming.prof`, printed by --gate=farm). Before, 933 refreshes in
+the gate (6 other test processes running and RAM nearly full, so the worst
+numbers are high):
+
+| Part | Mean | Worst |
+|---|---|---|
+| water (~200 BrickFluid.cell_info calls, a Dictionary each) | 198 us | 1705 us |
+| sky light (BrickTerrain.sky_light_at, a fill) | 34 us | 863 us |
+| scarecrow (every chest walked) | 14 us | 202 us |
+| soil swap (only when wet/dry changed: a fill_box + re-bake) | 12 us | 286 us |
+| block light | 5 us | 30 us |
+| settle | 1 us | 24 us |
+
+Changes:
+- **Water**: `BrickFluid.any_fluid(lo, hi, fluid)` (C++): is any cell of the
+  box wet with that fluid, under one lock -- one call instead of ~200.
+  And not asked at all when no water changed anywhere (BrickFluid's
+  `change_count`) and no terrain edit landed since the plot was last asked.
+- **Light**: asked again only when a terrain edit landed since the plot was
+  last asked (`_terrain_ver`, bumped by `terrain_changed`) or after 30 s;
+  kept on the plot, not saved. The sky's light in a cell only changes with
+  the ground; the day is the sun's integral, not this.
+- **Scarecrows**: gathered once a second (and whenever the number of placed
+  chests and stations changes), not walked per plot.
+After (the same gate; 2-4 other test processes, RAM again near empty):
+
+| Part | Before mean / worst | After mean / worst |
+|---|---|---|
+| water | 198 / 1705 us | 33-42 / 714-1039 us |
+| sky light | 34 / 863 us | 7 / 113 us (one run: a 323 ms call while RAM was at 1 MB free -- paging, not the game) |
+| scarecrow | 14 / 202 us | 7-9 / 65-303 us |
+
+A refresh is ~60-70 us on average now (it was ~265). Water is still the
+biggest part: the box is 200 cells and cells not yet simulated are generated
+on the spot; the change-count skip seldom hits while rain and the sea keep
+the water changing. The worst frames in these runs are paging. Next if a big
+farm hitches: look at fewer plots a frame when the frame is already long, or
+a field-wide water map shared by its plots.
