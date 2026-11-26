@@ -274,6 +274,7 @@ func _ready() -> void:
 	wiring.name = "Wiring"
 	add_child(wiring)
 	wiring.setup(self, drops)
+	wiring.set_hud(_hud_layer)
 	farming = MineFarming.new()
 	farming.name = "Farming"
 	add_child(farming)
