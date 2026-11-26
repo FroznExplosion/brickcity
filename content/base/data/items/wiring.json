@@ -27,6 +27,12 @@
 		"pulse": { "name": "Pulse", "kind": "device", "model": "gate", "max_stack": 64, "hand": "right", "colour": "#2fb8c4", "glyph": "p",
 			"description": "When its back turns on, the output is on for 2, 5, 10 or 20 ticks. Right-click it to set the length." },
 		"wrench": { "name": "Wrench", "kind": "wrench", "max_stack": 1, "hand": "right", "colour": "#b8bcc4", "glyph": "W",
-			"description": "In the hand: every cable shows through walls, and what you look at tells its level, inputs and output. Right-click a gate or trip hook to turn it; shift + right-click a device to take it back." }
+			"description": "In the hand: every cable shows through walls, and what you look at tells its level, inputs and output. Right-click a gate or trip hook to turn it; shift + right-click a device to take it back." },
+		"door": { "name": "Door", "kind": "device", "model": "door", "max_stack": 16, "hand": "right", "colour": "#8c5e33", "glyph": "D",
+			"description": "2 studs wide, 14 plates tall, laid on ground across your view. Opens while anything beside it is powered, shuts when the power goes; right-click to open or shut it by hand." },
+		"trapdoor": { "name": "Trapdoor", "kind": "device", "model": "trapdoor", "max_stack": 16, "hand": "right", "colour": "#8c5e33", "glyph": "T",
+			"description": "A 2x2 floor a plate thick, held by ground beside or under it. Powered (or right-clicked), it swings down open: whoever stood on it falls." },
+		"observer": { "name": "Observer", "kind": "device", "model": "observer", "max_stack": 64, "hand": "right", "colour": "#5a5c66", "glyph": "O",
+			"description": "Watches the stud in front of it (its face): when the ground, a cable or a device there changes, it powers what is at its back for 2 ticks. Placed facing away from you." }
 	}
 }
