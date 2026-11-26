@@ -6738,6 +6738,15 @@ func _run_buildings_gate() -> void:
 	ok = a_door != Vector3i.MAX and wiring.use_device(a_door) and wiring.is_open(a_door)
 	check.call(ok, "a door opens by hand")
 	fails += 0 if ok else 1
+	# Its way in: an opening in the front wall's ground storey, a door in it.
+	var ent := MineBuildings.entrance(p)
+	var e0: Vector3i = ent[0]
+	var e1: Vector3i = ent[1]
+	var e_mid := Vector3i(corner.x + ((e0.x + e1.x) >> 1), base + e0.y + 6, corner.y)
+	var e_door := Vector3i(corner.x + e0.x, base + e0.y, corner.y + e0.z)
+	ok = BrickTerrain.solid_at(e_mid.x, e_mid.y, e_mid.z) == 0 and wiring.devices.has(e_door) 			and wiring.devices[e_door].item == &"door"
+	check.call(ok, "a way in: the front wall open on the ground storey, a door hung in it")
+	fails += 0 if ok else 1
 	# Stage 4c: a building brick, mined, is an item -- plastic bricks of its
 	# colour; glass is its own block.
 	var bmat := MineBuildings.BUILDING_MATERIAL_BASE + 8
@@ -6795,6 +6804,11 @@ func _run_buildings_gate() -> void:
 	var floor1 := (base + 3) * plate + 1.2
 	await shoot_pic.call("inside", Vector3((lo.x + 3.5) * stud, floor1, (lo.z + 3.5) * stud),
 			Vector3((lo.x + 16) * stud, floor1 - 0.4, (lo.z + 12) * stud))
+	# The entrance from outside, its door opened.
+	if wiring.devices.has(e_door):
+		wiring.use_device(e_door)
+	await shoot_pic.call("entrance", Vector3((corner.x + 10) * stud, (base + 9) * plate, (corner.y - 14) * stud),
+			Vector3((corner.x + 10) * stud, (base + 8) * plate, (corner.y + 4) * stud))
 	await shoot_pic.call("cottage", centre + Vector3(-40.0 * stud - 10.0, 4.0, -12.0),
 			centre + Vector3(-40.0 * stud + 3.0, 1.5, 0.0))
 	# A shot at its west wall, 3 m up, from outside.

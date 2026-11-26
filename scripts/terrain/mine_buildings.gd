@@ -130,6 +130,60 @@ static func tower_cells(p: Dictionary) -> Array:
 	if bool(p.get("windows", true)):
 		out.append_array(_glaze(world, c, d, ymap))
 	world.release_chunk(c)
+	if bool(p.get("entrance", true)):
+		var e := entrance(p)
+		out = _cut(out, e[0], e[1])
+	return out
+
+
+## Plates of an entrance's opening: five bricks, as the city's doorways
+## (TowerRecipe: "five bricks clear through a door"), a course of wall over it.
+const ENTRANCE_PLATES := 15
+## Most steps laid down from an entrance to the ground outside.
+const ENTRANCE_STEPS := 4
+
+
+## The ground storey's way in (the city's towers have none: its people come
+## and go by the street's rules, not through a wall): DOOR_WIDE studs in the
+## middle of the front (-z) wall, through its thickness, from the ground
+## floor up ENTRANCE_PLATES. [lo, hi] in the stamped (ground) plates.
+static func entrance(p: Dictionary) -> Array:
+	var y := int(course_map(int(p.courses))[TowerRecipe.SLAB_PLATES][0])
+	var x0 := (int(p.x) >> 1) - (TowerRecipe.DOOR_WIDE >> 1)
+	return [Vector3i(x0, y, 0), Vector3i(x0 + TowerRecipe.DOOR_WIDE - 1, y + ENTRANCE_PLATES - 1,
+			TowerRecipe.WALL_THICK - 1)]
+
+
+## Bricks (tower_cells' form) with box [c0, c1] cut out: a brick across it is
+## split into the boxes round it, laid as bond cells (not placed: no longer
+## the brick it was).
+static func _cut(cells: Array, c0: Vector3i, c1: Vector3i) -> Array:
+	var out := []
+	for cb: Array in cells:
+		var a: Vector3i = cb[0]
+		var b: Vector3i = cb[1]
+		if b.x < c0.x or a.x > c1.x or b.y < c0.y or a.y > c1.y or b.z < c0.z or a.z > c1.z:
+			out.append(cb)
+			continue
+		var m := int(cb[2])
+		# Left and right of it in x, whole; then in front and behind in z,
+		# within its x; then under and over in y, within both.
+		var ix0 := maxi(a.x, c0.x)
+		var ix1 := mini(b.x, c1.x)
+		var iz0 := maxi(a.z, c0.z)
+		var iz1 := mini(b.z, c1.z)
+		if a.x < c0.x:
+			out.append([a, Vector3i(c0.x - 1, b.y, b.z), m, false])
+		if b.x > c1.x:
+			out.append([Vector3i(c1.x + 1, a.y, a.z), b, m, false])
+		if a.z < c0.z:
+			out.append([Vector3i(ix0, a.y, a.z), Vector3i(ix1, b.y, c0.z - 1), m, false])
+		if b.z > c1.z:
+			out.append([Vector3i(ix0, a.y, c1.z + 1), Vector3i(ix1, b.y, b.z), m, false])
+		if a.y < c0.y:
+			out.append([Vector3i(ix0, a.y, iz0), Vector3i(ix1, c0.y - 1, iz1), m, false])
+		if b.y > c1.y:
+			out.append([Vector3i(ix0, c1.y + 1, iz0), Vector3i(ix1, b.y, iz1), m, false])
 	return out
 
 
@@ -250,6 +304,29 @@ static func fit_out(host: Node, corner: Vector2i, base: int, p: Dictionary) -> D
 	if bool(p.get("rooms", true)):
 		for dw: Dictionary in TowerRecipe.doorways(int(p.x), int(p.z), int(p.courses), keep, true):
 			doors += _hang_doors(wiring, dw, at)
+	# The way in: a double door in the entrance (in the wall's outer layer).
+	if bool(p.get("entrance", true)):
+		var e := entrance(p)
+		var e0: Vector3i = e[0]
+		var e1: Vector3i = e[1]
+		var to_ground := func(x: int, y: int, z: int) -> Vector3i:
+			return Vector3i(corner.x + x, base + y, corner.y + z)
+		doors += _hang_doors(wiring, {"span": Vector2i(e0.x, e1.x + 1), "line": e0.z, "floor_y": e0.y,
+				"along_z": false}, to_ground)
+		# Steps up to it, a brick each, two studs deep, down to the ground
+		# outside (stone, filling only air, so ground already high stays).
+		var sill := base + e0.y
+		var stone := int(_terrain_ids().get("MAT_STONE", 4))
+		for k in ENTRANCE_STEPS:
+			var top := sill - 1 - 3 * k
+			var z1 := corner.y - 1 - 2 * k
+			var low := 1 << 30
+			for x in range(corner.x + e0.x, corner.x + e1.x + 1):
+				low = mini(low, BrickTerrain.surface_plate(x, z1))
+			if low >= top:
+				break
+			host.terrain_edited(BrickTerrain.fill_box(Vector3i(corner.x + e0.x, low, z1 - 1),
+					Vector3i(corner.x + e1.x, top, z1), stone, true))
 	var lamps := 0
 	if bool(p.get("rooms", true)):
 		for room: Room in RoomManifest.rooms_for(int(p.x), int(p.z), int(p.courses), int(p.get("seed", 1)),
