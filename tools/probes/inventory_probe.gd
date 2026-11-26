@@ -53,6 +53,7 @@ func _init() -> void:
 	_character()
 	_backpacks()
 	_crafting()
+	_smelting()
 	_wood_and_leaves()
 	_guns()
 	_placed_backpacks()
@@ -407,6 +408,93 @@ func _backpacks() -> void:
 
 ## Stage 12: crafting, Terraria's -- what a recipe takes, where it is made,
 ## from what is carried (data/recipes; the stage 9 grid went).
+## Furnaces that smelt over time (Docs/Inventory.md 15): the tables, a fire
+## lit from the fuel, a smelt every 5 s, the fire burning on with nothing to
+## smelt, a full output stopping it, catching up a long absence at once, the
+## slot rules, shift-click routing, saved and back.
+func _smelting() -> void:
+	print("smelting")
+	Smelting.load_all(true)
+	_ok("iron ore smelts to an iron ingot, 12 cells each, 5 s",
+			Smelting.recipe_of(&"iron_ore").get("output", &"") == &"iron_ingot"
+			and int(Smelting.recipe_of(&"iron_ore").take) == 12)
+	_ok("coal burns 40 s for 12 cells; stone does not burn",
+			is_equal_approx(float(Smelting.fuel_of(&"coal_ore").get("seconds", 0)), 40.0)
+			and Smelting.fuel_of(&"stone").is_empty())
+	var slots := Inventory._empty(Smelting.SLOTS)
+	slots[Smelting.INPUT] = ItemStack.make(&"iron_ore", 36)
+	slots[Smelting.FUEL] = ItemStack.make(&"coal_ore", 12)
+	var f := Smelting.new_state(100.0)
+	Smelting.settle(f, slots, 102.0)
+	_ok("2 s in: the coal lit (used at once), the smelt 40 % done, nothing out yet",
+			slots[Smelting.FUEL] == null and is_equal_approx(float(f.burn), 38.0)
+			and is_equal_approx(Smelting.progress(f, slots).x, 0.4) and slots[Smelting.OUTPUT] == null)
+	Smelting.settle(f, slots, 113.0)
+	_ok("13 s in: two ingots, 12 ore left", slots[Smelting.OUTPUT] != null and slots[Smelting.OUTPUT].count == 2
+			and slots[Smelting.INPUT].count == 12)
+	Smelting.settle(f, slots, 200.0)
+	_ok("long after: all three smelted, the fire burnt out with nothing left to smelt",
+			slots[Smelting.OUTPUT].count == 3 and slots[Smelting.INPUT] == null and is_equal_approx(float(f.burn), 0.0))
+	slots[Smelting.INPUT] = ItemStack.make(&"iron_ore", 12)
+	Smelting.settle(f, slots, 260.0)
+	_ok("no fuel: nothing smelts", slots[Smelting.OUTPUT].count == 3 and slots[Smelting.INPUT].count == 12)
+	var g := Smelting.new_state(0.0)
+	var big := Inventory._empty(Smelting.SLOTS)
+	big[Smelting.INPUT] = ItemStack.make(&"gold_ore", 999)
+	big[Smelting.FUEL] = ItemStack.make(&"coal_ore", 999)
+	big[Smelting.OUTPUT] = ItemStack.make(&"gold_ingot", 60)
+	Smelting.settle(g, big, 3600.0)
+	_ok("a full output stops it: 64 gold ingots and no more (an hour away, at once)",
+			big[Smelting.OUTPUT].count == 64 and big[Smelting.INPUT].count == 999 - 4 * 12)
+	var inv := Inventory.new()
+	var fs := Inventory._empty(Smelting.SLOTS)
+	inv.open_chest("f", fs, "Furnace", "furnace")
+	_ok("a furnace's slots: fuel takes coal, not stone; the output takes nothing",
+			inv.slot_accepts(A(&"chest", Smelting.FUEL), ItemStack.make(&"coal_ore", 1))
+			and not inv.slot_accepts(A(&"chest", Smelting.FUEL), ItemStack.make(&"stone", 1))
+			and not inv.slot_accepts(A(&"chest", Smelting.OUTPUT), ItemStack.make(&"iron_ingot", 1)))
+	inv.hotbars[0][0] = ItemStack.make(&"coal_ore", 24)
+	inv.hotbars[0][1] = ItemStack.make(&"sand", 24)
+	inv.shift_click(A(&"hotbar_0", 0))
+	inv.shift_click(A(&"hotbar_0", 1))
+	_ok("shift-click: coal to the fuel, sand on top", fs[Smelting.FUEL] != null and fs[Smelting.FUEL].id == &"coal_ore"
+			and fs[Smelting.INPUT] != null and fs[Smelting.INPUT].id == &"sand")
+	fs[Smelting.OUTPUT] = ItemStack.make(&"glass", 12)
+	inv.cursor = ItemStack.make(&"glass", 5)
+	inv.left_click(A(&"chest", Smelting.OUTPUT))
+	_ok("a held stack clicked on the output takes from it (glass 5 + 12 held)",
+			inv.cursor != null and inv.cursor.count == 17 and fs[Smelting.OUTPUT] == null)
+	inv.cursor = null
+	inv.close_chest()
+	inv.main[0] = ItemStack.make(&"iron_ore", 30)
+	inv.main[1] = ItemStack.make(&"iron_ore", 20)
+	var fs2 := Inventory._empty(Smelting.SLOTS)
+	inv.open_chest("g", fs2, "Furnace", "furnace")
+	_ok("the book's fill: all 50 iron ore carried go on top", inv.fill_slot(A(&"chest", Smelting.INPUT), &"iron_ore") == 50
+			and fs2[Smelting.INPUT].count == 50 and inv.count_of({"id": &"iron_ore", "tag": "", "count": 1}) == 0)
+	inv.close_chest()
+	var drops := DroppedItems.new()
+	drops.setup(null, inv)
+	var chests := MineChests.new()
+	chests.setup(null, inv, drops)
+	chests.place(Vector3i(0, 10, 0), [], true, &"furnace")
+	var key := MineChests.key_of(Vector3i(0, 10, 0))
+	_ok("a placed furnace has three slots and a fire", chests.slots_of(key).size() == Smelting.SLOTS
+			and not chests.furnace_state(key).is_empty())
+	chests.slots_of(key)[Smelting.INPUT] = ItemStack.make(&"iron_ore", 24)
+	chests.furnace_state(key).cook = 2.5
+	chests.furnace_state(key).burn = 30.0
+	var back := MineChests.new()
+	back.setup(null, inv, drops)
+	back.restore(JSON.parse_string(JSON.stringify(chests.to_save())))
+	_ok("saved and back: its ore, its fire, its half-done smelt", back.slots_of(key)[Smelting.INPUT] != null
+			and back.slots_of(key)[Smelting.INPUT].count == 24 and is_equal_approx(float(back.furnace_state(key).cook), 2.5)
+			and is_equal_approx(float(back.furnace_state(key).burn), 30.0))
+	chests.free()
+	back.free()
+	drops.free()
+
+
 func _crafting() -> void:
 	print("crafting")
 	RecipeBook.load_all(true)
@@ -440,7 +528,7 @@ func _crafting() -> void:
 	var small := Inventory.make_backpack(&"small_backpack")
 	small.contents[3] = ItemStack.make(&"coal_ore", 7)
 	inv.main[5] = small
-	inv.main[6] = ItemStack.make(&"iron_ore", 40)
+	inv.main[6] = ItemStack.make(&"iron_ingot", 3)
 	var up := inv.craft(by["Medium Backpack"], [&"workbench"])
 	var med: ItemStack = null
 	for a2 in inv.all_addrs():
