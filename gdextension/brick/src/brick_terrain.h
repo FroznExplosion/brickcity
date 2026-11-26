@@ -610,6 +610,9 @@ void bump_field_version();
 bool generated_cells(int tx, int tz, int y_lo, int y_hi, std::vector<uint8_t> &vox,
         std::vector<int16_t> &gtop, uint32_t *field = nullptr,
         int lx0 = 0, int lx1 = TILE, int lz0 = 0, int lz1 = TILE);
+/// This thread's generated_cells make every cell (never the kept tiles):
+/// region_fit_probe's check that both give the same cells.
+void set_generated_made_only(bool on);
 /// The field's serial: changes with the world (seed, generator, params).
 uint32_t field_serial();
 

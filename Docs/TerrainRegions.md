@@ -709,3 +709,29 @@ reach ~1.5 tiles, so a tile's fit makes its neighbours' noise and regions
 early) -- fit regions where a tile's own bake asks, keep the noise the
 fit made for the tiles that follow (the generated-tile store holds 64), and
 the seams count a candidate does (40% of the fit).
+
+**The cold cost, cut (2026-11-26).** What changed (no brick changed:
+region_fit_probe's numbers the same, lookup PASS):
+
+- The fit's own cells, kept: a byte a cell in blocks of a tile by 12
+  courses (~18 MB at most, least recently used out), so neighbouring tiles'
+  jobs stop sampling the same cells again.
+- Missing cells made straight from the generator (a column's biome once,
+  a material a course), only the slice asked for: not a whole sample with
+  its drawing arrays, nor a deep section's flood fill. Checked equal to the
+  kept tiles and sections (region_fit_probe: 0 of ~1.1 M cells differ).
+- Jobs split by bands of 4 layers (a tile's surface and its caves far under
+  it no longer share one box); the course under counted from a seam map in
+  the wide pass and the fill.
+
+| 49 tiles baked in streaming order (headless) | a tile |
+|---|---|
+| old pattern | 38 ms |
+| fit, before | 128 ms |
+| fit, now | ~75 ms |
+
+`--gate=flight --fitted`: worst frame 61 ms, 1 over 33 ms, 0 holes, 15.1 s
+(before: 659 ms, 23, 18 s; old pattern 38 ms, 1). `mine_world_probe
+--fitted`: a cold 2 x 2 at the mountain spot 129 ms (allowed 120), 96 at the
+other. The rest of a cold tile is mostly its neighbours' noise (a region's
+fit reads ~1.5 tiles round). The switch stays off until that check passes.
