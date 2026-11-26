@@ -1796,6 +1796,13 @@ func open_chest(key: String) -> void:
 		return
 	if _inv_screen != null:
 		_inv_screen.close_screen()
+	if MineChests.is_smelter(chests.item_of(key)):
+		# A furnace: its input, fuel and output in the screen (Docs/Inventory.md 15).
+		chests.settle_furnaces()
+		builder.inv.open_chest(key, chests.slots_of(key),
+				str(ItemCatalog.get_def(chests.item_of(key)).get("name", "Furnace")), "furnace")
+		toggle_inventory()
+		return
 	if not MineChests.is_container(chests.item_of(key)):
 		# A station: the screen opens on what it makes, Minecraft's crafting
 		# table / furnace screen (Docs/Inventory.md 12, 14).
@@ -1826,6 +1833,11 @@ func take_backpack(key: String) -> void:
 		chests.place(block, old.contents, true, old.id)
 	inv.changed.emit()
 	world_items_changed()
+
+
+## The fire and smelt of the furnace `key` (the screen's arrow and flame).
+func furnace_state(key: String) -> Dictionary:
+	return chests.furnace_state(key) if chests != null else {}
 
 
 ## The stations in reach of the player (the crafting list's).
@@ -3050,17 +3062,8 @@ func _run_inventory_gate() -> void:
 			check.call("a click on the result: 12 sand -> 12 sandstone (%d -> %d)" % [sand0,
 					_carried_count(inv, &"sandstone")], _carried_count(inv, &"sandstone") == sand0 + 12)
 			await _shot(UserPaths.DEV + "inv_workbench.png")
-			# The furnace's screen, for a look (its flame, its own recipes).
-			_inv_screen.open_station(&"furnace")
-			await _frames(3)
-			var bk := _inv_screen.recipe_cell("Bucket")
-			if bk != null:
-				await _click(bk.get_global_rect().get_center())
-				await _frames(3)
-			check.call("the furnace screen lists only furnace recipes", bk != null
-					and _inv_screen.recipe_cell("Sandstone") == null)
-			await _shot(UserPaths.DEV + "inv_furnace.png")
 			await _key(KEY_E)
+		await _gate_furnace(check)
 		# The workbench back into storage (the checks after count the chests).
 		for key in chests.chests.keys():
 			if chests.item_of(key) == &"workbench":
@@ -3387,11 +3390,13 @@ func _gate_fell_tree(check: Callable) -> Vector2i:
 	return cell
 
 
-func _inv_slot(scr: InventoryScreen, a: Dictionary, item := &"") -> InvSlot:
+func _inv_slot(scr: InventoryScreen, a: Dictionary, item := &"", shown := false) -> InvSlot:
 	for s in scr.find_children("*", "InvSlot", true, false):
 		var slot := s as InvSlot
 		if slot.show_count > 0:
 			continue        # the Recipes list's pictures, not the catalog's slots
+		if shown and not slot.is_visible_in_tree():
+			continue        # a furnace's slots are chest slots too: the one on screen
 		if a.is_empty() and slot.addr.is_empty() and slot.item_id == item:
 			return slot
 		if not a.is_empty() and not slot.addr.is_empty() and slot.addr.area == a.area \
@@ -3403,6 +3408,100 @@ func _inv_slot(scr: InventoryScreen, a: Dictionary, item := &"") -> InvSlot:
 ## How many of item `id` the inventory carries (the gate's crafting checks).
 func _carried_count(inv: Inventory, id: StringName) -> int:
 	return inv.count_of({"id": id, "tag": "", "count": 1})
+
+
+## --gate=inventory, Docs/Inventory.md 15: a furnace from the kit put down
+## beside the workbench; RMB opens its screen; the book's Iron ingot puts the
+## carried ore on top, real clicks put the coal below; it smelts with the
+## world's time (moved on here), the arrow and flame show it; the ingots
+## clicked out; then, the screen shut, it catches up an absence at once.
+func _gate_furnace(check: Callable) -> void:
+	var inv: Inventory = builder.inv
+	var fu_at := -1
+	for i in inv.main.size():
+		if inv.main[i] != null and inv.main[i].id == &"furnace":
+			fu_at = i
+	check.call("the kit has a furnace in storage", fu_at >= 0)
+	if fu_at < 0:
+		return
+	var held0 := inv.hand()
+	inv.hotbars[inv.active_hotbar][inv.active_slot] = inv.main[fu_at]
+	inv.main[fu_at] = null
+	inv.changed.emit()
+	_fly_to(_eye() - Vector3(0, 1.6, 0) + Vector3(1.6, 0, 0), Vector3(0, 0, -1))
+	walker.pitch = -1.45
+	await _frames(10)
+	var n0 := chests.count()
+	builder.update_target()
+	builder.place_target()
+	await _frames(5)
+	var fkey := ""
+	for key in chests.chests:
+		if chests.item_of(key) == &"furnace":
+			fkey = key
+	check.call("RMB with a furnace puts one down, three slots", chests.count() == n0 + 1 and fkey != ""
+			and chests.slots_of(fkey).size() == Smelting.SLOTS)
+	builder.update_target()
+	builder.place_target()
+	await _frames(5)
+	check.call("RMB on the furnace opens the furnace screen", inventory_open() and inv.chest_key == fkey
+			and inv.chest_rules == "furnace" and (_inv_screen.get("_furnace_box") as Control).is_visible_in_tree())
+	if inventory_open() and fkey != "":
+		var scr := _inv_screen
+		var fs: Array = chests.slots_of(fkey)
+		inv.main[10] = ItemStack.make(&"iron_ore", 24)
+		inv.main[11] = ItemStack.make(&"coal_ore", 12)
+		inv.changed.emit()
+		await _frames(3)
+		var cell := scr.recipe_cell("Iron ingot")
+		check.call("the book lists Iron ingot (grey: ore carried), not Sandstone", cell != null and not cell.bad
+				and scr.recipe_cell("Sandstone") == null)
+		if cell != null:
+			await _click(cell.get_global_rect().get_center())
+			await _frames(3)
+		check.call("a click on it: the 24 iron ore on top", fs[Smelting.INPUT] != null
+				and fs[Smelting.INPUT].id == &"iron_ore" and fs[Smelting.INPUT].count == 24 and inv.main[10] == null)
+		await _click(_inv_slot(scr, Inventory.addr(&"main", 11)).get_global_rect().get_center())
+		await _click(_inv_slot(scr, Inventory.addr(&"chest", Smelting.FUEL), &"", true).get_global_rect().get_center())
+		await _frames(3)
+		check.call("the coal picked up and put below", inv.cursor == null and (fs[Smelting.FUEL] != null
+				and fs[Smelting.FUEL].id == &"coal_ore" or not chests.furnace_state(fkey).is_empty()
+				and float(chests.furnace_state(fkey).burn) > 0.0))
+		world_time += 2.5
+		await _frames(30)
+		var st: Dictionary = chests.furnace_state(fkey)
+		var arrow: Control = scr.get("_farrow")
+		check.call("2.5 s on: lit (%.1f s of fire), the smelt half done, the arrow shows it (%.2f)" % [
+				float(st.get("burn", 0)), float(arrow.get("frac"))], float(st.get("burn", 0)) > 30.0
+				and float(arrow.get("frac")) > 0.3 and fs[Smelting.OUTPUT] == null)
+		await _shot(UserPaths.DEV + "inv_furnace.png")
+		world_time += 10.0
+		await _frames(30)
+		check.call("10 s more: 2 iron ingots out, the ore all smelted", fs[Smelting.OUTPUT] != null
+				and fs[Smelting.OUTPUT].id == &"iron_ingot" and fs[Smelting.OUTPUT].count == 2 and fs[Smelting.INPUT] == null)
+		await _shot(UserPaths.DEV + "inv_furnace_done.png")
+		var ing0 := _carried_count(inv, &"iron_ingot")
+		await _click(_inv_slot(scr, Inventory.addr(&"chest", Smelting.OUTPUT), &"", true).get_global_rect().get_center())
+		await _click(_inv_slot(scr, Inventory.addr(&"main", 12)).get_global_rect().get_center())
+		check.call("the ingots clicked out into storage", _carried_count(inv, &"iron_ingot") == ing0 + 2
+				and fs[Smelting.OUTPUT] == null and inv.cursor == null)
+		await _key(KEY_E)
+		check.call("E closes the furnace", not inventory_open() and inv.chest_key == "")
+		# Shut: it goes on with the world's time (an absence caught up at once).
+		fs[Smelting.INPUT] = ItemStack.make(&"gold_ore", 36)
+		fs[Smelting.FUEL] = ItemStack.make(&"coal_ore", 12)
+		world_time += 60.0
+		await _frames(30)
+		check.call("screen shut, a minute on: 3 gold ingots", fs[Smelting.OUTPUT] != null
+				and fs[Smelting.OUTPUT].id == &"gold_ingot" and fs[Smelting.OUTPUT].count == 3)
+		var sv: Dictionary = chests.to_save()
+		check.call("the furnace is saved with its fire", sv.has(fkey) and sv[fkey].has("furnace"))
+		for i in Smelting.SLOTS:
+			fs[i] = null
+		chests.break_chest(fkey, false)
+	inv.main[fu_at] = ItemStack.make(&"furnace", 1)
+	inv.hotbars[inv.active_hotbar][inv.active_slot] = held0
+	inv.changed.emit()
 
 
 ## A click with `button`, real events (the gates' `_click` is the left one).

@@ -18,6 +18,9 @@ extends MenuScreen
 ##       furnace's flame), the result. Click the result to make one,
 ##       Shift-click as many as you can.
 ##     -- or at a chest: "Chest" and its slots
+##     -- or at a furnace (Docs/Inventory.md 15): "Furnace" -- the input over
+##       the flame over the fuel, the arrow filling as it smelts, the output;
+##       the book lists what smelts, and a click puts what you carry of it in
 ##     "Inventory": the worn backpack's slots, then hotbar 2 and hotbar 1.
 ##
 ## No armour, no off-hand, no player figure (the user, 2026-11-25). Hover
@@ -108,6 +111,10 @@ var _chest_box: VBoxContainer
 var _chest_title: Label
 var _chest_grid: GridContainer
 var _craft_box: VBoxContainer
+var _furnace_box: VBoxContainer
+var _fire: FireView
+var _farrow: ArrowView
+var _furnace_out: InvSlot
 var _craft_title: Label
 var _backpack_slot: InvSlot
 var _ingredients: GridContainer
@@ -280,6 +287,35 @@ func _build_right() -> void:
 		_add_slot(_chest_grid, InvSlot.make(inv, Inventory.addr(&"chest", i)))
 	_chest_box.add_child(_chest_grid)
 	v.add_child(_chest_box)
+
+	# A furnace, Minecraft's: input over the flame over the fuel; the arrow; the output.
+	_furnace_box = VBoxContainer.new()
+	_furnace_box.name = "Furnace"
+	_furnace_box.add_theme_constant_override("separation", 2)
+	var ft := Label.new()
+	ft.text = "Furnace"
+	ft.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_furnace_box.add_child(ft)
+	var frow := HBoxContainer.new()
+	frow.alignment = BoxContainer.ALIGNMENT_CENTER
+	frow.add_theme_constant_override("separation", 0)
+	_furnace_box.add_child(frow)
+	var fcol := VBoxContainer.new()
+	fcol.add_theme_constant_override("separation", 0)
+	frow.add_child(fcol)
+	_add_slot(fcol, InvSlot.make(inv, Inventory.addr(&"chest", Smelting.INPUT)))
+	_fire = FireView.new()
+	fcol.add_child(_fire)
+	_add_slot(fcol, InvSlot.make(inv, Inventory.addr(&"chest", Smelting.FUEL)))
+	_farrow = ArrowView.new()
+	_farrow.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	frow.add_child(_farrow)
+	var fout := CenterContainer.new()
+	_furnace_out = InvSlot.make(inv, Inventory.addr(&"chest", Smelting.OUTPUT))
+	_furnace_out.name = "FurnaceOutput"
+	_add_slot(fout, _furnace_out)
+	frow.add_child(fout)
+	v.add_child(_furnace_box)
 
 	_craft_box = VBoxContainer.new()
 	_craft_box.add_theme_constant_override("separation", 2)
@@ -464,7 +500,10 @@ func _rebuild_left(force := false) -> void:
 		"farming":
 			_book_title.text = "Farming guide"
 			return
-	_book_title.text = "Craftable recipes" if craftable_only else "All recipes"
+	if _furnace_mode():
+		_book_title.text = "Smeltable" if craftable_only else "Smelting recipes"
+	else:
+		_book_title.text = "Craftable recipes" if craftable_only else "All recipes"
 	var near := _near()
 	var list := _book_recipes(near)
 	var names: Array = []
@@ -474,7 +513,7 @@ func _rebuild_left(force := false) -> void:
 		for c in _book_grid.get_children():
 			var cell := c as InvSlot
 			var r: Dictionary = cell.get_meta("r")
-			cell.bad = not inv.can_craft(r, near)
+			cell.bad = not _can(r, near)
 			cell.picked = not picked.is_empty() and picked.name == r.name
 			cell.queue_redraw()
 		return
@@ -489,7 +528,7 @@ func _rebuild_left(force := false) -> void:
 		cell.unit = _unit
 		cell.show_count = int(r.count)
 		cell.custom_minimum_size = Vector2(_slot_px, _slot_px)
-		cell.bad = not inv.can_craft(r, near)
+		cell.bad = not _can(r, near)
 		cell.picked = not picked.is_empty() and picked.name == r.name
 		cell.set_meta("recipe", r.name)
 		cell.set_meta("r", r)
@@ -505,21 +544,45 @@ func _book_recipes(near: Array) -> Array:
 	var q := _search.text.strip_edges().to_lower()
 	var can: Array = []
 	var cannot: Array = []
-	for r in RecipeBook.all():
+	for r in (_smelt_recipes() if _furnace_mode() else RecipeBook.all()):
 		if not _fits_station(r):
 			continue
 		if book_tab != "all" and r.category != book_tab:
 			continue
 		if not q.is_empty() and not str(r.name).to_lower().contains(q):
 			continue
-		var ok: bool = inv.can_craft(r, near)
+		var ok := _can(r, near)
 		if craftable_only and not ok:
 			continue
 		(can if ok else cannot).append(r)
 	return can + cannot
 
 
+## The furnace's recipes in the book's shape: one input, its `take`.
+func _smelt_recipes() -> Array:
+	var out: Array = []
+	for sr in Smelting.recipes():
+		out.append({"name": sr.name, "inputs": [{"id": sr.input, "tag": "", "count": int(sr.take)}],
+				"station": &"furnace", "output": sr.output, "count": int(sr.count),
+				"category": RecipeBook.category_of_item(sr.output), "smelt": true, "time": float(sr.time)})
+	return out
+
+
+## Can `r` be made now: a smelting recipe if enough of its input is carried.
+func _can(r: Dictionary, near: Array) -> bool:
+	if r.get("smelt", false):
+		return inv.count_of(r.inputs[0]) >= int(r.inputs[0].count)
+	return inv.can_craft(r, near)
+
+
+## The screen is a furnace's (its three slots are the borrowed chest's).
+func _furnace_mode() -> bool:
+	return not inv.chest_key.is_empty() and inv.chest_rules == "furnace"
+
+
 func _fits_station(r: Dictionary) -> bool:
+	if r.get("smelt", false):
+		return true
 	if station == &"":
 		return true
 	if station == &"workbench":
@@ -544,6 +607,10 @@ func result_slot() -> InvSlot:
 
 
 func _pick(r: Dictionary) -> void:
+	if r.get("smelt", false):
+		# Bedrock's furnace book: what you carry of the input goes on top.
+		inv.fill_slot(Inventory.addr(&"chest", Smelting.INPUT), r.inputs[0].id)
+		return
 	picked = r
 	_rebuild_left()
 	_show_picked()
@@ -666,16 +733,21 @@ func _refresh() -> void:
 		return
 	var n0 := _storage_n
 	_rebuild_storage()
-	var chest := not inv.chest_key.is_empty()
+	var furnace := _furnace_mode()
+	var chest := not inv.chest_key.is_empty() and not furnace
 	_chest_box.visible = chest
-	_craft_box.visible = not chest
+	_furnace_box.visible = furnace
+	_craft_box.visible = not chest and not furnace
 	_left_col.visible = book_open and not chest
 	_book_btn.visible = not chest
 	_storage_grid.visible = _storage_n > 0
 	_no_pack.visible = _storage_n <= 0
 	_chest_title.text = inv.chest_title
 	_craft_title.text = _station_title()
-	if chest:
+	if furnace:
+		_here_tab.icon_id = _first_item([&"furnace"])
+		_here_tab.tip = inv.chest_title
+	elif chest:
 		_here_tab.icon_id = _first_item([&"chest"])
 		_here_tab.tip = inv.chest_title
 	else:
@@ -692,6 +764,7 @@ func _refresh() -> void:
 		s.queue_redraw()
 	if not chest:
 		_rebuild_left()
+	if not chest and not furnace:
 		_show_picked()
 	_cursor.visible = inv.cursor != null
 	_cursor.queue_redraw()
@@ -705,6 +778,13 @@ func _refresh() -> void:
 
 func _process(_delta: float) -> void:
 	_update_tip()
+	if _furnace_mode() and host != null and host.has_method("furnace_state"):
+		var pr := Smelting.progress(host.furnace_state(inv.chest_key), inv.chest_slots)
+		if not is_equal_approx(pr.x, _farrow.frac) or not is_equal_approx(pr.y, _fire.frac):
+			_farrow.frac = pr.x
+			_fire.frac = pr.y
+			_farrow.queue_redraw()
+			_fire.queue_redraw()
 
 
 func _update_tip() -> void:
@@ -731,6 +811,18 @@ func tip_lines(c: Control) -> Array:
 		return []
 	var s := c as InvSlot
 	var near := _near()
+	if s.has_meta("r") and (s.get_meta("r") as Dictionary).get("smelt", false):
+		var sr: Dictionary = s.get_meta("r")
+		var inp: Dictionary = sr.inputs[0]
+		var nm := str(ItemCatalog.get_def(inp.id).get("name", inp.id))
+		var have := inv.count_of(inp)
+		var lines: Array = [[str(sr.name) + ("  x%d" % int(sr.count) if int(sr.count) > 1 else ""), McStyle.TIP_NAME],
+				["Smelts %d %s in %s s" % [int(inp.count), nm, str(sr.time)], McStyle.TIP_GREY]]
+		if have < int(inp.count):
+			lines.append(["Needs %d more %s" % [int(inp.count) - have, nm], McStyle.TIP_RED])
+		else:
+			lines.append(["Click: put your %s in the furnace" % nm, Color("8080ff")])
+		return lines
 	if s.has_meta("r"):
 		var r: Dictionary = s.get_meta("r")
 		var out: Array = [[str(r.name) + ("  x%d" % int(r.count) if int(r.count) > 1 else ""), McStyle.TIP_NAME]]
@@ -756,6 +848,14 @@ func tip_lines(c: Control) -> Array:
 	if st == null:
 		if s == _backpack_slot:
 			return [["Backpack slot", McStyle.TIP_NAME], ["Wear a backpack here to carry more", McStyle.TIP_GREY]]
+		if _furnace_mode() and not s.addr.is_empty() and s.addr.area == &"chest":
+			match int(s.addr.index):
+				Smelting.INPUT:
+					return [["Smelt", McStyle.TIP_NAME], ["Ore or sand: what goes in the fire", McStyle.TIP_GREY]]
+				Smelting.FUEL:
+					return [["Fuel", McStyle.TIP_NAME], ["Coal, wood or leaves", McStyle.TIP_GREY]]
+				Smelting.OUTPUT:
+					return [["Result", McStyle.TIP_NAME], ["What is smelted comes out here", McStyle.TIP_GREY]]
 		return []
 	var out2: Array = [[ItemCatalog.label(st), McStyle.TIP_NAME]]
 	var d := ItemCatalog.get_def(st.id)
@@ -935,7 +1035,8 @@ func _on_back() -> bool:
 func _on_relayout(vp_size: Vector2) -> void:
 	if _right == null or inv == null:
 		return
-	var chest := not inv.chest_key.is_empty()
+	var furnace := _furnace_mode()
+	var chest := not inv.chest_key.is_empty() and not furnace
 	var book := book_open and not chest
 	var pad_f := 0.36
 	# Widths in slots: the right panel 9 + padding; the book 7 + its scroll bar.
@@ -949,6 +1050,9 @@ func _on_relayout(vp_size: Vector2) -> void:
 	var text_rows := 4.0
 	if chest:
 		top = ceilf(inv.area_size(&"chest") / 9.0)
+		text_rows = 2.0
+	elif furnace:
+		top = 3.0
 		text_rows = 2.0
 	var h_slots := 0.95 + pad_f * 2.0 + top + text_rows * 0.62 + store_rows + 0.3 + 2.1 + 0.25
 	var avail_h := vp_size.y - 2.0 * MenuFit.page_padding(vp_size) - 8.0
@@ -986,6 +1090,8 @@ func _on_relayout(vp_size: Vector2) -> void:
 	_mid.custom_minimum_size = Vector2(roundf(_slot_px * (1.9 if station == &"furnace" else 1.4)), _slot_px)
 	_result.custom_minimum_size = Vector2(roundf(_slot_px * 1.35), roundf(_slot_px * 1.35))
 	_result.unit = _unit
+	_fire.custom_minimum_size = Vector2(_slot_px, _slot_px)
+	_farrow.custom_minimum_size = Vector2(roundf(_slot_px * 1.6), _slot_px)
 	(_right.find_child("Balance", true, false) as Control).custom_minimum_size.x = _slot_px
 	_hotbar_gap.custom_minimum_size.y = roundf(_slot_px * 0.2)
 	_craft_note.custom_minimum_size.x = 9.0 * _slot_px
@@ -1000,6 +1106,8 @@ func _set_slot_size() -> void:
 	for s in _slots:
 		s.custom_minimum_size = sz
 		s.unit = _unit
+	if _furnace_out != null:
+		_furnace_out.custom_minimum_size = (sz * 1.35).round()
 	if _book_grid != null:
 		for c in _book_grid.get_children() + _ingredients.get_children():
 			(c as InvSlot).custom_minimum_size = sz
@@ -1041,3 +1149,33 @@ class Mid extends Control:
 			McStyle.draw_arrow(self, Rect2(Vector2(h * 0.85, h * 0.3), Vector2(size.x - h * 1.0, h * 0.4)))
 		else:
 			McStyle.draw_arrow(self, Rect2(Vector2(size.x * 0.18, h * 0.3), Vector2(size.x * 0.64, h * 0.4)))
+
+
+## The furnace's flame: grey when out, burning down from the top as the fuel
+## is used (`frac`: what is left).
+class FireView extends Control:
+	var frac := 0.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _draw() -> void:
+		var r := Rect2(Vector2(-size.x * 0.15, -size.y * 0.25), size * 1.3)
+		McStyle.draw_flame(self, r, false)
+		if frac > 0.0:
+			# The lit part: the flame again, cut flat at what is left.
+			McStyle.draw_flame(self, r, true, r.position.y + r.size.y * (1.0 - frac))
+
+
+## The furnace's arrow, filling white left to right as the smelt goes (`frac`).
+class ArrowView extends Control:
+	var frac := 0.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _draw() -> void:
+		var r := Rect2(Vector2(size.x * 0.12, size.y * 0.3), Vector2(size.x * 0.76, size.y * 0.4))
+		McStyle.draw_arrow(self, r)
+		if frac > 0.0:
+			McStyle.draw_arrow(self, r, McStyle.LIGHT, frac)

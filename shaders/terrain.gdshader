@@ -399,10 +399,30 @@ void vertex() {
     // overlay), sunk like a boxed face inside it.
     bool behind = abs(CUSTOM0.b * 255.0 - 96.0) < 0.5;
     bool glass = int(round(CUSTOM0.r * 255.0)) == TERRAIN_GLASS;
+    // The reach is judged from the middle of the face's BRICK face (UV its
+    // place in it, UV2 its size, as the hole test below reads them), not the
+    // vertex: every corner of a face gets the same answer. Judged a vertex at
+    // a time, a face across the reach had some corners folded to the tile's
+    // origin and the rest not -- long stretched triangles to one point,
+    // seen in caves (the user, 2026-11-25).
+    vec3 face_mid = v_world;
+    if (UV2.x > 0.0 && UV2.y > 0.0) {
+        vec3 fn = normalize(NORMAL);
+        vec2 fd = 0.5 * UV2 - UV;
+        vec3 foff;
+        if (abs(fn.x) > 0.5) {
+            foff = vec3(0.0, fd.y, fd.x * sign(fn.x));
+        } else if (abs(fn.z) > 0.5) {
+            foff = vec3(-fd.x * sign(fn.z), fd.y, 0.0);
+        } else {
+            foff = vec3(fd.x, 0.0, fd.y);
+        }
+        face_mid = (MODEL_MATRIX * vec4(VERTEX + foff, 1.0)).xyz;
+    }
     if (glass) {
         // Never under a brick: as it lies.
     } else if (behind && (overlay_reach <= 0.0
-            || distance(v_world, INV_VIEW_MATRIX[3].xyz) >= overlay_reach)) {
+            || distance(face_mid, INV_VIEW_MATRIX[3].xyz) >= overlay_reach)) {
         VERTEX = vec3(0.0);
     } else if ((overlay_reach > 0.0 || (overlay_holes > 0 && !behind))
             && (behind || abs(CUSTOM0.b * 255.0 - 64.0) < 0.5)) {

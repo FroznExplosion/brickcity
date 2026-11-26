@@ -54,17 +54,31 @@ static func draw_slot(ci: CanvasItem, r: Rect2, u: float, fill := SLOT) -> void:
 
 
 ## The grey arrow between the ingredients and the result.
-static func draw_arrow(ci: CanvasItem, r: Rect2, col := SLOT) -> void:
+## `fill` < 1: only its left part (the furnace's progress).
+static func draw_arrow(ci: CanvasItem, r: Rect2, col := SLOT, fill := 1.0) -> void:
 	var c := r.get_center()
 	var h := r.size.y * 0.5
 	var w := r.size.x
-	ci.draw_rect(Rect2(Vector2(r.position.x, c.y - h * 0.22), Vector2(w * 0.62, h * 0.44)), col)
-	ci.draw_colored_polygon(PackedVector2Array([Vector2(r.position.x + w * 0.58, c.y - h * 0.62),
-			Vector2(r.end.x, c.y), Vector2(r.position.x + w * 0.58, c.y + h * 0.62)]), col)
+	var x_max := r.position.x + w * clampf(fill, 0.0, 1.0)
+	var shaft := Rect2(Vector2(r.position.x, c.y - h * 0.22), Vector2(minf(w * 0.62, x_max - r.position.x), h * 0.44))
+	if shaft.size.x > 0.0:
+		ci.draw_rect(shaft, col)
+	var head := PackedVector2Array()
+	for q in [Vector2(r.position.x + w * 0.58, c.y - h * 0.62), Vector2(r.end.x, c.y),
+			Vector2(r.position.x + w * 0.58, c.y + h * 0.62)]:
+		head.append(q)
+	if x_max >= r.end.x - 0.5:
+		ci.draw_colored_polygon(head, col)
+	elif x_max > head[0].x:
+		# The head cut at x_max: a trapezoid.
+		var t := (x_max - head[0].x) / (r.end.x - head[0].x)
+		ci.draw_colored_polygon(PackedVector2Array([head[0], head[0].lerp(head[1], t),
+				head[2].lerp(head[1], t), head[2]]), col)
 
 
-## The furnace's flame: grey when out, orange when what is picked can be made.
-static func draw_flame(ci: CanvasItem, r: Rect2, lit: bool) -> void:
+## The furnace's flame: grey when out, orange when lit; `cut_y`: nothing of it
+## above that height (the fuel burning down).
+static func draw_flame(ci: CanvasItem, r: Rect2, lit: bool, cut_y := -INF) -> void:
 	var outer := Color("f08a1c") if lit else SLOT
 	var inner := Color("ffe14a") if lit else Color("9d9d9d")
 	var c := r.get_center()
@@ -79,8 +93,12 @@ static func draw_flame(ci: CanvasItem, r: Rect2, lit: bool) -> void:
 		if sin(a) < 0.0:
 			p.y = lerpf(p.y, -s * 0.95, pow(-sin(a), 3.0))
 			p.x *= 1.0 - 0.6 * pow(-sin(a), 2.0)
-		pts.append(c + p)
-		pts2.append(c + p * 0.55 + Vector2(0, s * 0.18))
+		var q := c + p
+		var q2 := c + p * 0.55 + Vector2(0, s * 0.18)
+		pts.append(Vector2(q.x, maxf(q.y, cut_y)))
+		pts2.append(Vector2(q2.x, maxf(q2.y, cut_y)))
+	if cut_y >= r.end.y:
+		return
 	ci.draw_colored_polygon(pts, outer)
 	ci.draw_colored_polygon(pts2, inner)
 

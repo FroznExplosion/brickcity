@@ -552,9 +552,8 @@ Minecraft's way -- C over a slot in the screen swaps it with the active
 off-hand slot, B with the quick slot (`Inventory.swap_slots`) -- and the HUD
 shows both. Crafting and pickups still never put anything there by themselves.
 
-**Not done (Minecraft has it):** furnaces that smelt over time with fuel,
-3x3 shapes, the result onto the cursor. The furnace screen makes its
-recipes at once, like the others.
+**Not done (Minecraft has it):** 3x3 shapes, the result onto the cursor.
+Furnaces smelt over time since section 15.
 
 **Tests.** inventory_probe: the off-hand checks pruned (no off-hand), an old
 save's off-hand pickaxe moved into the inventory. `--gate=inventory`: the
@@ -564,3 +563,65 @@ made by a click on the result; Sandstone red without a workbench; the
 craftable-only switch; at the workbench Sandstone made the same way; the
 furnace screen lists only furnace recipes. Pictures: user://dev/inv_tooltip,
 inv_craft, inv_craftable_only, inv_workbench, inv_furnace, inv_chest.
+
+## 15. Furnaces that smelt (2026-11-25)
+
+The user: yes, furnaces smelt over time with fuel, like Minecraft.
+
+**The rules** (`Smelting`, scripts/inventory/smelting.gd; tables in packs,
+`content/<pack>/data/smelting/*.json`, so a mod adds what smelts and burns):
+
+| Smelts | Takes | Gives | Time |
+|---|---|---|---|
+| iron ore | 12 cells (one 2x2 brick) | 1 iron ingot | 5 s |
+| gold ore | 12 cells | 1 gold ingot | 5 s |
+| sand | 12 cells | 12 cells of glass | 5 s |
+
+| Fuel | Takes | Burns |
+|---|---|---|
+| coal ore | 12 cells | 40 s (8 smelts) |
+| wood | 12 cells | 7.5 s |
+| leaves | 12 cells | 2.5 s |
+
+As in Minecraft: the fire takes its fuel at once when lit and only lights if
+there is something it can smelt; it burns on when the input runs out; a smelt
+left half done when the fire goes out starts again; a full output (or another
+item there) stops it. Times are a little shorter than Minecraft's (10 s a
+smelt) because the mine world's ore comes by the brick.
+
+**A furnace is a placed block with slots.** An item with `"smelter": true`
+(the furnace) is placed by MineChests like a station, with
+`Smelting.SLOTS` slots (input, fuel, output) and a state {burn, burn_max,
+cook, t} in the world time. `MineChests.settle_furnaces` brings every
+furnace up to `world_time` every 0.25 s -- with the screen shut too -- and
+`Smelting.settle` catches up any gap at once (a load, a long absence: like
+MineFarming's settle). Saved with the world (`furnace` beside its slots).
+Broken, its contents drop.
+
+**The screen** (RMB on it): Minecraft's furnace -- the input over the flame
+over the fuel, the arrow (white as the smelt goes), the output -- with
+Bedrock's furnace book on the left: what smelts, grey if you carry enough,
+red if not; a click puts all you carry of it on top (`Inventory.fill_slot`).
+Slot rules (`Inventory.chest_rules = "furnace"`): the fuel slot takes only
+fuels, the output takes nothing (a held stack of the same clicked on it
+takes from it), shift-click sends what smelts on top and what only burns
+below. The flame burns down as the fuel goes.
+
+**Recipes moved onto ingots.** The furnace no longer crafts; what was made
+"at a furnace" is made at a workbench from ingots: bucket 2 iron ingots,
+source bucket a bucket + 1 gold ingot, grenades 12 coal + 1 iron ingot,
+mega pickaxe (diamond ore, unchanged) at a workbench; and pickaxe 1 iron
+ingot (was 12 ore), medium backpack 3 iron ingots (36 ore), large backpack
+3 gold ingots (36 ore), scythe and watering can 2 iron ingots (18 ore;
+recipes/farming.json). One ingot is one brick of ore, so the costs are
+about the same as before.
+
+**Tests.** inventory_probe `_smelting`: the tables, a fire lit and a smelt
+part done, two out in 13 s, burnt out with nothing left, no fuel nothing,
+a full output stopping an hour's catch-up, the slot rules, shift-click
+routing, the book's fill, a placed furnace saved and back with its fire.
+`--gate=inventory` `_gate_furnace`: a furnace put down, RMB opens it, the
+book's Iron ingot fills the input, the coal clicked below, the world's time
+moved on (half a smelt shown on the arrow, then 2 ingots), the ingots
+clicked out, then shut: a minute on gives 3 gold ingots; saved with its
+fire. Pictures: user://dev/inv_furnace, inv_furnace_done.
