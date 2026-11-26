@@ -550,8 +550,14 @@ static func balances(b: Dictionary) -> bool:
 		if BrickTerrain.solid_at(k.x, base, k.y) != 0 and BrickTerrain.solid_at(k.x, base - 1, k.y) != 0:
 			for c in [Vector2(0, 0), Vector2(1, 0), Vector2(0, 1), Vector2(1, 1)]:
 				support.append(Vector2(k) + c)
-	if mass <= 0.0 or support.is_empty():
-		return true   # nothing under it: the survey drops it whole
+	if mass <= 0.0:
+		return true
+	if support.is_empty():
+		# Nothing under it at all: it drops, let go here as one piece (not
+		# left to the collapse survey, whose fitted ground floats a group
+		# of more than ~500 cells: Docs/TerrainBuildings.md 4e).
+		b["lean"] = Vector2.ZERO
+		return false
 	var middle := sum / mass
 	var hull := Geometry2D.convex_hull(support)
 	# Which way it would go: from what holds it toward its middle.
@@ -647,7 +653,7 @@ static func _topple(host: Node, b: Dictionary) -> void:
 	var spin := Vector3.ZERO
 	if lean.length() > 0.01:
 		spin = Vector3.UP.cross(Vector3(lean.x, 0.0, lean.y).normalized()) * TIP_SPIN
-	collapse.call("_let_group_go", g, 1.0, spin)
+	collapse.call("_let_group_go", g, 1.0, spin, true)
 	# Rubble lying on it or in it (a shot brick on its roof) is frozen still:
 	# immovable, it held the whole building up. Woken, it falls with it.
 	var pieces = collapse.get("pieces")

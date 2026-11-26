@@ -106,6 +106,12 @@ not move its middle yet (the weights are the stamp's).
   (glass runs, furniture plates, stair steps) stayed in the ground and held
   it from inside (cleared when it topples); and frozen rubble on or in it (a
   shot brick on its roof) is immovable -- such pieces are woken.
+- **4e, dug out from under all of it (2026-11-26).** A building with no
+  column left on solid ground is let go by MineBuildings itself (balances
+  fails, the topple drops it straight, kept awake as a tipping one), not by
+  the collapse survey: with the region fit on, the survey floats a group of
+  more than ~500 cells (terrain-regions), which would leave a tower hanging.
+  after_edit runs inside terrain_edited, before the survey is even started.
 - **4c, items.** "Plastic bricks" (ItemCatalog): one material family whose
   colours are every building material (MAT_FIL_BASE + each filament). A
   mined building brick is one of its colour, and lays that colour again.
