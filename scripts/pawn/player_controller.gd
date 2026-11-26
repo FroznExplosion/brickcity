@@ -29,6 +29,9 @@ var drive_uncaptured := false
 ## The mouse buttons belong to something else for now -- the mine world's build
 ## mode (Docs/MineWorld.md 8): no trigger, no sights, until it is let go.
 var hold_fire := false
+## Only the sights belong to something else (the mine world's off-hand up:
+## RMB is that hand's, Docs/Inventory.md round four); the trigger stays.
+var hold_aim := false
 ## Hold or toggle, from the Options menu (BrickcityMenuHost). Static: one player.
 static var toggle_sprint := false
 static var toggle_aim := false
@@ -127,7 +130,7 @@ func _process(delta: float) -> void:
 		if _down(&"move_right"): wish += basis.x
 		it.move = wish.normalized() if wish != Vector3.ZERO else Vector3.ZERO
 		var trigger := _down(&"fire") and not hold_fire
-		it.aim = (_aim_on if toggle_aim else _down(&"aim")) and not hold_fire
+		it.aim = (_aim_on if toggle_aim else _down(&"aim")) and not hold_fire and not hold_aim
 		# A sprint is forwards, and the trigger or the sights end it -- a toggled one
 		# too, which then has to be switched on again.
 		if not forward or trigger or it.aim:

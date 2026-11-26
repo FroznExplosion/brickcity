@@ -1,15 +1,15 @@
 class_name Inventory
 extends RefCounted
 ## The player's items (Docs/Inventory.md 3.2), ported from zylanntest's
-## Inventory autoload: two hotbars of 9, the main storage,
+## Inventory autoload: two hotbars of 9, two off-hand slots, the main storage,
 ## an open chest, and the cursor stack the mouse carries in the screen. Guns
 ## are not here: they are the arsenal's (Docs/Inventory.md 1).
 ##
 ## Every slot has an address `{area, index}`:
 ##   hotbar_0, hotbar_1   9 each
-##   offhand              2, no longer used: no off-hand (Docs/Inventory.md 14,
-##                        Minecraft's screen without it); an old save's are
-##                        moved into the inventory
+##   offhand              2
+##   quick                1, the quick slot (Docs/Inventory.md round four):
+##                        B pulls it out as the main hand, until put away
 ##   backpack             1, the backpack worn (Docs/Inventory.md 8)
 ##   main                 the worn backpack's own slots (its `contents`): no
 ##                        backpack, no storage -- zylanntest's rule
@@ -30,9 +30,23 @@ const OFFHAND_SIZE := 2
 const MAIN_SIZE := 27
 const KIT_BACKPACK := &"large_backpack"
 const CHEST_SIZE := 27
+## X held this long swaps the off-hand instead of the hotbar.
+const HOLD_MS := 350
 
 var hotbars: Array = [[], []]
 var offhands: Array = [null, null]
+## The quick slot (round four): one item, out in the main hand while
+## `quick_out`, else resting.
+var quick: Array = [null]
+var quick_out := false
+## The off-hand up (C, pad: hold LB): RMB uses it. Down: RMB is the main
+## hand's (aim, place). A two-handed item in the main hand lowers it while
+## held; the flag stays.
+var offhand_up := false
+## Set for the length of one off-hand use (MineBuilder.with_offhand): `hand`
+## and `hand_addr` then mean the off-hand, so the builder's place/pour code
+## works on it unchanged.
+var using_off := false
 ## The backpack worn, or null; its `contents` are the storage.
 var backpack: ItemStack = null
 ## The old 2 x 2 craft grid's contents (stage 9), only to give them back from
@@ -164,6 +178,7 @@ func _array(area: StringName) -> Array:
 		&"hotbar_0": return hotbars[0]
 		&"hotbar_1": return hotbars[1]
 		&"offhand": return offhands
+		&"quick": return quick
 		&"main": return main
 		&"chest": return chest_slots
 	return []
@@ -183,8 +198,9 @@ static func _fit_backpack(s: ItemStack) -> void:
 		s.contents.resize(n)
 
 
-## May `s` go in slot `a`? Storage and the hotbars take anything (no
-## off-hand any more, so no off-hand-only items); the backpack slot backpacks.
+## May `s` go in slot `a`? Storage takes anything; the hands go by the item's
+## `hand`: the off-hand takes one-handed ("any") and off-hand-only items, the
+## hotbars everything but off-hand-only.
 func slot_accepts(a: Dictionary, s: ItemStack) -> bool:
 	if s == null:
 		return true
@@ -203,8 +219,8 @@ func slot_accepts(a: Dictionary, s: ItemStack) -> bool:
 	match a.area:
 		&"offhand":
 			return d.hand == "any" or d.hand == "off"
-		&"hotbar_0", &"hotbar_1":
-			return true
+		&"hotbar_0", &"hotbar_1", &"quick":
+			return d.hand != "off"
 	return true
 
 
@@ -282,7 +298,7 @@ func right_click(a: Dictionary) -> void:
 	changed.emit()
 
 
-## To the other side: a chest <-> the player; else main -> hotbars;
+## To the other side: a chest <-> the player; else main -> hotbars, off-hand;
 ## the hands -> main. Same items first, then the first empty slot.
 func shift_click(a: Dictionary) -> void:
 	var s := get_slot(a)
@@ -378,7 +394,7 @@ func ensure_item(id: StringName, after: StringName = &"") -> bool:
 
 func all_addrs() -> Array:
 	var out: Array = []
-	for area in [&"hotbar_0", &"hotbar_1", &"backpack", &"main", &"chest"]:
+	for area in [&"hotbar_0", &"hotbar_1", &"offhand", &"quick", &"backpack", &"main", &"chest"]:
 		for i in area_size(area):
 			out.append(addr(area, i))
 	return out
@@ -484,8 +500,8 @@ func _amounts() -> Dictionary:
 # ---------------------------------------------------------------------------
 # From play
 
-## Put `s` into the player's storage: the active hotbar, the other, the
-## main -- same items first, then empty slots. What did not fit, or null.
+## Put `s` into the player's storage: the active hotbar, the other, main --
+## same items first, then empty slots. What did not fit, or null.
 func add_item(s: ItemStack) -> ItemStack:
 	if s == null or s.is_empty():
 		return null
@@ -493,9 +509,25 @@ func add_item(s: ItemStack) -> ItemStack:
 		set_slot(addr(&"backpack"), s)
 		changed.emit()
 		return null
+	# Never into the off-hand by itself (round four: blocks fit there now, and
+	# what is in it is the player's choice); same kind there is topped up.
 	var left := _insert(s, [hotbar_area(), hotbar_area(1 - active_hotbar), &"main"])
+	if left != null:
+		left = _merge_only(left, [&"offhand"])
 	changed.emit()
 	return left
+
+
+## `s` merged onto stacks of its kind in `areas`, never into empty slots.
+func _merge_only(s: ItemStack, areas: Array) -> ItemStack:
+	for area in areas:
+		for i in area_size(area):
+			var t := get_slot(addr(area, i))
+			if t != null and t.same_kind(s):
+				s = _merge_into(t, s)
+				if s == null:
+					return null
+	return s
 
 
 func _insert(s: ItemStack, areas: Array) -> ItemStack:
@@ -578,13 +610,74 @@ func take_from(a: Dictionary, whole: bool) -> ItemStack:
 	return out
 
 
+## The slot the hand in use takes from: the off-hand during an off-hand use
+## (`using_off`), else the main hand's (main_addr).
 func hand_addr() -> Dictionary:
-	return addr(hotbar_area(), active_slot)
+	if using_off:
+		return addr(&"offhand", active_offhand)
+	return main_addr()
 
 
-## What is in the hand: the active hotbar's selected slot.
+## The main (right) hand's slot: the quick slot while it is out, else the
+## active hotbar's selected slot.
+func main_addr() -> Dictionary:
+	return addr(&"quick", 0) if quick_out else addr(hotbar_area(), active_slot)
+
+
+## What is in the hand in use (see hand_addr).
 func hand() -> ItemStack:
-	return hotbars[active_hotbar][active_slot]
+	return get_slot(hand_addr())
+
+
+## What is in the main hand, whatever is being used.
+func main_hand() -> ItemStack:
+	return get_slot(main_addr())
+
+
+static func two_handed(s: ItemStack) -> bool:
+	return s != null and ItemCatalog.get_def(s.id).get("hand", "") == "two"
+
+
+## The off-hand in use: its active slot's item while it is up and not
+## lowered by a two-handed item in the main hand; else null.
+func offhand() -> ItemStack:
+	if not offhand_up or offhand_lowered():
+		return null
+	return offhands[active_offhand]
+
+
+## Up, but held down by a two-handed item in the main hand.
+func offhand_lowered() -> bool:
+	return offhand_up and two_handed(main_hand())
+
+
+## C (pad: hold LB): the off-hand up or down.
+func toggle_offhand_up() -> void:
+	offhand_up = not offhand_up
+	active_changed.emit()
+	changed.emit()
+
+
+## B (pad: hold RB): the quick slot into the main hand; again, put away.
+## Nothing in it: nothing happens. True if it is out after.
+func toggle_quick() -> bool:
+	if quick_out:
+		put_away_quick()
+	elif quick[0] != null:
+		quick_out = true
+		active_changed.emit()
+		changed.emit()
+	return quick_out
+
+
+## The toolbar slot back in the main hand. True if the quick slot was out.
+func put_away_quick() -> bool:
+	if not quick_out:
+		return false
+	quick_out = false
+	active_changed.emit()
+	changed.emit()
+	return true
 
 
 ## Use up `n` of the hand's stack (survival only: creative never runs out).
@@ -597,9 +690,21 @@ func consume_hand(n := 1) -> bool:
 		return false
 	h.count -= n
 	if h.count <= 0:
-		hotbars[active_hotbar][active_slot] = null
+		set_slot(hand_addr(), null)
 	changed.emit()
 	return true
+
+
+func swap_hand_offhand() -> void:
+	var ha := hand_addr()
+	var oa := addr(&"offhand", active_offhand)
+	var h := get_slot(ha)
+	var o := get_slot(oa)
+	if not slot_accepts(ha, o) or not slot_accepts(oa, h):
+		return
+	set_slot(ha, o)
+	set_slot(oa, h)
+	changed.emit()
 
 
 ## 1-9 over a slot in the screen: that slot and slot `i` of the active hotbar
@@ -617,6 +722,24 @@ func swap_with_hotbar(a: Dictionary, i: int) -> void:
 	changed.emit()
 
 
+## Slots `a` and `b` change places, if each may hold the other's item (C and
+## B over a slot in the screen: the off-hand, the quick slot). True if they did.
+func swap_slots(a: Dictionary, b: Dictionary) -> bool:
+	if a.area == b.area and a.index == b.index:
+		return false
+	var s := get_slot(a)
+	var t := get_slot(b)
+	if not slot_accepts(a, t) or not slot_accepts(b, s):
+		return false
+	set_slot(a, t)
+	set_slot(b, s)
+	# The quick slot emptied while out: the toolbar slot is the hand again.
+	if get_slot(main_addr()) == null and quick_out:
+		quick_out = false
+	changed.emit()
+	return true
+
+
 ## The cursor stack back into storage (the screen closing). False if some did
 ## not fit (it is kept on the cursor).
 func return_cursor() -> bool:
@@ -629,14 +752,23 @@ func return_cursor() -> bool:
 
 func toggle_hotbar() -> void:
 	active_hotbar = 1 - active_hotbar
+	quick_out = false
+	active_changed.emit()
+	changed.emit()
+
+
+func toggle_offhand() -> void:
+	active_offhand = 1 - active_offhand
 	active_changed.emit()
 	changed.emit()
 
 
 func select_slot(i: int) -> void:
 	i = clampi(i, 0, HOTBAR_SIZE - 1)
-	if i == active_slot:
+	if i == active_slot and not quick_out:
 		return
+	# Choosing a toolbar slot puts the quick slot away (round four).
+	quick_out = false
 	active_slot = i
 	active_changed.emit()
 	changed.emit()
@@ -649,6 +781,8 @@ func scroll(step: int) -> void:
 ## Find an item in the hotbars (the active one first) and put it in the hand.
 ## False if neither has it.
 func select_item(id: StringName) -> bool:
+	if quick_out and quick[0] != null and quick[0].id == id:
+		return true
 	for k in 2:
 		var bar := active_hotbar if k == 0 else 1 - active_hotbar
 		for i in HOTBAR_SIZE:
@@ -668,6 +802,7 @@ func pick(id: StringName) -> bool:
 		return id != &""
 	if not creative or not ItemCatalog.has(id):
 		return false
+	put_away_quick()
 	var old := hand()
 	hotbars[active_hotbar][active_slot] = ItemStack.make(id, ItemCatalog.max_stack(id))
 	if old != null:
@@ -679,11 +814,11 @@ func pick(id: StringName) -> bool:
 # ---------------------------------------------------------------------------
 # Crafting (Docs/Inventory.md 9; zylanntest's 2 x 2 grid)
 
-## Where crafting takes from: the hotbars, the storage (the
+## Where crafting takes from: the hotbars, the off-hand, the storage (the
 ## worn backpack's slots) -- not the backpack worn itself, nor an open chest.
 func _carried() -> Array:
 	var out: Array = []
-	for area in [&"main", hotbar_area(), hotbar_area(1 - active_hotbar)]:
+	for area in [&"main", hotbar_area(), hotbar_area(1 - active_hotbar), &"offhand", &"quick"]:
 		for i in area_size(area):
 			out.append(addr(area, i))
 	return out
@@ -852,6 +987,8 @@ func to_dict() -> Dictionary:
 		"hotbar_0": _save_array(hotbars[0]),
 		"hotbar_1": _save_array(hotbars[1]),
 		"offhand": _save_array(offhands),
+		"quick": _save_array(quick),
+		"offhand_up": offhand_up,
 		# The backpack carries the storage (its contents); "main" was the
 		# storage before backpacks (stage 8).
 		"backpack": _stack_dict(backpack),
@@ -871,6 +1008,10 @@ func from_dict(d) -> bool:
 	_load_array(hotbars[0], d.get("hotbar_0", []))
 	_load_array(hotbars[1], d.get("hotbar_1", []))
 	_load_array(offhands, d.get("offhand", []))
+	_load_array(quick, d.get("quick", []))
+	quick_out = false
+	using_off = false
+	offhand_up = bool(d.get("offhand_up", false))
 	_load_array(old_craft, d.get("craft", []))
 	if d.has("backpack"):
 		backpack = _keep_known(ItemStack.from_dict(d.backpack))
@@ -894,11 +1035,6 @@ func from_dict(d) -> bool:
 		if old_craft[i] != null:
 			_insert(old_craft[i], [&"main", hotbar_area(), hotbar_area(1 - active_hotbar)])
 			old_craft[i] = null
-	# No off-hand any more (Docs/Inventory.md 14): what an old save had there
-	# goes into the inventory; what does not fit stays (saved, not lost).
-	for i in offhands.size():
-		if offhands[i] != null:
-			offhands[i] = _insert(offhands[i], [&"main", hotbar_area(), hotbar_area(1 - active_hotbar)])
 	changed.emit()
 	return true
 

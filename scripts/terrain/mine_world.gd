@@ -715,7 +715,7 @@ func _place_player(feet: Vector3) -> void:
 		if kit.hud != null:
 			kit.hud.hint_lines = PackedStringArray([
 				"WASD move · SHIFT sprint · SPACE jump · F fly · LMB fire / break · RMB aim / place · R reload",
-				"1-9 / wheel: the hand (a gun, a block, a tool) · X other hotbar · Z block size · E items · M world"])
+				"1-9 / wheel: the hand (a gun, a block, a tool) · X other hotbar · C off-hand up/down (RMB uses it) · B quick slot · Z block size · E items · M world"])
 		FpsRig.face(cam, pawn, Vector3.FORWARD)
 	walker.camera.far = far
 	cam.far = far
@@ -2564,6 +2564,102 @@ func _menu_small_window_check() -> void:
 	await _frames(5)
 
 
+## Round four in --gate=inventory (Docs/Inventory.md): a pistol in the
+## off-hand, up -- RMB fires it, nothing is laid, the main gun's sights rest;
+## a two-handed gun (the rifle, `rifle` in hotbar slot 7) lowers it and the
+## off-hand comes back after; the quick slot -- B out, X / the wheel / 3 put
+## it away; saved. Everything put back as it was found.
+func _offhand_gun_checks(check: Callable, rifle: ItemStack) -> void:
+	var inv: Inventory = builder.inv
+	var pistol: ItemStack = null
+	var pistol_at := -1
+	for i in inv.main.size():
+		var ps: ItemStack = inv.main[i]
+		if ps != null and MineHands.is_gun(ps) and ItemCatalog.get_def(ps.id).hand == "any":
+			pistol = ps
+			pistol_at = i
+	check.call("4b: a one-handed gun in the kit (%s)" % (pistol.id if pistol != null else "none"), pistol != null)
+	check.call("4b: the rifle is two-handed: not allowed in the off-hand", Inventory.two_handed(rifle)
+			and not inv.slot_accepts(Inventory.addr(&"offhand", 1), rifle))
+	if pistol == null:
+		return
+	inv.main[pistol_at] = null
+	inv.offhands[1] = pistol
+	inv.active_offhand = 1
+	inv.offhand_up = true
+	inv.changed.emit()
+	await _frames(10)
+	check.call("4b: the pistol up in the off-hand is drawn, the sights rest", hands.off_held == pistol
+			and hands.off_gun.gun != null and player.hold_aim)
+	var off0: int = hands.off_gun.ammo
+	var placed0: int = builder.placed
+	# Taps, not a hold: a pistol that charges fires on the release (GunFireMode).
+	for t in 3:
+		await _mouse_tap(MOUSE_BUTTON_RIGHT, 6)
+		await _frames(12)
+	check.call("4b: RMB fires the off-hand pistol (%d -> %d rounds, %s), nothing laid" % [off0, hands.off_gun.ammo,
+			str(hands.off_gun.fire_mode())], hands.off_gun.ammo < off0 and builder.placed == placed0)
+	await _shot(UserPaths.DEV + "inv_offhand_pistol.png")
+	await _key(KEY_7)
+	await _frames(20)
+	check.call("4b: the rifle in the hand lowers the off-hand (up kept)", hands.held == rifle and inv.offhand_up
+			and inv.offhand_lowered() and inv.offhand() == null and hands.off_held == null and not player.hold_aim)
+	await _key(KEY_1)
+	await _frames(10)
+	check.call("4b: a block in the hand again: the pistol comes back up", hands.off_held == pistol
+			and inv.offhand() == pistol and hands.held == null)
+	# The quick slot, with the rifle in it.
+	var bar_q := inv.active_hotbar
+	var slot_q := inv.active_slot
+	inv.hotbars[bar_q][6] = null
+	inv.quick[0] = rifle
+	inv.changed.emit()
+	await _key(KEY_B)
+	await _frames(20)
+	check.call("4c: B pulls the quick slot out: the rifle in the hands, the off-hand lowered", inv.quick_out
+			and hands.held == rifle and inv.offhand() == null)
+	await _key(KEY_X)
+	await _frames(5)
+	check.call("4c: X puts it away -- the same bar and slot", not inv.quick_out and inv.active_hotbar == bar_q
+			and inv.active_slot == slot_q and hands.held == null)
+	await _key(KEY_B)
+	await _mouse_tap(MOUSE_BUTTON_WHEEL_DOWN, 2)
+	check.call("4c: the wheel puts it away -- the same slot", not inv.quick_out and inv.active_slot == slot_q)
+	await _key(KEY_B)
+	await _key(KEY_3)
+	check.call("4c: 3 puts it away and takes slot 3", not inv.quick_out and inv.active_slot == 2)
+	var copy := Inventory.new()
+	check.call("4c: the quick slot and the off-hand up are saved", copy.from_dict(inv.to_dict())
+			and copy.quick[0] != null and copy.quick[0].id == rifle.id and copy.offhand_up)
+	# As it was.
+	inv.quick[0] = null
+	inv.hotbars[bar_q][6] = rifle
+	inv.offhands[1] = null
+	inv.main[pistol_at] = pistol
+	inv.offhand_up = false
+	inv.active_offhand = 0
+	inv.select_slot(0)
+	inv.changed.emit()
+	await _key(KEY_B)
+	check.call("4c: B with the quick slot empty does nothing", not inv.quick_out)
+	await _frames(10)
+
+
+## A mouse button pressed for `frames` and let go, through the engine's input.
+func _mouse_tap(button: MouseButton, frames: int) -> void:
+	var press := InputEventMouseButton.new()
+	press.button_index = button
+	press.pressed = true
+	press.button_mask = 1 << (button - 1)
+	Input.parse_input_event(press)
+	await _frames(frames)
+	var up := press.duplicate()
+	up.pressed = false
+	up.button_mask = 0
+	Input.parse_input_event(up)
+	await _frames(3)
+
+
 func _key(code: Key) -> void:
 	for down in [true, false]:
 		var k := InputEventKey.new()
@@ -2631,8 +2727,6 @@ func _run_inventory_gate() -> void:
 	if ItemIcons.ready and ItemIcons.texture != null:
 		DirAccess.make_dir_recursive_absolute(UserPaths.DEV)
 		ItemIcons.texture.get_image().save_png(UserPaths.DEV + "mine_item_icons.png")
-	await _key(KEY_B)
-	check.call("B: the items hands", builder.active)
 	await _key(KEY_E)
 	check.call("E: the inventory screen opens", inventory_open())
 	await _frames(5)
@@ -2836,6 +2930,7 @@ func _run_inventory_gate() -> void:
 			and hands.held == null)
 	check.call("... its rounds went back into its stack (%s)" % str(gun_stack.data.get("ammo", "?")),
 			int(gun_stack.data.get("ammo", -1)) == rounds1)
+	await _offhand_gun_checks(check, gun_stack)
 	inv.swap_with_hotbar(Inventory.addr(&"main", 26), 6)
 	set_on_foot(false)
 	_fly_to(_eye() + Vector3(0, 0.8, 0), Vector3(0, 0, -1))
@@ -2859,6 +2954,29 @@ func _run_inventory_gate() -> void:
 	check.call("RMB placed it: the block looked at is %s" % (names[m_id] if m_id >= 0 else "nothing"),
 			placed and m_id >= 0 and names[m_id] == "coal ore")
 	await _shot(UserPaths.DEV + "inv_hotbar.png")
+	# Round four: a block in the off-hand is laid with RMB once it is up (C);
+	# down, RMB is the main hand's.
+	inv.offhands[0] = ItemStack.make(&"stone", ItemCatalog.max_stack(&"stone"))
+	inv.active_offhand = 0
+	inv.offhand_up = false
+	inv.changed.emit()
+	check.call("4a: stone in the off-hand, down: not in use", inv.offhand() == null and not builder.offhand_builds())
+	await _key(KEY_C)
+	check.call("4a: C puts the off-hand up", inv.offhand_up and builder.offhand_builds())
+	var placed_a: int = builder.placed
+	await _mouse_tap(MOUSE_BUTTON_RIGHT, 3)
+	builder.update_target()
+	var m_off := int(builder.target.get("material", -1))
+	check.call("4a: RMB lays the off-hand's stone (%s looked at; %d -> %d placed), coal ore still in the hand" % [
+			names[m_off] if m_off >= 0 else "nothing", placed_a, builder.placed],
+			builder.placed == placed_a + 1 and m_off >= 0 and names[m_off] != "coal ore"
+			and inv.hand() != null and inv.hand().id == &"coal_ore")
+	await _shot(UserPaths.DEV + "inv_offhand_block.png")
+	builder.break_target()
+	await _key(KEY_C)
+	check.call("4a: C again puts it down", not inv.offhand_up and inv.offhand() == null)
+	inv.offhands[0] = null
+	inv.changed.emit()
 	# Stage 5: a chest from the kit (hotbar 2 slot 8), put down on the ground
 	# looked straight down at, opened with RMB, filled with real clicks.
 	await _key(KEY_8)
@@ -2983,7 +3101,8 @@ func _run_inventory_gate() -> void:
 		await _frames(10)
 		_mine(to_global(box.get_center()), Vector3.DOWN, null)
 		await _frames(5)
-		check.call("a shot breaks the chest, its soil drops (creative: not the chest)",
+		check.call("a shot breaks the chest, its soil drops (creative: not the chest) (chests %d, drops %s)" % [
+				chests.count(), str(drops.drops.map(func(d): return (d.stack as ItemStack).id))],
 				chests.count() == 0 and drops.count() == 1
 				and (drops.drops[0].stack as ItemStack).id == &"soil")
 		await _frames(60)
@@ -3004,7 +3123,11 @@ func _run_inventory_gate() -> void:
 			var s := inv.get_slot(a)
 			if s != null and s.id == &"soil":
 				now_has += s.count
-		check.call("walking over it picks it up (soil %d -> %d)" % [had, now_has],
+		var free_n := 0
+		for a in inv.all_addrs():
+			if a.area in [&"hotbar_0", &"hotbar_1", &"main"] and inv.get_slot(a) == null:
+				free_n += 1
+		check.call("walking over it picks it up (soil %d -> %d; %d free slots, drops %d)" % [had, now_has, free_n, drops.count()],
 				drops.count() == 0 and now_has > had)
 		# The ground under a second chest goes: it breaks.
 		_fly_to(box.get_center() + Vector3(0, 2.4, 0), Vector3(0, 0, -1))

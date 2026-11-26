@@ -16,6 +16,8 @@ const KINDS := ["block", "fluid", "bucket", "source_bucket", "chest", "station",
 		"hoe", "seed", "scythe", "can", "fertiliser", "wire", "device", "wrench", "misc"]
 ## Which hand an item may be in (zylanntest's HandUse).
 const HANDS := ["any", "right", "off", "two"]
+## The gun classes held in one hand (PlayerView.ONE_HAND draws them so).
+const ONE_HANDED_GUNS: Array[StringName] = [&"pistol", &"revolver"]
 ## Tilled soil is made with a hoe, never laid; breaking it gives soil
 ## (FARMLAND_GIVES, Docs/MineFarming.md).
 const NOT_ITEMS := ["air", "bedrock", "farmland", "wet farmland"]
@@ -48,15 +50,20 @@ static func load_all(force := false) -> void:
 		if NOT_ITEMS.has(names[m]):
 			continue
 		var id := block_id_for(names[m])
+		# A block may be laid from the off-hand too (round four).
 		_add({"id": id, "name": names[m].capitalize(), "kind": "block", "material": m,
-				"hand": "right", "max_stack": BLOCK_STACK,
+				"hand": "any", "max_stack": BLOCK_STACK,
 				"colour": BrickWorld.get_filament_colour(BrickTerrain.material_filament_index(m))})
 	# A gun item a weapon class (Docs/Inventory.md 10): the stack's data is the
 	# gun itself (CharacterSave.gun_entry), so one item covers every roll.
+	# One-handed guns (ONE_HANDED_GUNS) may go in the off-hand; every other
+	# class is two-handed and lowers the off-hand while held (round four).
 	for cid in WeaponClass.gun_ids():
+		var one := ONE_HANDED_GUNS.has(StringName(cid))
 		_add({"id": gun_id(StringName(cid)), "name": String(cid).capitalize(), "kind": "gun", "max_stack": 1,
-				"hand": "right", "colour": Color(0.62, 0.64, 0.7), "glyph": "G",
-				"description": "A gun. In the hand: LMB fires, RMB aims, R reloads."})
+				"hand": "any" if one else "two", "colour": Color(0.62, 0.64, 0.7), "glyph": "G",
+				"description": ("A one-handed gun. In the hand: LMB fires, RMB aims, R reloads. In the off-hand, up (C): RMB fires it."
+						if one else "A two-handed gun: the off-hand goes down while it is held. LMB fires, RMB aims, R reloads.")})
 	for path in ContentPacks.files("data/items"):
 		var f := FileAccess.open(path, FileAccess.READ)
 		if f == null:

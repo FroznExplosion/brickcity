@@ -1,6 +1,6 @@
 {
 	"items": {
-		"soil": { "name": "Soil", "kind": "block", "hand": "right", "tags": ["soil"],
+		"soil": { "name": "Soil", "kind": "block", "hand": "any", "tags": ["soil"],
 			"colours": ["grass", "dirt", "podzol", "dry grass", "lush grass", "cold grass", "dark grass"],
 			"description": "Dug ground. Laid as grass, dirt, podzol or the grasses (V: the colour)." },
 		"stone": { "tags": ["stone"], "colours": ["stone", "dark stone", "granite", "diorite", "road"],
@@ -46,7 +46,7 @@
 			"description": "Smelted from gold ore in a furnace (one brick of ore each)." },
 		"grenade": { "name": "Grenade", "kind": "grenade", "max_stack": 16, "hand": "right", "colour": "#556b2f", "glyph": "*",
 			"description": "G (or LMB with it in the hand): thrown where you aim. Its blast breaks the bricks round it and hurts whoever is near." },
-		"chest": { "name": "Chest", "kind": "chest", "hand": "right", "colour": "#8a5a2b", "glyph": "C",
+		"chest": { "name": "Chest", "kind": "chest", "hand": "any", "colour": "#8a5a2b", "glyph": "C",
 			"description": "Holds 27 stacks. Place it, then right-click it to open." }
 	}
 }

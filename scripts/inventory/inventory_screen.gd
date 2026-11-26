@@ -997,6 +997,15 @@ func _input(event: InputEvent) -> void:
 				inv.swap_with_hotbar(s.addr, i)
 			else:
 				inv.select_slot(i)
+		KEY_C, KEY_B:
+			# The hands without slots in the screen (Docs/Inventory.md round
+			# four, Minecraft's F): C over a slot swaps it with the active
+			# off-hand slot, B with the quick slot -- over an empty slot, what
+			# the hand held lands there.
+			var s := _slot_at(_mouse_at)
+			if s != null and not s.addr.is_empty():
+				var hand_at := Inventory.addr(&"offhand", inv.active_offhand) if k.keycode == KEY_C else Inventory.addr(&"quick", 0)
+				inv.swap_slots(s.addr, hand_at)
 
 
 func close_screen() -> void:
