@@ -74,6 +74,9 @@ bool generated_top(int x, int z, int &plate, int &mat);
 /// A group let go of at least this many cells floats (the world's
 /// "float_cells"; 0 never). Docs/TerrainRegions.md 11.
 int fit_float_cells();
+/// The top course cut from the fit too (the world's "fit_top"; deferred,
+/// off: the old pattern's top course over the fitted ground).
+bool fit_top_enabled();
 
 /// Drops every kept region (new settings, a new world).
 void fitted_clear();
@@ -109,6 +112,8 @@ public:
     /// WorldgenPresets.DEFAULT_BRICKS' keys). Held for the game's bricks.
     static void configure(const Dictionary &settings);
     static Dictionary get_configured();
+    /// What configure's calibration did: calibration_ms, calibration_error.
+    static Dictionary get_calibration();
     /// fitted_brick for scripts: {x, z, c, sx, sz, h, mat, loose}, or empty.
     static Dictionary brick_at(int x, int course, int z);
     static Dictionary lookup_stats();

@@ -778,3 +778,33 @@ still tips? Left open; building cells reach the collapse as placed blocks.
   pillar go with the arm -- every body was placed, so the solver's stress
   walk treats the tall body differently; not yet understood. Off, a tall
   brick is a body a course, as before.
+
+### 12.5 Shares, the store, the top course deferred (2026-11-26)
+
+**Shares closer to what is set.** By count, rough ground leaves room for a
+1x2 where a 2x2 will not fit: the fill landed 2x2 at 13 % (20 asked), 1x2 at
+33 (25). Raising aim did not move it; raising 2x2's own share did (0.35 ->
+21 %), with floors near 25 % for 1x2 and 14 % for 1x1 that no share pushes
+lower. So:
+- a pair merge after the fill: two like bricks side by side become the
+  listed shape they make (1x2 + 1x2 a 2x2, 2x2 + 2x2 a 2x4) where that shape
+  is further under its share than the pair's (`pair_merge`, on);
+- the shares CALIBRATED once a world (`calibrate`, on): a fixed sample of
+  its ground (5 x 5 tiles near the origin, the first with enough bricks)
+  fitted three times, each share scaled by (target / got)^0.8. The same
+  bricks every session. ~0.4 s once at world set-up.
+
+region_fit_probe, the shipped settings: every shape within 5 points (2x4
+16, 2x2 21, 1x2 28, 1x1 14); not calibrated, 2 off.
+
+**The packs no longer kept.** `PackStore` kept each tile's packed top course
+(~14 KB a tile, 9.9 MB at 704). Now a tile is packed when baked (as it was
+the first time anyway) and only its `TileTops` is kept: each column's top
+plate and top brick (~6 KB). The survey (`top_columns`), rain (`rain_top`)
+and the pickaxe (`find_brick`, `find_bricks`: sample plus the kept tops)
+read that. Fit off, all probes pass; the old bake is 14-18 ms as before.
+
+**The top course from the fit deferred** (the user): behind its own switch
+`fit_top` (preset `bricks.fit_top`, off): with the fit on, the ground is
+fitted and the surface's top course is the old pattern until performance
+is good.
