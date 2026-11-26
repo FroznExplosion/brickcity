@@ -1651,7 +1651,10 @@ inline float lake_amp(Get get, int x, int b, int z) {
 /// the chain is nested, so every cell of a piece finds the same piece. The
 /// mesher and the lake queries (surface_at, ray_cell: a lake piece rides the
 /// wave at ITS middle) ask the same rule.
-constexpr int PIECE = 4;
+/// The biggest piece, studs a side. 1 (the user, 2026-11-25): every water
+/// top a 1 x 1 tile -- the 4 x 4 tiles read as a floor laid over the water,
+/// not water. The rule stays (piece_rect), so bigger pieces are one number.
+constexpr int PIECE = 1;
 struct PRect { int x0, z0, w, h; };
 inline PRect piece_child(const PRect &r, int x, int z) {
     bool by_x;

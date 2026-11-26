@@ -304,8 +304,8 @@ func _run() -> void:
 			str(_region_units(2172, 2173, 17, 18, W)))
 
 	# 4d. A calm pond's top is brick tiles (W4; was one merged quad, stage
-	# 8): an 8 x 8 pond two plates deep in walls, off the 4-stud grid, is
-	# covered exactly by still pieces of 1 to 4 x 4, far fewer than 64.
+	# 8): an 8 x 8 pond two plates deep in walls is covered exactly by still
+	# 1 x 1 pieces (the user, 2026-11-25: all water 1 x 1).
 	_floor(2760, -10, 2800, 30)
 	for wall in [[2770, 0, 2779, 0], [2770, 9, 2779, 9], [2770, 0, 2770, 9], [2779, 0, 2779, 9]]:
 		BrickTerrain.fill_box(Vector3i(wall[0], W * 3, wall[1]), Vector3i(wall[2], W * 3 + 2, wall[3]), 4, false)
@@ -337,8 +337,8 @@ func _run() -> void:
 		var a := (hi.x - lo.x) * (hi.y - lo.y) / (0.35 * 0.35)
 		area += a
 		biggest = maxf(biggest, a)
-	_ok("a calm pond's top is brick tiles", not_piece == 0 and absf(area - 64.0) < 0.01 and tiles <= 32
-			and biggest > 15.9, "%d tiles over %.1f studs (want 64), biggest %.0f, %d tops not pieces" % [
+	_ok("a calm pond's top is brick tiles", not_piece == 0 and absf(area - 64.0) < 0.01 and tiles == 64
+			and biggest < 1.01, "%d tiles over %.1f studs (want 64), biggest %.0f, %d tops not pieces" % [
 			tiles, area, biggest, not_piece])
 
 	# 4e. A fall into a pit never fills it (R6, Docs/MineWaterNext.md: water
@@ -919,18 +919,18 @@ func _run() -> void:
 			pieces += 1
 			amp_max = maxf(amp_max, lcus[i + 2])
 			var vx := floori(lverts[i / 4].x / 0.35 + 0.01)
-			if vx == lx0 and lcus[i + 2] > 0.05:
+			if vx == lx0 and lcus[i + 2] > 0.0:
 				rim_piece = true
-	# W4: the rim's pieces reach a stud or two in, and ride a small wave.
-	_ok("a lake's open top rides a wave, small at its rim", pieces > 20 and absf(amp_max - 0.09) < 0.001 and not rim_piece,
-			"%d piece faces, amplitude %.3f m, rim piece over 0.05 m %s" % [pieces, amp_max, rim_piece])
+	# W4: 1 x 1 pieces; the rim's stay flat.
+	_ok("a lake's open top rides a wave, flat at its rim", pieces > 50 and absf(amp_max - 0.09) < 0.001 and not rim_piece,
+			"%d piece faces, amplitude %.3f m, rim piece with a wave %s" % [pieces, amp_max, rim_piece])
 	var stud := 0.35
 	var mx := lx0 + 7
 	var top := float((W + 1) * 3) * 0.14
 	var ask := Vector3((mx + 0.5) * stud, top - 0.05, 0.5 * stud)
-	# (mx, 0)'s piece (W4): the 4 x 4 block x 7004-7007, z 0-3, all lake;
-	# its middle (7006, 2), its middle cell well inside (full amplitude).
-	var pmid := Vector2(7006.0 * stud, 2.0 * stud)
+	# (mx, 0)'s piece (W4, 1 x 1): its own stud's middle, well inside the
+	# lake (full amplitude).
+	var pmid := Vector2((mx + 0.5) * stud, 0.5 * stud)
 	var tw := 0.0
 	while _lake_wave(pmid.x, pmid.y, tw) < 0.6:
 		tw += 0.05
