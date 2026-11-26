@@ -403,9 +403,11 @@ a layout, not a rule.
 - **HUD**: the off-hand slots left of the bars, dim while down (or lowered
   by a two-handed item); the quick slot right of the bars, outlined while
   out; the caption names both hands ("Pickaxe  |  off: Stone").
-- **Filling them**: the screen has no off-hand or quick slots (section 14):
-  C over a slot swaps it with the active off-hand slot, B with the quick
-  slot; over an empty slot the hand's item lands there.
+- **Filling them**: the screen shows both (2026-11-26, section 14): the
+  off-hand slots left of the hotbars, the quick slot right of hotbar 1;
+  click items in and out like any slot. C over a slot still swaps it with
+  the active off-hand slot and B with the quick slot, as a shortcut; over an
+  empty slot the hand's item lands there.
 - **Never by themselves**: pickups, crafting, shift-click and the cursor
   going back never put an item into an empty off-hand slot (a stack of the
   same kind there is topped up by a pickup).
@@ -553,12 +555,16 @@ ingredient lists, not shapes, so the grid only shows them.
   leaves it, a click elsewhere too. Otherwise every key is the screen's (E,
   Tab, Escape, Q, 1-9 as before).
 
-**No off-hand slots in the screen** (the user: no armour, off-hand or player
-figure there). The off-hand itself came back the same day in play (round
-four, section 4, decided with the user in another chat): it is filled
-Minecraft's way -- C over a slot in the screen swaps it with the active
-off-hand slot, B with the quick slot (`Inventory.swap_slots`) -- and the HUD
-shows both. Crafting and pickups still never put anything there by themselves.
+**The hands in the screen.** First the user wanted no armour, off-hand or
+player figure in the screen; the off-hand came back the same day in play
+(round four, decided with the user in another chat), and on 2026-11-26 the
+user asked for the off-hand and quick slots to be shown in the screen too.
+They sit as the HUD has them: the two off-hand slots in a column left of the
+hotbars (the active one framed, both dimmed while the off-hand is down), the
+quick slot right of hotbar 1 (framed while it is out); the storage is padded
+to stay over the hotbars. C / B over a slot remain shortcuts
+(`Inventory.swap_slots`). Crafting and pickups still never put anything there
+by themselves. Still no armour and no player figure.
 
 **Not done (Minecraft has it):** 3x3 shapes, the result onto the cursor.
 Furnaces smelt over time since section 15.
