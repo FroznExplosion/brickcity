@@ -2004,8 +2004,31 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
         std::vector<TopCell> cells((size_t)SIDE * SIDE);
         // Ramps and slopes are placed already; nothing else is yet.
         const std::vector<int32_t> pre_owned = owner;
+        // The region fit's top course (Docs/TerrainRegions.md 12.3), when
+        // the game's bricks come from the fit.
+        const bool fit_top_on = brick::fit_enabled();
+        brick::TopFitMemo top_memo;
+        // A column's generated class (top plate, material, colour), kept by
+        // absolute column for this pack.
+        struct GenTop { int plate = 0, mat = 0, col = 0; bool ok = false; };
+        std::unordered_map<int64_t, GenTop> gen_tops;
+        auto gen_top = [&](int x, int z) -> const GenTop & {
+            GenTop &g = gen_tops[((int64_t)x << 32) ^ (int64_t)(uint32_t)z];
+            if (!g.ok) {
+                g.ok = true;
+                if (!brick::generated_top(x, z, g.plate, g.mat)) {
+                    g.plate = INT_MIN;
+                }
+                g.col = layer_colour(x, z);
+            }
+            return g;
+        };
+        // Past PAD (the fit's squares reach 23 studs out): kept by cell.
+        std::unordered_map<int64_t, TopCell> far_cells;
         auto top_at = [&](int lx, int lz) -> const TopCell & {
-            TopCell &t = cells[(size_t)(lx + PAD) + SIDE * (size_t)(lz + PAD)];
+            const bool in_pad = lx >= -PAD && lz >= -PAD && lx < TILE + PAD && lz < TILE + PAD;
+            TopCell &t = in_pad ? cells[(size_t)(lx + PAD) + SIDE * (size_t)(lz + PAD)]
+                    : far_cells[((int64_t)lx << 32) ^ (int64_t)(uint32_t)lz];
             if (t.known) {
                 return t;
             }
@@ -2026,6 +2049,46 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
                 t.col = layer_colour(x, z);
             }
             return t;
+        };
+        // The fitted top brick of column (x, z) (absolute): fitted from the
+        // generated columns, kept only while the column is as generated and
+        // every cell of the brick still is and is free.
+        std::unordered_map<int64_t, bool> top_whole;
+        auto fitted_top = [&](int x, int z, brick::FitBrick &fb) -> bool {
+            const GenTop &g = gen_top(x, z);
+            if (g.plate == INT_MIN) {
+                return false;
+            }
+            const TopCell &t = top_at(x - gx0, z - gz0);
+            int a, b2, c2, d2;
+            if (!t.free || t.tp != g.plate || t.mat != g.mat || t.col != g.col
+                    || placed_at(x, floor_div(g.plate, PLATES_PER_CELL), z, a, b2, c2, d2)) {
+                return false;
+            }
+            const int gp = g.plate, gm = g.mat, gc = g.col;
+            const int grp = bond_group(gm);
+            const uint64_t cls = ((uint64_t)(uint16_t)gp << 40) | ((uint64_t)gm << 16) | (uint64_t)(uint16_t)gc;
+            if (!brick::fit_top(top_memo, x, floor_div(gp, PLATES_PER_CELL), z, cls, [&](int cx, int cz) {
+                        const GenTop &o = gen_top(cx, cz);
+                        return (o.plate == gp && o.mat == gm && o.col == gc) ? grp : (int)BOND_NONE;
+                    }, fb)) {
+                return false;
+            }
+            const int64_t key = bond_key(fb.x, fb.c, fb.z);
+            auto it = top_whole.find(key);
+            if (it != top_whole.end()) {
+                return it->second;
+            }
+            bool ok = true;
+            for (int zz = fb.z; zz < fb.z + fb.sz && ok; ++zz) {
+                for (int xx = fb.x; xx < fb.x + fb.sx && ok; ++xx) {
+                    const TopCell &u = top_at(xx - gx0, zz - gz0);
+                    ok = u.free && u.tp == gp && u.mat == gm && u.col == gc
+                            && !placed_at(xx, fb.c, zz, a, b2, c2, d2);
+                }
+            }
+            top_whole[key] = ok;
+            return ok;
         };
         // Solid at plate yp of column (x, z), absolute studs: the sample where
         // it has the cell, the field past it.
@@ -2059,8 +2122,25 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
                 };
                 // A placed block is the brick the player laid, whatever the
                 // bond would have cut it into.
-                const BondRect r = q_placed ? BondRect{ px, pz, psx, psz }
-                        : bond_rect(gx0 + lx, qc, gz0 + lz, group);
+                BondRect r = q_placed ? BondRect{ px, pz, psx, psz }
+                        : BondRect{ gx0 + lx, gz0 + lz, 1, 1 };
+                bool fitted = false;
+                if (!q_placed && fit_top_on) {
+                    brick::FitBrick fb;
+                    if (fitted_top(gx0 + lx, gz0 + lz, fb)) {
+                        r = BondRect{ fb.x, fb.z, fb.sx, fb.sz };
+                        fitted = true;
+                    } else {
+                        // Not as generated, or its fitted brick cut: the old
+                        // pattern among the cells no whole fitted brick holds.
+                        r = bond_rect(gx0 + lx, qc, gz0 + lz, [&](int x, int z) {
+                            brick::FitBrick q2;
+                            return fitted_top(x, z, q2) ? (int)BOND_NONE : group(x, z);
+                        });
+                    }
+                } else if (!q_placed) {
+                    r = bond_rect(gx0 + lx, qc, gz0 + lz, group);
+                }
                 int cx0 = std::max(r.x - gx0, 0), cz0 = std::max(r.z - gz0, 0);
                 int cx1 = std::min(r.x - gx0 + r.sx, TILE);
                 int cz1 = std::min(r.z - gz0 + r.sz, TILE);
@@ -2100,6 +2180,8 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
                 // was not level with all four neighbours).
                 bool held = false;
                 if (!q_placed) {
+                    // The fit's brick is its own footprint; the old pattern's
+                    // is the 4 x 2 it is cut from.
                     const BondRect fp = bond_rect(gx0 + lx, qc, gz0 + lz,
                             [](int, int) { return BOND_STRONG; });
                     const int above = (qc + 1) * PLATES_PER_CELL;

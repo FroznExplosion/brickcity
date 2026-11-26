@@ -1661,6 +1661,132 @@ bool brick::fitted_brick(int x, int course, int z, FitBrick &out) {
     return view.at(x, course, z, out);
 }
 
+// --- the top course (Docs/TerrainRegions.md 12.3) ----------------------------
+
+struct brick::TopFitMemo::Square {
+    uint16_t ids[SQ * SQ];
+    std::vector<brick::FitBrick> bricks;
+};
+brick::TopFitMemo::TopFitMemo() = default;
+brick::TopFitMemo::~TopFitMemo() = default;
+
+bool brick::fit_top(TopFitMemo &memo, int x, int course, int z, uint64_t cls,
+        const std::function<int(int, int)> &group, FitBrick &out) {
+    const std::shared_ptr<const FitParams> P = world_params();
+    if (!P) return false;
+    const int o = course_off(course, P->offset);
+    const int rx = fdiv(x - o, SQ), rz = fdiv(z - o, SQ), L = fdiv(course, 3);
+    uint64_t key = cls * 0x9E3779B97F4A7C15ULL;
+    key ^= (uint64_t)brick::bond_hash(rx, rz, course) + 0x7F4A7C15ULL + (key << 6) + (key >> 2);
+    auto it = memo.squares.find(key);
+    if (it == memo.squares.end()) {
+        Area a;
+        a.ox = rx * SQ + o;
+        a.oz = rz * SQ + o;
+        a.w = a.d = SQ;
+        a.c0 = course;
+        a.nc = 1;
+        a.kind.assign(SQ * SQ, K_PARTIAL);
+        a.mat.assign(SQ * SQ, 1);
+        a.top.assign(SQ * SQ, course + 1);
+        for (int v = 0; v < SQ; ++v)
+            for (int u = 0; u < SQ; ++u) {
+                const int g = group(a.ox + u, a.oz + v);
+                a.kind[(size_t)(u + SQ * v)] = g == brick::BOND_STRONG ? K_STRONG
+                        : (g == brick::BOND_MEDIUM ? K_MEDIUM : (g == brick::BOND_LOOSE ? K_LOOSE : K_PARTIAL));
+            }
+        Fit f;
+        Fitter ft(a, *P, f);
+        ft.fit_regions({ RKey{ rx, rz, L } });
+        auto sq = std::make_unique<TopFitMemo::Square>();
+        std::fill(std::begin(sq->ids), std::end(sq->ids), (uint16_t)0xFFFF);
+        std::unordered_map<int, uint16_t> remap;
+        for (int i = 0; i < SQ * SQ; ++i) {
+            const int fid = f.id[(size_t)i];
+            if (fid < 0) continue;
+            auto r = remap.find(fid);
+            if (r == remap.end()) {
+                const Brick &b = f.bricks[(size_t)fid];
+                r = remap.emplace(fid, (uint16_t)sq->bricks.size()).first;
+                sq->bricks.push_back(FitBrick{ b.x, b.z, b.c, b.sx, b.sz, b.h, b.mat });
+            }
+            sq->ids[i] = r->second;
+        }
+        it = memo.squares.emplace(key, std::move(sq)).first;
+    }
+    const int u = x - (rx * SQ + o), v = z - (rz * SQ + o);
+    const uint16_t i = it->second->ids[u + SQ * v];
+    if (i == 0xFFFF) return false;
+    out = it->second->bricks[i];
+    return true;
+}
+
+// Each column's generated top plate and material, a tile at a time, kept
+// (the top course is fitted from what was generated: an edit cuts the bricks
+// it touches, it does not re-lay its neighbours).
+namespace {
+struct TopTile {
+    int16_t plate[TILE * TILE];
+    uint8_t mat[TILE * TILE];
+};
+struct TopCache {
+    std::mutex lock;
+    struct Entry { uint64_t used; uint32_t field; std::shared_ptr<const TopTile> t; };
+    std::unordered_map<int64_t, Entry> tiles;
+    uint64_t clock = 0;
+};
+TopCache &top_cache() {
+    static TopCache *c = new TopCache();
+    return *c;
+}
+} // namespace
+
+bool brick::generated_top(int x, int z, int &plate, int &mat) {
+    const int tx = fdiv(x, TILE), tz = fdiv(z, TILE);
+    const int64_t k = ((int64_t)tx << 32) ^ (int64_t)(uint32_t)tz;
+    const uint32_t f = brick::field_serial();
+    TopCache &tc = top_cache();
+    std::shared_ptr<const TopTile> t;
+    {
+        std::lock_guard<std::mutex> lk(tc.lock);
+        auto it = tc.tiles.find(k);
+        if (it != tc.tiles.end() && it->second.field == f) {
+            it->second.used = ++tc.clock;
+            t = it->second.t;
+        }
+    }
+    if (!t) {
+        std::vector<uint8_t> vox;
+        std::vector<int16_t> gtop;
+        if (!brick::generated_cells(tx, tz, 0, 1, vox, gtop)) return false;
+        int lo = INT_MAX, hi = INT_MIN;
+        for (int16_t g : gtop) { lo = std::min(lo, (int)g); hi = std::max(hi, (int)g); }
+        if (!brick::generated_cells(tx, tz, lo, hi + 1, vox, gtop)) return false;
+        auto made = std::make_shared<TopTile>();
+        for (int i = 0; i < TILE * TILE; ++i) {
+            made->plate[i] = gtop[(size_t)i];
+            const uint8_t m = vox[(size_t)i + (size_t)TILE * TILE * (size_t)(gtop[(size_t)i] - lo)];
+            made->mat[i] = m == 255 ? 0 : m;
+        }
+        t = made;
+        std::lock_guard<std::mutex> lk(tc.lock);
+        if (tc.tiles.size() >= 512) {
+            std::vector<uint64_t> used;
+            for (const auto &e : tc.tiles) used.push_back(e.second.used);
+            const size_t q = used.size() / 4;
+            std::nth_element(used.begin(), used.begin() + q, used.end());
+            const uint64_t cut = used[q];
+            for (auto it = tc.tiles.begin(); it != tc.tiles.end();)
+                it = (it->second.used <= cut || it->second.field != f) ? tc.tiles.erase(it) : std::next(it);
+        }
+        tc.tiles[k] = TopCache::Entry{ ++tc.clock, f, made };
+    }
+    const int i = (x - tx * TILE) + TILE * (z - tz * TILE);
+    plate = t->plate[i];
+    mat = t->mat[i];
+    return true;
+}
+
 bool brick::fit_enabled() {
     return g_world != nullptr && g_world->enabled && world_params() != nullptr;
 }
