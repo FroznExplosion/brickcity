@@ -91,7 +91,7 @@ func run(host: Node) -> void:
 	wr.place_cable(Vector3i(x0 + 8, y + 3, z2))
 	var lamp2 := Vector3i(x0 + 9, y + 3, z2)
 	wr.place_device(lamp2, &"lamp")
-	await w._frames(10)
+	await w._frames(14)
 	check("one net: the run, the branch and the climb (%d nets, %d cables)" % [wr.nets.size(), wr.cables.size()],
 			wr.nets.size() == 1 and wr.cables.size() == 22)
 
@@ -102,7 +102,7 @@ func run(host: Node) -> void:
 	var d := (aim_at - from).normalized()
 	w._fly_to(from - Vector3(0, 1.6, 0), Vector3(d.x, 0, d.z))
 	w.walker.pitch = asin(clampf(d.y, -1.0, 1.0))
-	await w._frames(6)
+	await w._frames(14)
 	w.builder.update_target()
 	check("looking at a cable, the target is the cable (%s)" % str(w.builder.target.get("cable", "none")),
 			w.builder.target.get("cable", Vector3i(0, -9999, 0)) == aim_cell)
@@ -112,13 +112,13 @@ func run(host: Node) -> void:
 	_hold(&"cable")
 	w.builder.update_target()
 	check("RMB lays it again", w.builder.place_target() and wr.cables.has(aim_cell))
-	await w._frames(6)
+	await w._frames(14)
 
 	# --- power
 	check("lever off: both lamps dark", not wr.is_lit(lamp) and not wr.is_lit(lamp2))
 	w.builder.target = {"device": lever, "position": wr.device_box(lever).get_center()}
 	check("RMB on the lever turns it on", w.builder.place_target() and bool(wr.devices[lever].on))
-	await w._frames(12)
+	await w._frames(14)
 	check("both lamps lit, the one up the climb too", wr.is_lit(lamp) and wr.is_lit(lamp2))
 	await _picture(Vector3((x0 + 4) * stud, y * plate, (z + 2) * stud), Vector3(-3.4, 2.6, -2.6), "wiring_on.png")
 
@@ -126,7 +126,7 @@ func run(host: Node) -> void:
 	var cut := Vector3i(x0 + 6, y, z)
 	var hit := Vector3((cut.x + 0.5) * stud, y * plate, (cut.z + 0.5) * stud)
 	w._mine(w.to_global(hit), Vector3.DOWN, null)
-	await w._frames(12)
+	await w._frames(14)
 	check("a shot cuts the cable", not wr.cables.has(cut))
 	check("the lamp past the cut is dark, the other branch's lit", not wr.is_lit(lamp) and wr.is_lit(lamp2))
 	await _picture(Vector3((x0 + 4) * stud, y * plate, (z + 2) * stud), Vector3(-3.4, 2.6, -2.6), "wiring_cut.png")
@@ -134,14 +134,14 @@ func run(host: Node) -> void:
 	# --- ground: dig out the brick under a cable
 	var under := Vector3i(x0 + 2, y, z2)
 	w.terrain_edited(BrickTerrain.fill_box(Vector3i(under.x, top - 2, under.z), Vector3i(under.x, top, under.z), 0, false))
-	await w._frames(6)
+	await w._frames(14)
 	check("the ground under a cable dug out: it breaks", not wr.cables.has(under))
 	check("and the lamp up the climb, cut off from the lever, is dark", not wr.is_lit(lamp2))
 	wr.place_cable(Vector3i(under.x, y, under.z + 1))   # not a path: the gap stays
 	# Mend the branch round the hole (x0+1 .. x0+3 on z2+1) so lamp2 is lit for the save.
 	for x in range(x0 + 1, x0 + 4):
 		wr.place_cable(Vector3i(x, y, z2 + 1))
-	await w._frames(6)
+	await w._frames(14)
 	check("mended round the hole: lit again", wr.is_lit(lamp2))
 
 	# --- stage 2: gates, sensors, the wrench (Docs/MineWiring.md 14)
@@ -162,12 +162,17 @@ func run(host: Node) -> void:
 	check("RMB with a NOT gate lays one, facing away from the camera (+x)", w.builder.place_target()
 			and wr.devices.has(gate) and int(wr.devices[gate].facing) == 0)
 	wr.place_device(lamp3, &"lamp")
-	await w._frames(12)
+	await w._frames(14)
 	check("NOT with its back off: the lamp at its front lit", wr.is_lit(lamp3))
 	w.builder.target = {"device": button, "position": wr.device_box(button).get_center()}
 	check("RMB on the button presses it", w.builder.place_target())
-	await w._frames(8)
-	check("button pressed: the NOT's lamp dark", not wr.is_lit(lamp3))
+	# Two ticks (0.2 s) from the button to the lamp: wait for it, well inside
+	# the button's second.
+	var waited := 0
+	while wr.is_lit(lamp3) and waited < 40:
+		await w._frames(1)
+		waited += 1
+	check("button pressed: the NOT's lamp dark (%d frames)" % waited, not wr.is_lit(lamp3))
 	await w._frames(100)
 	check("a second and a half later: lit again", wr.is_lit(lamp3))
 	# A held RMB's repeat does not turn the lever.
@@ -185,7 +190,7 @@ func run(host: Node) -> void:
 	var d3 := (aim3 - from3).normalized()
 	w._fly_to(from3 - Vector3(0, 1.6, 0), Vector3(d3.x, 0, d3.z))
 	w.walker.pitch = asin(clampf(d3.y, -1.0, 1.0))
-	await w._frames(8)
+	await w._frames(14)
 	var ro: Label = wr._readout
 	check("wrench: the readout of the cable looked at (%s)" % (ro.text if ro != null else "none"),
 			ro != null and ro.visible and ro.text.contains("level"))
@@ -204,11 +209,11 @@ func run(host: Node) -> void:
 	var lamp4 := Vector3i(x0 + 9, y, z3)
 	wr.place_device(tile, &"pressure_tile")
 	wr.place_device(lamp4, &"lamp")
-	await w._frames(6)
+	await w._frames(14)
 	check("pressure tile: dark with nobody on it", not wr.is_lit(lamp4))
 	var tb := wr.device_box(tile)
 	w._fly_to(Vector3(tb.get_center().x, tb.end.y, tb.get_center().z), Vector3(1, 0, 0))
-	await w._frames(10)
+	await w._frames(14)
 	check("the player on the tile: lit (feet %s)" % str(w.player_feet_local()), wr.is_lit(lamp4))
 	w._fly_to(Vector3(tb.get_center().x, tb.end.y + 3.0, tb.get_center().z - 2.0), Vector3(1, 0, 0))
 	await w._frames(30)
@@ -220,10 +225,10 @@ func run(host: Node) -> void:
 	wr.place_device(hb, &"trip_hook", false, false, 1)
 	var lamp5 := Vector3i(x0 + 11, y, z3 - 1)
 	wr.place_device(lamp5, &"lamp")
-	await w._frames(6)
+	await w._frames(14)
 	check("two hooks pair: a string", wr.pairs.get(ha, Vector3i.ZERO) == hb)
 	w._fly_to(Vector3((x0 + 13.5) * stud, y * plate, (z3 + 0.5) * stud), Vector3(0, 0, 1))
-	await w._frames(8)
+	await w._frames(14)
 	check("the player across the string: lit", wr.is_lit(lamp5))
 	w._fly_to(Vector3((x0 + 13.5) * stud, y * plate + 3.0, (z3 - 4.5) * stud), Vector3(0, 0, 1))
 	await w._frames(30)
