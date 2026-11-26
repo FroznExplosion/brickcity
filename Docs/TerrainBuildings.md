@@ -134,7 +134,13 @@ not move its middle yet (the weights are the stamp's).
   middle with a lever beside it. Lamps start dark (each lit lamp is an
   OmniLight: fine for tens, not a town's hundreds); the lever lights it. 6
   floors: 22 doors, 24 lamps. Saved, broken and dropped by the wiring as
-  its own devices. Not the outer entrances yet.
+  its own devices.
+- **6c, a way in.** The city's towers have no entrance. A stamped one gets
+  one (MineBuildings.entrance): DOOR_WIDE studs in the middle of its front
+  (-z) wall, through it, five bricks high from the ground floor (bricks
+  across it split round it as bond cells, `_cut`), a double door hung in
+  it, and stone steps (a brick each, two studs deep, up to 4) down to the
+  ground outside. `"entrance": false` in the parameters leaves it shut.
 - **7, far view.** Partly: windows are glass cells now, not air, so the
   coarse tier keeps them as sky-blue cells on the block. The far view from
   bricks (Docs/Structures.md) is still the city's alone.
