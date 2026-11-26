@@ -265,10 +265,32 @@ static func _model(d: Dictionary) -> Node3D:
 			_part(inner, _box(Vector3(1.0, 0.3, 1.0)), _mat(Color(0.24, 0.25, 0.27), 0.5), Vector3(0, 0.15, 0))
 			_part(inner, _box(Vector3(1.0, 0.12, 0.26)), _mat(col, 0.35), Vector3(0, 0.36, 0))
 			_part(inner, _box(Vector3(0.26, 0.12, 0.5)), _mat(col, 0.35), Vector3(0, 0.36, 0.25))
+		"wrench":
+			var steel := _mat(col, 0.25)
+			var tilt := Basis(Vector3.BACK, deg_to_rad(-40.0))
+			_part(inner, _box(Vector3(0.14, 1.0, 0.08)), steel, Vector3.ZERO, tilt)
+			_part(inner, _box(Vector3(0.36, 0.14, 0.1)), steel, tilt * Vector3(-0.08, 0.55, 0), tilt)
+			_part(inner, _box(Vector3(0.1, 0.22, 0.1)), steel, tilt * Vector3(-0.22, 0.66, 0), tilt)
 		"device":
-			if str(d.get("model", "")) == "lamp":
+			var dm := str(d.get("model", ""))
+			if dm == "lamp":
 				_part(inner, _box(Vector3(0.6, 0.85, 0.6)), _mat(col, 0.2, 1.0, true), Vector3(0, 0.425, 0))
 				_part(inner, _cyl(0.18, 0.18, 0.12), _mat(col, 0.2, 1.0, true), Vector3(0, 0.91, 0))
+			elif dm == "gate":
+				# A slab, a coloured brick, a white arrow at the front.
+				_part(inner, _box(Vector3(1.0, 0.3, 1.0)), _mat(Color(0.5, 0.5, 0.52), 0.6), Vector3(0, 0.15, 0))
+				_part(inner, _box(Vector3(0.8, 0.5, 0.8)), _mat(col, 0.45), Vector3(0, 0.55, 0))
+				_part(inner, _box(Vector3(0.16, 0.3, 0.36)), _mat(Color(0.95, 0.95, 0.9), 0.4), Vector3(0.48, 0.5, 0))
+			elif dm == "button":
+				_part(inner, _box(Vector3(0.9, 0.4, 0.9)), _mat(Color(0.5, 0.5, 0.52), 0.6), Vector3(0, 0.2, 0))
+				_part(inner, _box(Vector3(0.5, 0.2, 0.5)), _mat(col, 0.35), Vector3(0, 0.5, 0))
+			elif dm == "pressure":
+				_part(inner, _box(Vector3(1.0, 0.18, 1.0)), _mat(col, 0.55), Vector3(0, 0.09, 0))
+				_part(inner, _box(Vector3(0.6, 0.06, 0.6)), _mat(col.darkened(0.2), 0.55), Vector3(0, 0.2, 0))
+			elif dm == "trip":
+				_part(inner, _box(Vector3(0.12, 0.9, 0.12)), _mat(col, 0.7), Vector3(0, 0.45, 0))
+				_part(inner, _box(Vector3(0.4, 0.08, 0.08)), _mat(Color(0.7, 0.7, 0.72), 0.3), Vector3(0.2, 0.8, 0))
+				_part(inner, _box(Vector3(0.7, 0.02, 0.02)), _mat(Color(0.9, 0.88, 0.8), 0.6), Vector3(0.6, 0.8, 0))
 			else:
 				# A lever: a stone plate, a stick leaning, a red knob.
 				_part(inner, _box(Vector3(0.8, 0.25, 0.8)), _mat(col, 0.6), Vector3(0, 0.125, 0))

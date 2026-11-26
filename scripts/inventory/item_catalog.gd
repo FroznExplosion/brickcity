@@ -13,7 +13,7 @@ extends RefCounted
 ##   fluid (1 water, 2 lava, 0 none), fluid_kind ("source" / "still").
 
 const KINDS := ["block", "fluid", "bucket", "source_bucket", "chest", "station", "tool", "backpack", "gun", "grenade",
-		"hoe", "seed", "scythe", "can", "wire", "device", "misc"]
+		"hoe", "seed", "scythe", "can", "wire", "device", "wrench", "misc"]
 ## Which hand an item may be in (zylanntest's HandUse).
 const HANDS := ["any", "right", "off", "two"]
 ## Tilled soil is made with a hoe, never laid; breaking it gives soil
