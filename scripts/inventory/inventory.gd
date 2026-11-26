@@ -904,7 +904,7 @@ func craft(r: Dictionary, near: Array, all := false) -> Dictionary:
 
 ## Take up to `n` of item `id` from what is carried (a harvest replanting its
 ## seed, Docs/MineFarming.md). Creative: nothing is used up. How many.
-func take_item(id: StringName, n := 1) -> int:
+func take_item(id: StringName, n := 1, data = null) -> int:
 	if creative:
 		return n
 	var need := n
@@ -912,7 +912,7 @@ func take_item(id: StringName, n := 1) -> int:
 		if need <= 0:
 			break
 		var s := get_slot(a)
-		if s == null or s.id != id:
+		if s == null or s.id != id or (data != null and s.data != data):
 			continue
 		var take := mini(need, s.count)
 		s.count -= take

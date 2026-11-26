@@ -69,6 +69,12 @@ static func _complete(e: Dictionary) -> Dictionary:
 		"tree": int(e.get("tree", -1)),
 		## Where it is planted: "farm" tilled soil only; "soil" plain soil or tilled.
 		"ground": str(e.get("ground", "farm")),
+		## Crops it likes next to it (x COMPANION_BONUS), stage 6.
+		"companions": PackedStringArray(e.get("companions", [])),
+		## Biomes it grows in at all (empty: anywhere); planting is refused elsewhere.
+		"only": PackedStringArray(e.get("only", [])),
+		## A 2x2 of it, all ripe at 3 stars, may merge into a giant (stage 6).
+		"giant": bool(e.get("giant", false)),
 		"tips": str(e.get("tips", "")),
 	}
 

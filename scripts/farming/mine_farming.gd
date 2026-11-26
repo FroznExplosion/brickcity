@@ -54,6 +54,14 @@ const SAPLING_CHANCE := 0.5
 const SAPLING_SPACING := 3
 ## A scarecrow keeps most birds off plots within this (metres).
 const SCARE_M := 8.0
+## Stage 6 (Docs/MineFarming.md 20). A bare tilled plot between two ripe
+## plants of one crop (in a line) sprouts a cross of them about once in this
+## many in-game days (while in reach).
+const CROSS_DAYS := 0.5
+## A 2x2 of a giant crop, all ripe at 3 stars: the chance it merges.
+static var giant_chance := 0.4
+## A giant gives this many times what its four plots would.
+const GIANT_YIELD := 2
 ## A plot's light is asked again only when the ground changed since it was
 ## last asked (`terrain_changed`), or after this long (seconds) anyway --
 ## the sky light fill was the refresh's second cost (Docs/MineFarming.md 19).
@@ -74,6 +82,8 @@ var trampled := 0
 var trees_grown := 0
 var fertilised := 0
 var weeded := 0
+var crossed := 0
+var giants := 0
 ## Fields and enclosure (stage 5): grouped plots, a flood on a worker.
 var fields := FarmFields.new()
 ## Bumped by every terrain edit (`terrain_changed`): a plot's light is asked
@@ -462,7 +472,7 @@ func till(target: Dictionary) -> bool:
 
 ## Plant seed item `item` on the tilled soil looked at. True if planted (the
 ## caller takes the seed from the hand).
-func plant(target: Dictionary, item: StringName) -> bool:
+func plant(target: Dictionary, item: StringName, data := {}) -> bool:
 	var plot := plot_at_target(target)
 	var crop := FarmCrops.crop_of_seed(item)
 	if crop == &"":
@@ -475,7 +485,12 @@ func plant(target: Dictionary, item: StringName) -> bool:
 	# A crop wants tilled soil: a sapling's plain-soil plot takes only saplings.
 	if str(cdef.ground) == "farm" and str(plot.get("ground", "farm")) != "farm":
 		return false
-	FarmPlant.plant(plot, crop, now())
+	# A biome crop grows only in its biomes (stage 6).
+	if not grows_here(cdef, int(plot.biome)):
+		log_lines.append("%s refused at %s: only in %s" % [crop, plot.b, ", ".join(cdef.only)])
+		last_refusal = "%s only grows in %s" % [cdef.name, ", ".join(cdef.only)]
+		return false
+	FarmPlant.plant(plot, crop, now(), FarmPlant.traits_of(data))
 	store.touch(plot.b)
 	_draw_dirty = true
 	planted += 1
@@ -496,21 +511,197 @@ func harvest_target(target: Dictionary) -> bool:
 
 
 func harvest(plot: Dictionary) -> bool:
+	if int(plot.get("giant", 0)) != 0:
+		return _harvest_giant(plot)
 	var got := FarmPlant.harvest(plot, now())
 	if got.is_empty():
 		return false
 	var at := _top_middle(plot.b) + Vector3(0, 0.3, 0)
-	_give(got.produce, int(got.count), at)
-	_give(got.seed, int(got.seeds), at)
+	_give(got.produce, int(got.count), at, got.produce_data)
+	_give(got.seed, int(got.seeds), at, got.seed_data)
 	harvested += 1
 	log_lines.append("harvested %s x%d (+%d seeds, %d stars) at %s" % [got.crop, got.count, got.seeds, got.stars, plot.b])
-	# Replant from the seeds carried: no second click per plot.
-	if plot.crop == &"" and host.builder.inv.take_item(got.seed, 1) > 0:
-		FarmPlant.plant(plot, got.crop, now())
-		log_lines.append("replanted %s at %s" % [got.crop, plot.b])
+	_replant(plot, got)
 	store.touch(plot.b)
 	_draw_dirty = true
 	return true
+
+
+## Replant from the seeds carried: no second click per plot. The harvest's
+## own seeds first (its traits, maybe one point better), else any of them.
+func _replant(plot: Dictionary, got: Dictionary) -> void:
+	if plot.crop != &"":
+		return
+	var inv: Inventory = host.builder.inv
+	var data: Dictionary = got.seed_data if int(got.seeds) > 0 else got.produce_data
+	if inv.take_item(got.seed, 1, data) > 0:
+		FarmPlant.plant(plot, got.crop, now(), FarmPlant.traits_of(data))
+	elif inv.take_item(got.seed, 1) > 0:
+		FarmPlant.plant(plot, got.crop, now())
+	else:
+		return
+	log_lines.append("replanted %s at %s" % [got.crop, plot.b])
+
+
+# ---------------------------------------------------------------------------
+# Depth (stage 6, Docs/MineFarming.md 20)
+
+## The last thing planting refused, for the HUD (a biome crop elsewhere).
+var last_refusal := ""
+
+
+## Does crop `c` grow in biome `biome` at all? (Its `only` list; empty: anywhere.)
+static func grows_here(c: Dictionary, biome: int) -> bool:
+	var only: PackedStringArray = c.get("only", PackedStringArray())
+	if only.is_empty():
+		return true
+	var names: PackedStringArray = BrickTerrain.biome_names()
+	return biome >= 0 and biome < names.size() and only.has(names[biome])
+
+
+## A companion crop growing in one of the 8 plots round it?
+func _companion_near(plot: Dictionary) -> bool:
+	var c := FarmPlant.crop_of(plot)
+	if c.is_empty() or (c.companions as PackedStringArray).is_empty():
+		return false
+	var b: Vector3i = plot.b
+	for dx in [-1, 0, 1]:
+		for dz in [-1, 0, 1]:
+			if dx == 0 and dz == 0:
+				continue
+			var n := plot_near(Vector2i(b.x + dx, b.z + dz), b.y)
+			if not n.is_empty() and (c.companions as PackedStringArray).has(String(n.crop)):
+				return true
+	return false
+
+
+## A bare tilled plot between two ripe plants of one crop (in a line, E-W or
+## N-S) may sprout a CROSS of them: each trait the better parent's, and half
+## the time one point more. Only while in reach (both parents in view).
+func _try_cross(plot: Dictionary, t: float) -> void:
+	var b: Vector3i = plot.b
+	var last := float(plot.get("_cross_t", t))
+	plot["_cross_t"] = t
+	var dt := t - last
+	if dt <= 0.0:
+		return
+	for d in [Vector2i(1, 0), Vector2i(0, 1)]:
+		var p1 := plot_near(Vector2i(b.x + d.x, b.z + d.y), b.y)
+		var p2 := plot_near(Vector2i(b.x - d.x, b.z - d.y), b.y)
+		if p1.is_empty() or p2.is_empty() or p1.crop == &"" or p1.crop != p2.crop:
+			continue
+		var c := FarmPlant.crop_of(p1)
+		if int(c.tree) >= 0 or not FarmPlant.is_ripe(p1) or not FarmPlant.is_ripe(p2):
+			continue
+		if randf() >= 1.0 - exp(-dt / (CROSS_DAYS * FarmPlant.DAY)):
+			continue
+		var t1 := FarmPlant.traits(p1)
+		var t2 := FarmPlant.traits(p2)
+		var tr := Vector3i(maxi(t1.x, t2.x), maxi(t1.y, t2.y), maxi(t1.z, t2.z))
+		if randf() < 0.5:
+			var which := randi() % 3
+			tr[which] = mini(tr[which] + 1, FarmPlant.TRAIT_MAX)
+		FarmPlant.plant(plot, p1.crop, t, tr)
+		store.touch(b)
+		_draw_dirty = true
+		crossed += 1
+		log_lines.append("crossed %s at %s (G%d Y%d H%d)" % [p1.crop, b, tr.x, tr.y, tr.z])
+		return
+
+
+## A ripe 3-star plot of a giant crop: is it the corner of a 2x2 of them that
+## merges into a giant? Rolled once per 2x2 (from its plants' seeds), so a
+## miss stays a miss until replanted.
+func _try_giant(plot: Dictionary) -> void:
+	var c := FarmPlant.crop_of(plot)
+	if c.is_empty() or not bool(c.get("giant", false)) or not FarmPlant.is_ripe(plot) \
+			or FarmPlant.stars(plot) < 3 or int(plot.get("giant", 0)) != 0:
+		return
+	var b: Vector3i = plot.b
+	for o in [Vector2i(0, 0), Vector2i(-1, 0), Vector2i(0, -1), Vector2i(-1, -1)]:
+		var corner := Vector2i(b.x + o.x, b.z + o.y)
+		var four: Array = []
+		for k in 4:
+			var q := plot_near(Vector2i(corner.x + (k >> 1), corner.y + (k & 1)), b.y)
+			if q.is_empty() or q.crop != plot.crop or not FarmPlant.is_ripe(q) \
+					or FarmPlant.stars(q) < 3 or int(q.get("giant", 0)) != 0:
+				break
+			four.append(q)
+		if four.size() != 4:
+			continue
+		var s := 0
+		for q in four:
+			s ^= int(q.seed)
+		if FarmPlant.roll(s, 4242, 0) >= giant_chance:
+			continue
+		var anchor: Dictionary = four[0]
+		for q in four:
+			FarmPlant.settle(q, now())
+			q.giant = 2
+			q.gdx = int(anchor.b.x) - int(q.b.x)
+			q.gdz = int(anchor.b.z) - int(q.b.z)
+			store.touch(q.b)
+		anchor.giant = 1
+		anchor.gdx = 0
+		anchor.gdz = 0
+		giants += 1
+		_draw_dirty = true
+		log_lines.append("a giant %s at %s" % [plot.crop, anchor.b])
+		return
+
+
+## The four plots of the giant `plot` belongs to (its corner first), or [].
+func _giant_plots(plot: Dictionary) -> Array:
+	var b: Vector3i = plot.b
+	var corner := Vector2i(b.x + int(plot.get("gdx", 0)), b.z + int(plot.get("gdz", 0)))
+	var out: Array = []
+	for dx in 2:
+		for dz in 2:
+			var q := plot_near(Vector2i(corner.x + dx, corner.y + dz), b.y)
+			if q.is_empty() or int(q.get("giant", 0)) == 0 or q.crop != plot.crop:
+				return []
+			out.append(q)
+	return out
+
+
+## A giant picked (any of its plots): what its four plots give, GIANT_YIELD
+## times over; each plot replanted from the seeds carried.
+func _harvest_giant(plot: Dictionary) -> bool:
+	var four := _giant_plots(plot)
+	if four.is_empty():
+		plot.giant = 0
+		return harvest(plot)
+	var produce := 0
+	var seeds := 0
+	var got := {}
+	for q in four:
+		q.giant = 0
+		var g := FarmPlant.harvest(q, now())
+		if g.is_empty():
+			continue
+		got = g
+		produce += int(g.count)
+		seeds += int(g.seeds)
+	if got.is_empty():
+		return false
+	var at := _top_middle(four[0].b) + Vector3(0.35, 0.6, 0.35)
+	_give(got.produce, produce * GIANT_YIELD, at, got.produce_data)
+	_give(got.seed, seeds * GIANT_YIELD, at, got.seed_data)
+	harvested += 1
+	log_lines.append("harvested a giant %s: %d (+%d seeds)" % [got.crop, produce * GIANT_YIELD, seeds * GIANT_YIELD])
+	for q in four:
+		_replant(q, got)
+		store.touch(q.b)
+	_draw_dirty = true
+	return true
+
+
+## A giant missing a plot (trampled, broken) falls apart into ripe plots.
+func _check_giant(plot: Dictionary) -> void:
+	if int(plot.get("giant", 0)) != 0 and _giant_plots(plot).is_empty():
+		plot.giant = 0
+		store.touch(plot.b)
+		_draw_dirty = true
 
 
 ## LMB on a plot: a ripe crop is harvested, a growing one pulled (its seed
@@ -541,7 +732,7 @@ func break_target(target: Dictionary) -> bool:
 	return true
 
 
-func _give(id: StringName, n: int, at: Vector3) -> void:
+func _give(id: StringName, n: int, at: Vector3, data := {}) -> void:
 	if n <= 0 or id == &"" or not ItemCatalog.has(id):
 		return
 	# In stacks no bigger than the item's own (an empty slot takes a whole
@@ -550,7 +741,7 @@ func _give(id: StringName, n: int, at: Vector3) -> void:
 	while n > 0:
 		var k := mini(n, cap)
 		n -= k
-		var left: ItemStack = host.builder.inv.add_item(ItemStack.make(id, k))
+		var left: ItemStack = host.builder.inv.add_item(ItemStack.make(id, k, data))
 		if left != null:
 			left = _into_chest(left, at)
 		if left != null:
@@ -639,7 +830,7 @@ func plot_near(c: Vector2i, y_ref: int) -> Dictionary:
 ## An area action from cell a to cell b: "hoe" tills, "seed" plants `item`
 ## (at most `budget`), "scythe" harvests the ripe crops (a click: 3 x 3),
 ## "can" waters (at most `budget`). How many plots it acted on.
-func area(kind: String, a: Vector3i, b: Vector3i, item: StringName = &"", budget := 1 << 30) -> int:
+func area(kind: String, a: Vector3i, b: Vector3i, item: StringName = &"", budget := 1 << 30, data := {}) -> int:
 	var n := 0
 	var y_ref := a.y
 	var grow := 1 if kind == "scythe" and floori(a.x / 2.0) == floori(b.x / 2.0) \
@@ -661,10 +852,10 @@ func area(kind: String, a: Vector3i, b: Vector3i, item: StringName = &"", budget
 					var az := floori(a.z / 2.0)
 					var top := _top_near(c.x * 2, c.y * 2, y_ref)
 					if posmod(c.x - ax, SAPLING_SPACING) == 0 and posmod(c.y - az, SAPLING_SPACING) == 0 and top >= 0 \
-							and plant({"cell": Vector3i(c.x * 2, top, c.y * 2), "normal": Vector3i.UP}, item):
+							and plant({"cell": Vector3i(c.x * 2, top, c.y * 2), "normal": Vector3i.UP}, item, data):
 						n += 1
 				elif not p.is_empty() and p.crop == &"" \
-						and plant({"cell": Vector3i(c.x * 2, p.b.y, c.y * 2)}, item):
+						and plant({"cell": Vector3i(c.x * 2, p.b.y, c.y * 2)}, item, data):
 					n += 1
 			"fertiliser":
 				var p := plot_near(c, y_ref)
@@ -794,6 +985,15 @@ func refresh(b: Vector3i) -> void:
 	var u4 := Time.get_ticks_usec()
 	var scared := _scared(b)
 	var u5 := Time.get_ticks_usec()
+	# Stage 6: a companion next to it; a cross into a bare plot; a giant.
+	var companion := _companion_near(plot)
+	if companion != bool(plot.get("companion", false)):
+		plot.companion = companion
+		store.touch(b)
+	if plot.crop == &"" and str(plot.get("ground", "farm")) == "farm":
+		_try_cross(plot, t)
+	_check_giant(plot)
+	_try_giant(plot)
 	_prof("settle", u1 - u0)
 	_prof("water", u2 - u1)
 	_prof("sky light", u3 - u2)
@@ -898,6 +1098,13 @@ func look_text(target: Dictionary) -> String:
 		line += "  ·  held back: " + ", ".join(held)
 	if str(plot.get("last_event", "")) != "" and t - float(plot.get("event_at", 0.0)) < FarmPlant.DAY:
 		line += "  ·  %s %s ago" % [plot.last_event, FarmPlant.span_words(t - float(plot.event_at))]
+	var tr := FarmPlant.traits(plot)
+	if tr != Vector3i.ZERO:
+		line += "  ·  traits G%d Y%d H%d" % [tr.x, tr.y, tr.z]
+	if bool(plot.get("companion", false)):
+		line += "  ·  companion near (+15%)"
+	if int(plot.get("giant", 0)) != 0:
+		line = "GIANT " + line
 	if bool(plot.get("mulch", false)):
 		soil += ", mulched"
 	if bool(plot.get("scared", false)):

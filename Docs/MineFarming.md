@@ -422,8 +422,8 @@ the nearest chest or put-down backpack within 8 m (merged into its stacks,
 then empty slots), then the ground.
 
 **Recipes** (data/recipes/farming.json): hoe 12 wood + 12 stone at a
-workbench, scythe 12 wood + 18 iron ore at a workbench, watering can 18 iron
-ore at a furnace. Creative kits get all three. Icons for the scythe and can.
+workbench, scythe 12 wood + 2 iron ingots at a workbench, watering can 2 iron
+ingots at a workbench (ingots since the furnace smelts, Inventory.md 15). Creative kits get all three. Icons for the scythe and can.
 The guide's how-to says all of it.
 
 **Tests.** farm_probe +8 (63): exact across a can's water running out
@@ -565,3 +565,56 @@ on the spot; the change-count skip seldom hits while rain and the sea keep
 the water changing. The worst frames in these runs are paging. Next if a big
 farm hitches: look at fewer plots a frame when the frame is already long, or
 a field-wide water map shared by its plots.
+
+## 20. Built (2026-11-26): stage 6, depth
+
+**Seed traits.** Every plant has Growth, Yield and Hardiness, 0-10 (plot
+`tg`, `ty`, `th`), from the seed it was planted from (an ItemStack's data
+`{g, y, h}`; plain seeds have no data, so they stack with each other and a
+seed's label reads "Wheat seeds (G5 Y2 H0)"). Growth: x(1 + 0.04 a point).
+Yield: +8% of a harvest a point. Hardiness: dry soil 6% a point nearer full
+speed, and at 5+ a dry stage is no stress. A harvest's seeds (and a crop
+planted as it is, its produce) carry the plant's traits; at 3 stars 30% of
+the time one trait gains a point (2 stars 10%), never a loss -- rolled from
+the plant's seed. The harvest replants with its own seeds first. So a crop
+kept well gets better generation by generation.
+
+**Breeding.** A bare tilled plot between two ripe plants of one crop, in a
+line (E-W or N-S), may sprout a CROSS: each trait the better parent's, half
+the time one point more. About once in half an in-game day of both ripe --
+but only while in reach (it needs both parents in view, checked in the plot
+refresh; it is not in `settle`, so it is not part of the exact catch-up).
+
+**Companions** (crop `companions`): x1.15 when one grows in the 8 plots
+round it -- beans by corn or wheat, corn by beans, pumpkin or melon, carrot
+by cabbage and back, potato by beans, pumpkin and melon by corn. Cached on
+the plot (`companion`) by the refresh, after settling, like wet.
+
+**Giants** (crop `giant`: pumpkin, melon). A 2x2 of one, all ripe at 3
+stars, may merge (40%, rolled once per 2x2 from its four plants' seeds, so a
+miss stays a miss until replanted): the corner plot `giant` 1, the other
+three 2 (`gdx`, `gdz` to the corner). Drawn as ONE round brick 4 x 4 studs
+and three bricks tall, studded, with a stem and leaves (`FarmDraw.giant_mesh`).
+No trouble reaches it. Picked (any of its plots) it gives twice what its four
+plots would (the gate: 14 pumpkins), and each plot is replanted. A giant that
+loses a plot falls apart into ripe plots.
+
+**Biome crops** (crop `only`): cactus fruit (desert, badlands, savanna; needs
+no water at all), frostberry bush (where it snows; regrows), pineapple
+(jungle). Planting elsewhere is refused (`MineFarming.grows_here`). New model:
+`cactus`. 12 crops and 4 saplings now.
+
+**Kit.** The creative kit's farm part is now the hoe, scythe, watering can,
+wheat seeds and compost; the rest is in the Creative tab. With every seed in
+the kit a fresh character's bags were full and harvests fell on the ground.
+
+**Tests.** farm_probe 136: growth/yield/hardiness effects, seeds carry traits
+and gain (never lose) points, trait-less seeds have no data, companion speed,
+exact with traits and a companion, biome-only crops, giant flags and no
+trouble on giants, 38-field rows, older rows load. --gate=farm 70: a seed's
+traits into its plant and back through its harvest's replant, the label,
+corn by beans, a cross between two ripe wheat plants (G1 Y3 from G1 and Y2),
+cactus fruit refused outside its biomes, four 3-star pumpkins merging into a
+giant (chance set to 1 for the gate), drawn as one, picked for 14 pumpkins
+(user://dev/farm_giant.png). The "away" check now waits until the farm has
+noticed the player left (its in-reach list is rebuilt once a second).

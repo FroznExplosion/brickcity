@@ -64,6 +64,9 @@ func _init() -> void:
 	_stage4()
 	FarmPlant.trouble = true
 	_trouble()
+	FarmPlant.trouble = false
+	_depth()
+	FarmPlant.trouble = true
 	print("farm probe: %d ok, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -396,7 +399,7 @@ func _stage4() -> void:
 		var c := FarmCrops.get_crop(id)
 		if c.produce != &"" and PackedStringArray(ItemCatalog.get_def(c.produce).get("tags", [])).has("crop"):
 			crops += 1
-	_ok("every produce composts (%d tagged crop)" % crops, crops == 9)
+	_ok("every produce composts (%d tagged crop)" % crops, crops == 12)
 
 
 ## Stage 5: random trouble, drawn from each plot's seed.
@@ -506,3 +509,95 @@ func _ripe_held(i: int, open: bool, mulch: bool, scared: bool) -> Dictionary:
 func _count_events(p: Dictionary, what: String) -> int:
 	# The last event says what came; a plot that had any shows it in its count.
 	return int(p.events) if str(p.last_event).contains(what) else 0
+
+
+
+## Stage 6: seed traits, companions, biome crops, giants' rules.
+func _depth() -> void:
+	print("depth")
+	var d := FarmPlant.DAY
+	var g0 := _plot(&"wheat")
+	var g10 := _plot(&"wheat")
+	g10.tg = 10
+	var t0 := _time_to_ripe(g0)
+	var t10 := _time_to_ripe(g10)
+	_ok("growth 10 ripens sooner (%.2f vs %.2f days)" % [t10 / d, t0 / d], t10 < t0 * 0.9)
+	var c := FarmCrops.get_crop(&"pumpkin")
+	_ok("hardiness brings dry soil nearer full speed", FarmPlant.water_factor(c, false, 10) > FarmPlant.water_factor(c, false, 0))
+	var dry_h := _plot(&"pumpkin", false)
+	dry_h.th = 6
+	_ok("hardiness 5+: a dry stage is no stress", FarmPlant.stage_stress(dry_h, c, false) == 0)
+	var y0 := 0
+	var y10 := 0
+	for i in 30:
+		var a := _plot(&"potato", true, 90.0)
+		a.seed = FarmPlant.mix32(i + 501)
+		_time_to_ripe(a)
+		y0 += int(FarmPlant.harvest(a, float(a.t)).count)
+		var b := _plot(&"potato", true, 90.0)
+		b.seed = FarmPlant.mix32(i + 501)
+		b.ty = 10
+		_time_to_ripe(b)
+		y10 += int(FarmPlant.harvest(b, float(b.t)).count)
+	_ok("yield 10 gives more (%d vs %d potatoes over 30)" % [y10, y0], y10 > y0)
+	# Seeds carry the traits; a 3-star harvest sometimes gains a point, never loses one.
+	var gained := 0
+	var lost := 0
+	for i in 60:
+		var p := _plot(&"wheat", true, 90.0)
+		p.seed = FarmPlant.mix32(i + 9001)
+		p.tg = 2
+		p.ty = 3
+		p.th = 1
+		_time_to_ripe(p)
+		var got := FarmPlant.harvest(p, float(p.t))
+		var tr := FarmPlant.traits_of(got.seed_data)
+		var sum := tr.x + tr.y + tr.z
+		if sum > 6:
+			gained += 1
+		elif sum < 6:
+			lost += 1
+	_ok("3-star seeds carry their traits and gain a point now and then (%d of 60 gained, %d lost)" % [gained, lost],
+			gained > 5 and gained < 40 and lost == 0)
+	_ok("trait-less seeds have no data (they stack with plain ones)", FarmPlant.traits_data(Vector3i.ZERO).is_empty()
+			and FarmPlant.traits_of({"g": 99, "y": -3}) == Vector3i(10, 0, 0))
+	var co := _plot(&"corn")
+	var r0 := FarmPlant.rate(co, FarmCrops.get_crop(&"corn"), true)
+	co.companion = true
+	_ok("a companion next to it: faster", FarmPlant.rate(co, FarmCrops.get_crop(&"corn"), true) > r0 * 1.1)
+	# Exact with traits and a companion.
+	var once := _plot(&"beans")
+	once.tg = 4
+	once.th = 3
+	once.companion = true
+	var often := once.duplicate()
+	FarmPlant.settle(once, float(once.t) + d * 1.3)
+	var t := float(often.t)
+	while t < float(once.t):
+		t = minf(float(once.t), t + 11.0)
+		FarmPlant.settle(often, t)
+	_ok("still exact with traits and a companion", int(once.stage) == int(often.stage) and absf(float(once.p) - float(often.p)) < 1e-6)
+	var names := Array(BrickTerrain.biome_names())
+	var cactus := FarmCrops.get_crop(&"cactus_fruit")
+	_ok("cactus fruit grows in a desert, not on plains", MineFarming.grows_here(cactus, names.find("Desert"))
+			and not MineFarming.grows_here(cactus, names.find("Plains")))
+	_ok("wheat grows anywhere", MineFarming.grows_here(FarmCrops.get_crop(&"wheat"), names.find("Snowy Plains")))
+	_ok("pumpkin and melon can go giant, wheat not", bool(FarmCrops.get_crop(&"pumpkin").giant)
+			and bool(FarmCrops.get_crop(&"melon").giant) and not bool(FarmCrops.get_crop(&"wheat").giant))
+	var gp := _plot(&"pumpkin")
+	gp.giant = 1
+	gp.open = true
+	_ok("a giant gets no trouble", FarmPlant.hazard(gp, FarmCrops.get_crop(&"pumpkin")) == 0.0 or not FarmPlant.trouble)
+	var row := _plot(&"wheat")
+	row.tg = 3
+	row.ty = 7
+	row.th = 1
+	row.companion = true
+	row.giant = 2
+	row.gdx = -1
+	var back := FarmPlant.from_row(FarmPlant.to_row(row))
+	_ok("a row keeps traits, companion and giant", FarmPlant.traits(back) == Vector3i(3, 7, 1) and bool(back.companion)
+			and int(back.giant) == 2 and int(back.gdx) == -1)
+	var old := FarmPlant.to_row(_plot(&"wheat"))
+	old.resize(31)
+	_ok("a 31-field row from stage 5 loads with no traits", FarmPlant.traits(FarmPlant.from_row(old)) == Vector3i.ZERO)
