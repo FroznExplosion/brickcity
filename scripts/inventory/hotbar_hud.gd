@@ -2,8 +2,8 @@ class_name HotbarHud
 extends Control
 ## The items hands' HUD (Docs/Inventory.md 2): two hotbars of 9 at the bottom
 ## middle -- hotbar 1 under hotbar 2, the active one bright, its selected slot
-## outlined -- the two off-hand slots in a column to their left, and the
-## hand's name over them (`caption`). Drawn from an Inventory; `redraw` after
+## outlined -- and the hand's name over them (`caption`). No off-hand
+## (Docs/Inventory.md 14). Drawn from an Inventory; `redraw` after
 ## it changes (the builder does, on `changed`).
 ##
 ## The slots are the inventory screen's InvSlot (mouse ignored), so they draw
@@ -17,7 +17,6 @@ var caption := ""
 var inv: Inventory
 
 var _rows: Array = [[], []]
-var _off: Array[InvSlot] = []
 var _bars: Array[Control] = []
 var _label: Label
 
@@ -51,11 +50,6 @@ func _init() -> void:
 			s.position = Vector2(i * (SLOT + GAP), 0)
 			row.add_child(s)
 			_rows[bar].append(s)
-	for i in Inventory.OFFHAND_SIZE:
-		var s := _slot(Inventory.addr(&"offhand", i))
-		s.position = Vector2(-SLOT - 3 * GAP, (SLOT + GAP) * i)
-		box.add_child(s)
-		_off.append(s)
 	_label = Label.new()
 	_label.anchor_left = 0.5
 	_label.anchor_right = 0.5
@@ -84,8 +78,6 @@ func bind(p_inv: Inventory) -> void:
 	for bar in 2:
 		for s in _rows[bar]:
 			(s as InvSlot).inv = inv
-	for s in _off:
-		s.inv = inv
 	redraw()
 
 
@@ -102,7 +94,4 @@ func redraw() -> void:
 			s.spin_always = hand and visible
 			s.number = "%d" % (i + 1) if on else ""
 			s.queue_redraw()
-	for i in Inventory.OFFHAND_SIZE:
-		_off[i].selected = i == inv.active_offhand
-		_off[i].queue_redraw()
 	_label.text = caption

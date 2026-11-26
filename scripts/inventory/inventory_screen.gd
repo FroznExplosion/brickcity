@@ -1,15 +1,28 @@
 class_name InventoryScreen
 extends MenuScreen
-## The inventory screen (Docs/Inventory.md 4, stage 3), opened with E or Tab
-## from the items hands. A MenuScreen, so it fits any window: the slots size
-## themselves to the room there is, and what still does not fit scrolls.
+## The inventory screen (Docs/Inventory.md 4, redone Minecraft's way in 14),
+## opened with E or Tab, by RMB on a chest or a crafting station. Two
+## Minecraft panels side by side, Bedrock's layout:
 ##
-##   [Storage | Creative | Craft | Farming]   tabs (Creative only in creative);
-##                                 Farming is the farming guide (FarmGuide)
-##   chest  9 x 3                  when a chest is open (stage 5)
-##   storage 9 x 3  -- or --  every catalog item (Creative)
-##   off-hand | hotbar 2 / hotbar 1
-##   what the mouse is over: name, what it is, what it does
+##   left  (the recipe book; hidden at a chest or with the book tab off)
+##     tabs: construction, equipment, items, nature | creative, farming | all
+##     "Craftable recipes" / "All recipes", a search box, the "craftable
+##     only" switch, and a grid of what can be made: grey can be made now,
+##     red cannot. Click one to pick it. The Creative tab (creative only)
+##     shows every item instead; the Farming tab the farming guide.
+##   right
+##     tabs: the recipe book on/off, this screen, close (X)
+##     "Crafting" (the inventory), "Crafting Table", "Furnace" or another
+##       station's name: the backpack slot, then the picked recipe -- its
+##       ingredients in a grid (red where you lack some), an arrow (and the
+##       furnace's flame), the result. Click the result to make one,
+##       Shift-click as many as you can.
+##     -- or at a chest: "Chest" and its slots
+##     "Inventory": the worn backpack's slots, then hotbar 2 and hotbar 1.
+##
+## No armour, no off-hand, no player figure (the user, 2026-11-25). Hover
+## over anything that shows an item and its name pops up beside the mouse
+## (McStyle.Tooltip), with what it needs or does in grey and red.
 ##
 ## Mouse, Minecraft's (the rules are Inventory's):
 ##   left       take / put / merge / swap          right   half / one
@@ -20,149 +33,371 @@ extends MenuScreen
 ## inventory); clicking one with a stack held throws the stack away (right: one).
 ##
 ## The world keeps running (Minecraft's): the host frees the mouse and holds
-## the flight; every key goes here while open. E, Tab or Escape close it
-## (Escape with a stack held puts the stack back first). The stack still held
-## on close goes back into storage; if there is no room it is thrown in front
-## of the player (DroppedItems). Q over a slot drops one, Shift+Q the stack.
+## the flight; every key goes here while open (the search box takes typing
+## while it has the focus). E, Tab or Escape close it (Escape with a stack
+## held puts the stack back first). The stack still held on close goes back
+## into storage; if there is no room it is thrown in front of the player
+## (DroppedItems). Q over a slot drops one, Shift+Q the stack.
 ##
-## `setup(inv, host)` before adding it; the host gets `inventory_closed()`.
+## `setup(inv, host)` before adding it; `open_station(id)` for a crafting
+## station; the host gets `inventory_closed()`, and is asked
+## `stations_near()` and `drop_from_player(stack)`.
 
-const GAP := 4
-const MIN_SLOT := 26.0
+const MIN_SLOT := 22.0
 const MAX_SLOT := 52.0
+## The recipe book's grid, Bedrock's.
+const BOOK_COLS := 7
+const TAB_ICONS := {
+	"construction": [&"stone", &"sandstone", &"soil"],
+	"equipment": [&"pickaxe", &"mega_pickaxe", &"bucket"],
+	"items": [&"chest", &"workbench"],
+	"nature": [&"wheat", &"wheat_seeds", &"leaves"],
+	"farming": [&"hoe", &"wheat_seeds"],
+}
+const TAB_NAMES := {
+	"construction": "Construction", "equipment": "Equipment", "items": "Items", "nature": "Nature",
+	"all": "All recipes (search)", "creative": "Creative: every item", "farming": "Farming guide",
+}
+
+## The recipe book shown (Bedrock's book tab) and its switch, kept between openings.
+static var book_open := true
+static var craftable_only := false
 
 var inv: Inventory
 var host: Node
-var page := "storage"
+## What the left panel shows: "recipes", "creative" or "farming".
+var page := "recipes"
+## The crafting station the screen was opened at (&"workbench", &"furnace",
+## ...), or &"" (the plain inventory: every recipe).
+var station: StringName = &""
+## The recipe book's tab: "all" or one of RecipeBook.CATEGORIES.
+var book_tab := "all"
+## The recipe picked in the book ({} for none).
+var picked: Dictionary = {}
 
 var _slots: Array[InvSlot] = []
-var _hovered: InvSlot = null
-var _chest_box: Control
-var _storage_box: Control
-## The storage: the worn backpack's slots (Docs/Inventory.md 8), rebuilt when
-## the backpack changes; its label says which backpack.
-var _storage_grid: GridContainer
-var _storage_label: Label
-var _storage_n := -1
-## The Craft page (Docs/Inventory.md 12): every recipe, what can be made now
-## first, then what is missing for the rest.
-var _craft_box: Control
-var _craft_list: VBoxContainer
-var _craft_label: Label
-var _tab_craft: Button
-## The Farming page: the farming guide (Docs/MineFarming.md, FarmGuide).
-var _farm_box: Control
-var _tab_farm: Button
-var _creative_box: Control
-var _creative_flow: HFlowContainer
-var _info: Label
-var _tab_storage: Button
-var _tab_creative: Button
-var _cursor: Control
-var _slot_px := 44.0
+var _slot_px := 36.0
+var _unit := 2.0
+var _font := 14
 ## Where the last mouse motion sent to the screen was (not the OS pointer).
 var _mouse_at := Vector2(-1, -1)
+
+var _row: HBoxContainer
+var _left_col: VBoxContainer
+var _left: McStyle.Box
+var _left_tabs: HBoxContainer
+var _tabs := {}
+var _book_title: Label
+var _search_row: HBoxContainer
+var _search: LineEdit
+var _toggle: McStyle.Toggle
+var _book_scroll: ScrollContainer
+var _book_grid: GridContainer
+var _book_names: Array = []
+var _creative_scroll: ScrollContainer
+var _creative_grid: GridContainer
+var _farm_scroll: ScrollContainer
+
+var _right_col: VBoxContainer
+var _right: McStyle.Box
+var _right_tabs: HBoxContainer
+var _book_btn: McStyle.Tab
+var _here_tab: McStyle.Tab
+var _close: McStyle.Tab
+var _chest_box: VBoxContainer
+var _chest_title: Label
+var _chest_grid: GridContainer
+var _craft_box: VBoxContainer
+var _craft_title: Label
+var _backpack_slot: InvSlot
+var _ingredients: GridContainer
+var _mid: Mid
+var _result: InvSlot
+var _craft_note: Label
+var _inv_title: Label
+var _no_pack: Label
+var _hotbar_gap: Control
+## The storage: the worn backpack's slots (Docs/Inventory.md 8), rebuilt when
+## the backpack changes.
+var _storage_grid: GridContainer
+var _storage_n := -1
+var _tip: McStyle.Tooltip
+var _cursor: CursorView
 
 
 func setup(p_inv: Inventory, p_host: Node) -> void:
 	inv = p_inv
 	host = p_host
-	screen_title = "Inventory"
+	screen_title = ""
 	opaque_backdrop = false
 	dim_backdrop = true
 
 
+## Opened at a crafting station (RMB on it): its recipes, its name over the
+## crafting area, the furnace's flame at a furnace.
+func open_station(id: StringName) -> void:
+	station = id
+	page = "recipes"
+	book_open = true
+	if not picked.is_empty() and not _fits_station(picked):
+		picked = {}
+	_rebuild_left(true)
+	_refresh()
+	_relayout()
+
+
 func _build_content() -> void:
-	_tab_storage = Button.new()
-	_tab_storage.text = "Storage"
-	_tab_storage.toggle_mode = true
-	_tab_storage.pressed.connect(func() -> void: show_page("storage"))
-	header.add_child(_tab_storage)
-	_tab_creative = Button.new()
-	_tab_creative.text = "Creative"
-	_tab_creative.toggle_mode = true
-	_tab_creative.pressed.connect(func() -> void: show_page("creative"))
-	header.add_child(_tab_creative)
-	_tab_craft = Button.new()
-	_tab_craft.text = "Craft"
-	_tab_craft.toggle_mode = true
-	_tab_craft.pressed.connect(func() -> void: show_page("craft"))
-	header.add_child(_tab_craft)
-	_tab_farm = Button.new()
-	_tab_farm.text = "Farming"
-	_tab_farm.toggle_mode = true
-	_tab_farm.pressed.connect(func() -> void: show_page("farming"))
-	header.add_child(_tab_farm)
-
-	_chest_box = _section("Chest", _grid(&"chest", Inventory.CHEST_SIZE))
-	content.add_child(_chest_box)
-	# The storage is the worn backpack's slots (its slot is with the hands,
-	# below, so it shows on the Creative tab too).
-	_storage_grid = GridContainer.new()
-	_storage_grid.columns = Inventory.HOTBAR_SIZE
-	_storage_grid.add_theme_constant_override("h_separation", GAP)
-	_storage_grid.add_theme_constant_override("v_separation", GAP)
-	_storage_box = _section("Storage", _storage_grid)
-	_storage_label = _storage_box.get_child(0) as Label
-	content.add_child(_storage_box)
-	_rebuild_storage()
-	# Crafting, Terraria's (Docs/Inventory.md 12): the Craft page lists the
-	# recipes, what can be made first.
-	_craft_list = VBoxContainer.new()
-	_craft_list.add_theme_constant_override("separation", GAP * 2)
-	_craft_box = _section("Craft  |  Make: one  ·  All: as many as you can  ·  stations count within 4 m",
-			_craft_list)
-	_craft_label = _craft_box.get_child(0) as Label
-	content.add_child(_craft_box)
-	_creative_flow = HFlowContainer.new()
-	_creative_flow.add_theme_constant_override("h_separation", GAP)
-	_creative_flow.add_theme_constant_override("v_separation", GAP)
-	_creative_flow.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	for id in ItemCatalog.ids():
-		_add_slot(_creative_flow, InvSlot.make(inv, {}, id))
-	_creative_box = _section("Creative: take any item (shift: into the inventory); a held stack clicked here is thrown away",
-			_creative_flow)
-	content.add_child(_creative_box)
-	_farm_box = _section("Farming guide  |  every crop: what it wants, how long it takes, what it gives",
-			FarmGuide.build(_show_slot))
-	content.add_child(_farm_box)
-
-	var hands := HBoxContainer.new()
-	hands.add_theme_constant_override("separation", GAP * 3)
-	var bp := VBoxContainer.new()
-	bp.add_theme_constant_override("separation", GAP)
-	_add_slot(bp, InvSlot.make(inv, Inventory.addr(&"backpack")))
-	hands.add_child(bp)
-	var off := VBoxContainer.new()
-	off.add_theme_constant_override("separation", GAP)
-	for i in Inventory.OFFHAND_SIZE:
-		_add_slot(off, InvSlot.make(inv, Inventory.addr(&"offhand", i)))
-	hands.add_child(off)
-	var bars := VBoxContainer.new()
-	bars.add_theme_constant_override("separation", GAP)
-	bars.add_child(_grid(&"hotbar_1", Inventory.HOTBAR_SIZE))
-	bars.add_child(_grid(&"hotbar_0", Inventory.HOTBAR_SIZE))
-	hands.add_child(bars)
-	content.add_child(_section("Backpack  |  off-hand  |  hotbar 2 / hotbar 1", hands))
-
-	_info = Label.new()
-	MenuFit.fit_label(_info, true)
-	_info.custom_minimum_size.y = MenuTheme.font_size() * 2.6
-	_info.add_theme_color_override("font_color", MenuTheme.text_dim)
-	content.add_child(_info)
-
-	var close := Button.new()
-	close.name = "Close"
-	close.text = "Close (E)"
-	close.pressed.connect(close_screen)
-	footer.add_child(close)
-
+	var center := CenterContainer.new()
+	center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	center.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	content.add_child(center)
+	_row = HBoxContainer.new()
+	_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	center.add_child(_row)
+	_build_left()
+	_build_right()
+	_tip = McStyle.Tooltip.new()
+	add_child(_tip)
 	_cursor = CursorView.new()
 	_cursor.inv = inv
 	add_child(_cursor)
-
 	inv.changed.connect(_refresh)
-	show_page("storage")
+	show_page("recipes")
+
+
+# ---------------------------------------------------------------------------
+# Building
+
+func _build_left() -> void:
+	_left_col = VBoxContainer.new()
+	_left_col.add_theme_constant_override("separation", 0)
+	_row.add_child(_left_col)
+	_left_tabs = HBoxContainer.new()
+	_left_col.add_child(_left_tabs)
+	for key in RecipeBook.CATEGORIES + ["creative", "farming", "", "all"]:
+		if key == "":
+			var gap := Control.new()
+			gap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			_left_tabs.add_child(gap)
+			continue
+		var t := McStyle.Tab.new()
+		t.name = "Tab_" + key
+		t.tip = TAB_NAMES[key]
+		if key == "all":
+			t.glyph = "search"
+		elif key == "creative":
+			t.glyph = "grid"
+		else:
+			t.icon_id = _first_item(TAB_ICONS.get(key, []))
+		t.pressed.connect(_on_left_tab.bind(key))
+		_left_tabs.add_child(t)
+		_tabs[key] = t
+	_left = McStyle.Box.new()
+	_left.name = "RecipeBook"
+	_left.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_left_col.add_child(_left)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 4)
+	_left.add_child(v)
+	_book_title = Label.new()
+	_book_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	v.add_child(_book_title)
+	_search_row = HBoxContainer.new()
+	v.add_child(_search_row)
+	_search = LineEdit.new()
+	_search.name = "Search"
+	_search.placeholder_text = "Search"
+	_search.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_search.text_changed.connect(func(_t: String) -> void: _rebuild_left(true))
+	_search_row.add_child(_search)
+	_toggle = McStyle.Toggle.new()
+	_toggle.name = "CraftableOnly"
+	_toggle.tip = "Show craftable recipes only"
+	_toggle.icon_id = _first_item([&"workbench"])
+	_toggle.on = craftable_only
+	_toggle.toggled.connect(func(on: bool) -> void:
+		craftable_only = on
+		_rebuild_left(true))
+	_search_row.add_child(_toggle)
+	_book_grid = _cell_grid(BOOK_COLS)
+	_book_scroll = _scroll(_book_grid)
+	v.add_child(_book_scroll)
+	_creative_grid = _cell_grid(BOOK_COLS)
+	for id in ItemCatalog.ids():
+		_add_slot(_creative_grid, InvSlot.make(inv, {}, id))
+	_creative_scroll = _scroll(_creative_grid)
+	v.add_child(_creative_scroll)
+	var guide := FarmGuide.build(_show_slot)
+	guide.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_farm_scroll = _scroll(guide)
+	v.add_child(_farm_scroll)
+
+
+func _build_right() -> void:
+	_right_col = VBoxContainer.new()
+	_right_col.add_theme_constant_override("separation", 0)
+	_row.add_child(_right_col)
+	_right_tabs = HBoxContainer.new()
+	_right_tabs.alignment = BoxContainer.ALIGNMENT_END
+	_right_col.add_child(_right_tabs)
+	_book_btn = McStyle.Tab.new()
+	_book_btn.name = "BookTab"
+	_book_btn.glyph = "book"
+	_book_btn.tip = "Recipe book: show / hide"
+	_book_btn.pressed.connect(func() -> void:
+		book_open = not book_open
+		_refresh()
+		_relayout())
+	_right_tabs.add_child(_book_btn)
+	_here_tab = McStyle.Tab.new()
+	_here_tab.on = true
+	_right_tabs.add_child(_here_tab)
+	var gap := Control.new()
+	gap.custom_minimum_size.x = 6
+	gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_right_tabs.add_child(gap)
+	_close = McStyle.Tab.new()
+	_close.name = "Close"
+	_close.glyph = "close"
+	_close.tip = "Close (E)"
+	_close.pressed.connect(close_screen)
+	_right_tabs.add_child(_close)
+
+	_right = McStyle.Box.new()
+	_right.name = "InventoryPanel"
+	_right_col.add_child(_right)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 4)
+	_right.add_child(v)
+
+	_chest_box = VBoxContainer.new()
+	_chest_box.add_theme_constant_override("separation", 2)
+	_chest_title = Label.new()
+	_chest_box.add_child(_chest_title)
+	_chest_grid = _cell_grid(Inventory.HOTBAR_SIZE)
+	for i in Inventory.CHEST_SIZE:
+		_add_slot(_chest_grid, InvSlot.make(inv, Inventory.addr(&"chest", i)))
+	_chest_box.add_child(_chest_grid)
+	v.add_child(_chest_box)
+
+	_craft_box = VBoxContainer.new()
+	_craft_box.add_theme_constant_override("separation", 2)
+	_craft_title = Label.new()
+	_craft_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_craft_box.add_child(_craft_title)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 0)
+	_craft_box.add_child(row)
+	# The backpack worn, where Minecraft has the armour (Docs/Inventory.md 8).
+	var bp := CenterContainer.new()
+	_backpack_slot = InvSlot.make(inv, Inventory.addr(&"backpack"))
+	_add_slot(bp, _backpack_slot)
+	row.add_child(bp)
+	var mid_box := HBoxContainer.new()
+	mid_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	mid_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	mid_box.add_theme_constant_override("separation", 0)
+	row.add_child(mid_box)
+	var ing_box := CenterContainer.new()
+	mid_box.add_child(ing_box)
+	_ingredients = _cell_grid(2)
+	ing_box.add_child(_ingredients)
+	_mid = Mid.new()
+	_mid.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	mid_box.add_child(_mid)
+	var res_box := CenterContainer.new()
+	mid_box.add_child(res_box)
+	_result = InvSlot.make(null, {}, &"")
+	_result.name = "Result"
+	_result.mc = true
+	_result.show_count = 1
+	_result.pressed.connect(_on_result_pressed)
+	res_box.add_child(_result)
+	# Balances the backpack slot, so the recipe sits in the middle.
+	var sp2 := Control.new()
+	sp2.name = "Balance"
+	sp2.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(sp2)
+	_craft_note = Label.new()
+	_craft_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_craft_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_craft_box.add_child(_craft_note)
+	v.add_child(_craft_box)
+
+	_inv_title = Label.new()
+	_inv_title.text = "Inventory"
+	v.add_child(_inv_title)
+	_no_pack = Label.new()
+	_no_pack.text = "No backpack worn: put one in the backpack slot to carry more."
+	_no_pack.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	v.add_child(_no_pack)
+	_storage_grid = _cell_grid(Inventory.HOTBAR_SIZE)
+	v.add_child(_storage_grid)
+	_rebuild_storage()
+	_hotbar_gap = Control.new()
+	_hotbar_gap.name = "HotbarGap"
+	_hotbar_gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(_hotbar_gap)
+	var bars := VBoxContainer.new()
+	bars.name = "Hotbars"
+	bars.add_theme_constant_override("separation", 3)
+	for area in [&"hotbar_1", &"hotbar_0"]:
+		var g := _cell_grid(Inventory.HOTBAR_SIZE)
+		for i in Inventory.HOTBAR_SIZE:
+			_add_slot(g, InvSlot.make(inv, Inventory.addr(area, i)))
+		bars.add_child(g)
+	v.add_child(bars)
+
+
+func _cell_grid(cols: int) -> GridContainer:
+	var g := GridContainer.new()
+	g.columns = cols
+	# Minecraft's slots touch: the bevel is the gap.
+	g.add_theme_constant_override("h_separation", 0)
+	g.add_theme_constant_override("v_separation", 0)
+	return g
+
+
+func _scroll(inner: Control) -> ScrollContainer:
+	var sc := ScrollContainer.new()
+	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	sc.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	sc.follow_focus = false
+	# As tall as the inventory panel beside it (the row gives both its height).
+	sc.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	sc.add_child(inner)
+	return sc
+
+
+func _first_item(ids: Array) -> StringName:
+	for id in ids:
+		if id != &"" and ItemCatalog.has(id):
+			return id
+	return &""
+
+
+## A clickable inventory (or creative catalog) slot.
+func _add_slot(parent: Node, s: InvSlot) -> void:
+	s.mc = true
+	s.custom_minimum_size = Vector2(_slot_px, _slot_px)
+	s.pressed.connect(_on_slot_pressed)
+	s.hovered.connect(_on_slot_hovered)
+	parent.add_child(s)
+	_slots.append(s)
+
+
+## A slot that only shows an item (the farming guide, the ingredients): no
+## clicks, but its name on hover.
+func _show_slot(id: StringName, n: int) -> InvSlot:
+	var s := InvSlot.make(null, {}, id)
+	s.mc = true
+	s.unit = _unit
+	s.show_count = maxi(n, 1)
+	s.custom_minimum_size = Vector2(_slot_px, _slot_px)
+	s.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	s.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	return s
 
 
 func _exit_tree() -> void:
@@ -171,85 +406,236 @@ func _exit_tree() -> void:
 		inv.changed.disconnect(_refresh)
 
 
-func _section(title: String, body_node: Control) -> VBoxContainer:
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", GAP)
-	var l := Label.new()
-	l.text = title
-	MenuFit.fit_label(l, true)
-	l.add_theme_color_override("font_color", MenuTheme.text_dim)
-	v.add_child(l)
-	v.add_child(body_node)
-	return v
+## No control takes the focus on open: keys are the screen's (the search box
+## takes it when clicked).
+func _first_focus() -> Control:
+	return null
 
 
-## The Craft page: one row a recipe -- what it makes (its icon), its name,
-## what it takes and where -- with Make / All; the ones that can be made
-## first, the rest after with what they lack. Rebuilt when the inventory
-## changes while it shows (a few dozen rows).
-func _rebuild_craft() -> void:
-	for c in _craft_list.get_children():
+# ---------------------------------------------------------------------------
+# Pages
+
+func show_page(p: String) -> void:
+	match p:
+		"creative":
+			page = "creative" if inv.creative else "recipes"
+		"farming":
+			page = "farming"
+		_:
+			# "storage", "craft", "recipes": the recipe book.
+			page = "recipes"
+	if p == "craft":
+		book_open = true
+	_rebuild_left(true)
+	_refresh()
+	_relayout()
+
+
+func _on_left_tab(key: String) -> void:
+	if key == "creative" or key == "farming":
+		show_page(key)
+		return
+	book_tab = key
+	show_page("recipes")
+
+
+## The left panel's contents for the page: the recipe cells (rebuilt when
+## other recipes show, or `force`), the creative catalog filtered by the search.
+func _rebuild_left(force := false) -> void:
+	if _book_grid == null:
+		return
+	for key in _tabs:
+		var t: McStyle.Tab = _tabs[key]
+		t.on = (page == key) or (page == "recipes" and key == book_tab)
+	(_tabs["creative"] as Control).visible = inv.creative
+	_book_scroll.visible = page == "recipes"
+	_creative_scroll.visible = page == "creative"
+	_farm_scroll.visible = page == "farming"
+	_search_row.visible = page != "farming"
+	_toggle.visible = page == "recipes"
+	match page:
+		"creative":
+			_book_title.text = "Creative items"
+			var q := _search.text.strip_edges().to_lower()
+			for s in _creative_grid.get_children():
+				var slot := s as InvSlot
+				slot.visible = q.is_empty() or str(ItemCatalog.get_def(slot.item_id).get("name", "")).to_lower().contains(q)
+			return
+		"farming":
+			_book_title.text = "Farming guide"
+			return
+	_book_title.text = "Craftable recipes" if craftable_only else "All recipes"
+	var near := _near()
+	var list := _book_recipes(near)
+	var names: Array = []
+	for r in list:
+		names.append(r.name)
+	if not force and names == _book_names:
+		for c in _book_grid.get_children():
+			var cell := c as InvSlot
+			var r: Dictionary = cell.get_meta("r")
+			cell.bad = not inv.can_craft(r, near)
+			cell.picked = not picked.is_empty() and picked.name == r.name
+			cell.queue_redraw()
+		return
+	_book_names = names
+	for c in _book_grid.get_children():
+		_book_grid.remove_child(c)
 		c.queue_free()
-	var near: Array = host.stations_near() if host != null and host.has_method("stations_near") else []
-	var names := PackedStringArray()
-	for st in near:
-		names.append(str(ItemCatalog.get_def(st).get("name", st)))
-	_craft_label.text = "Craft  |  stations in reach: %s  ·  Make: one  ·  All: as many as you can" % (
-			", ".join(names) if not names.is_empty() else "none (by hand only)")
+	for r in list:
+		var cell := InvSlot.make(null, {}, r.output)
+		cell.name = "Recipe_" + str(r.name).validate_node_name()
+		cell.mc = true
+		cell.unit = _unit
+		cell.show_count = int(r.count)
+		cell.custom_minimum_size = Vector2(_slot_px, _slot_px)
+		cell.bad = not inv.can_craft(r, near)
+		cell.picked = not picked.is_empty() and picked.name == r.name
+		cell.set_meta("recipe", r.name)
+		cell.set_meta("r", r)
+		cell.pressed.connect(func(_s: InvSlot, _b: int, _sh: bool, _d: bool) -> void: _pick(r))
+		_book_grid.add_child(cell)
+
+
+## The recipes the book shows: those of this station (a crafting table: by
+## hand and its own; another station: its own; the plain inventory: all),
+## in the tab, matching the search, craftable only if the switch says so;
+## what can be made first (Bedrock's).
+func _book_recipes(near: Array) -> Array:
+	var q := _search.text.strip_edges().to_lower()
 	var can: Array = []
 	var cannot: Array = []
 	for r in RecipeBook.all():
-		(can if inv.can_craft(r, near) else cannot).append(r)
-	for r in can + cannot:
+		if not _fits_station(r):
+			continue
+		if book_tab != "all" and r.category != book_tab:
+			continue
+		if not q.is_empty() and not str(r.name).to_lower().contains(q):
+			continue
 		var ok: bool = inv.can_craft(r, near)
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", GAP * 3)
-		row.modulate = Color(1, 1, 1, 1.0 if ok else 0.5)
-		row.add_child(_show_slot(r.output, int(r.count)))
-		var parts := PackedStringArray()
-		for inp in r.inputs:
-			parts.append("%s (%d)" % [RecipeBook.input_name(inp), inv.count_of(inp)])
-		var l := Label.new()
-		var lack := inv.missing(r, near)
-		l.text = "%s%s  ·  %s\n%s%s" % [r.name, "  x%d" % r.count if int(r.count) > 1 else "",
-				RecipeBook.station_name(r), " + ".join(parts),
-				"" if ok else "   --  needs " + ", ".join(lack)]
-		MenuFit.fit_label(l, true)
-		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		row.add_child(l)
-		for all in [false, true]:
-			var b := Button.new()
-			b.text = "All" if all else "Make"
-			b.disabled = not ok
-			# No focus: a click must not scroll the page under the mouse.
-			b.focus_mode = Control.FOCUS_NONE
-			b.set_meta("recipe", r.name)
-			b.set_meta("all", all)
-			b.pressed.connect(_make.bind(r, all))
-			row.add_child(b)
-		_craft_list.add_child(row)
+		if craftable_only and not ok:
+			continue
+		(can if ok else cannot).append(r)
+	return can + cannot
 
 
-func _make(r: Dictionary, all: bool) -> void:
-	var near: Array = host.stations_near() if host != null and host.has_method("stations_near") else []
-	var res := inv.craft(r, near, all)
+func _fits_station(r: Dictionary) -> bool:
+	if station == &"":
+		return true
+	if station == &"workbench":
+		return r.station == &"" or r.station == &"workbench"
+	return r.station == station
+
+
+func _near() -> Array:
+	return host.stations_near() if host != null and host.has_method("stations_near") else []
+
+
+## The recipe book cell of recipe `name` (the gate clicks it), or null.
+func recipe_cell(name: String) -> InvSlot:
+	for c in _book_grid.get_children():
+		if c.has_meta("recipe") and str(c.get_meta("recipe")) == name and not c.is_queued_for_deletion():
+			return c as InvSlot
+	return null
+
+
+func result_slot() -> InvSlot:
+	return _result
+
+
+func _pick(r: Dictionary) -> void:
+	picked = r
+	_rebuild_left()
+	_show_picked()
+
+
+# ---------------------------------------------------------------------------
+# The crafting area
+
+func _station_title() -> String:
+	match station:
+		&"":
+			return "Crafting"
+		&"workbench":
+			return "Crafting Table"
+	return str(ItemCatalog.get_def(station).get("name", station))
+
+
+## The picked recipe in the crafting area: its ingredients in the grid, red
+## where some are lacking; its result; what it still needs.
+func _show_picked() -> void:
+	var near := _near()
+	var furnace := station == &"furnace"
+	var cells := 4
+	var cols := 2
+	if furnace:
+		cols = 1
+		cells = 2
+	elif station == &"workbench":
+		cols = 3
+		cells = 9
+	var inputs: Array = picked.get("inputs", [])
+	cells = maxi(cells, inputs.size())
+	if _ingredients.columns != cols or _ingredients.get_child_count() != cells:
+		_ingredients.columns = cols
+		for c in _ingredients.get_children():
+			_ingredients.remove_child(c)
+			c.queue_free()
+		for i in cells:
+			var g := _show_slot(&"", 1)
+			g.name = "Ingredient%d" % i
+			_ingredients.add_child(g)
+	for i in _ingredients.get_child_count():
+		var g := _ingredients.get_child(i) as InvSlot
+		g.unit = _unit
+		g.custom_minimum_size = Vector2(_slot_px, _slot_px)
+		if i < inputs.size():
+			var inp: Dictionary = inputs[i]
+			g.item_id = inp.id if inp.tag == "" else _tag_example(inp.tag)
+			g.show_count = int(inp.count)
+			g.bad = inv.count_of(inp) < int(inp.count)
+			g.set_meta("input", inp)
+		else:
+			g.item_id = &""
+			g.show_count = 1
+			g.bad = false
+			if g.has_meta("input"):
+				g.remove_meta("input")
+		g.queue_redraw()
+	var ok := not picked.is_empty() and inv.can_craft(picked, near)
+	_result.item_id = picked.get("output", &"")
+	_result.show_count = int(picked.get("count", 1))
+	_result.queue_redraw()
+	_mid.furnace = furnace
+	_mid.lit = ok
+	_mid.queue_redraw()
+	_craft_note.remove_theme_color_override("font_color")
+	if picked.is_empty():
+		_craft_note.text = "Pick a recipe in the book." if book_open else "Open the recipe book (the book tab) to craft."
+	elif ok:
+		_craft_note.text = "Click the result to craft  ·  Shift-click: as many as you can"
+	else:
+		_craft_note.text = "Needs " + ", ".join(inv.missing(picked, near))
+		_craft_note.add_theme_color_override("font_color", Color("a02020"))
+
+
+func _on_result_pressed(_s: InvSlot, button: int, shift: bool, _double: bool) -> void:
+	if picked.is_empty() or button == MOUSE_BUTTON_MIDDLE:
+		return
+	craft(picked, shift)
+
+
+## Make recipe `r` once (or `all`: as many as can be), what does not fit
+## thrown in front of the player. How many were made.
+func craft(r: Dictionary, all := false) -> int:
+	var res := inv.craft(r, _near(), all)
 	for s in res.left:
 		if host != null and host.has_method("drop_from_player"):
 			host.drop_from_player(s)
+	return int(res.made)
 
 
-## A slot that only shows (the Recipes list): no clicks.
-func _show_slot(id: StringName, n: int) -> InvSlot:
-	var s := InvSlot.make(null, {}, id)
-	s.show_count = n
-	s.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	s.custom_minimum_size = Vector2(_slot_px * 0.7, _slot_px * 0.7)
-	s.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	s.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	return s
-
-
-## An item with tag `tag`, to draw for a "#tag" cell.
+## An item with tag `tag`, to draw for a "#tag" ingredient.
 func _tag_example(tag: String) -> StringName:
 	for id in ItemCatalog.ids():
 		if PackedStringArray(ItemCatalog.get_def(id).get("tags", [])).has(tag):
@@ -257,38 +643,8 @@ func _tag_example(tag: String) -> StringName:
 	return &""
 
 
-func _grid(area: StringName, n: int) -> GridContainer:
-	var g := GridContainer.new()
-	g.columns = Inventory.HOTBAR_SIZE
-	g.add_theme_constant_override("h_separation", GAP)
-	g.add_theme_constant_override("v_separation", GAP)
-	for i in n:
-		_add_slot(g, InvSlot.make(inv, Inventory.addr(area, i)))
-	return g
-
-
-func _add_slot(parent: Node, s: InvSlot) -> void:
-	s.custom_minimum_size = Vector2(_slot_px, _slot_px)
-	s.pressed.connect(_on_slot_pressed)
-	s.hovered.connect(_on_slot_hovered)
-	parent.add_child(s)
-	_slots.append(s)
-
-
-func show_page(p: String) -> void:
-	page = p if (p != "creative" or inv.creative) else "storage"
-	_tab_creative.visible = inv.creative
-	_tab_storage.button_pressed = page == "storage"
-	_tab_creative.button_pressed = page == "creative"
-	_tab_craft.button_pressed = page == "craft"
-	_tab_farm.button_pressed = page == "farming"
-	_storage_box.visible = page == "storage"
-	_craft_box.visible = page == "craft"
-	_creative_box.visible = page == "creative"
-	_farm_box.visible = page == "farming"
-	_refresh()
-	_relayout()            # the slot size depends on what the page shows
-
+# ---------------------------------------------------------------------------
+# Refresh
 
 ## The storage grid as big as the worn backpack (none: no slots).
 func _rebuild_storage() -> void:
@@ -298,59 +654,138 @@ func _rebuild_storage() -> void:
 	_storage_n = n
 	for c in _storage_grid.get_children():
 		_slots.erase(c)
+		_storage_grid.remove_child(c)
 		c.queue_free()
 	for i in n:
 		_add_slot(_storage_grid, InvSlot.make(inv, Inventory.addr(&"main", i)))
-	if inv.backpack == null:
-		_storage_label.text = "Storage  |  no backpack worn: put one in the backpack slot"
-	else:
-		_storage_label.text = "Storage  |  %s, %d slots" % [ItemCatalog.get_def(inv.backpack.id).get("name", "?"), n]
+	_set_slot_size()
 
 
 func _refresh() -> void:
-	if _info == null:
+	if _cursor == null:
 		return
+	var n0 := _storage_n
 	_rebuild_storage()
-	if page == "craft":
-		_rebuild_craft()
-	_chest_box.visible = not inv.chest_key.is_empty()
-	title_label.text = inv.chest_title if not inv.chest_key.is_empty() else "Inventory"
-	(_chest_box.get_child(0) as Label).text = inv.chest_title
+	var chest := not inv.chest_key.is_empty()
+	_chest_box.visible = chest
+	_craft_box.visible = not chest
+	_left_col.visible = book_open and not chest
+	_book_btn.visible = not chest
+	_storage_grid.visible = _storage_n > 0
+	_no_pack.visible = _storage_n <= 0
+	_chest_title.text = inv.chest_title
+	_craft_title.text = _station_title()
+	if chest:
+		_here_tab.icon_id = _first_item([&"chest"])
+		_here_tab.tip = inv.chest_title
+	else:
+		_here_tab.icon_id = _first_item([station, &"workbench"])
+		_here_tab.tip = _craft_title.text
+	_here_tab.queue_redraw()
 	for s in _slots:
-		if not s.addr.is_empty() and s.addr.area == &"chest":
-			# A backpack put down has fewer slots than a chest.
-			s.visible = int(s.addr.index) < inv.area_size(&"chest")
 		if not s.addr.is_empty():
 			var a: Dictionary = s.addr
-			s.selected = (a.area == inv.hotbar_area() and a.index == inv.active_slot) \
-					or (a.area == &"offhand" and a.index == inv.active_offhand)
+			if a.area == &"chest":
+				# A backpack put down has fewer slots than a chest.
+				s.visible = int(a.index) < inv.area_size(&"chest")
+			s.selected = a.area == inv.hotbar_area() and a.index == inv.active_slot
 		s.queue_redraw()
+	if not chest:
+		_rebuild_left()
+		_show_picked()
 	_cursor.visible = inv.cursor != null
 	_cursor.queue_redraw()
-	_show_info()
+	_update_tip()
+	if n0 != _storage_n:
+		_relayout()        # a backpack on or off: other rows, other slot size
 
 
-func _show_info() -> void:
-	var s: ItemStack = _hovered.stack() if _hovered != null and is_instance_valid(_hovered) else null
-	if s == null:
-		_info.text = "Left: take / put   Right: half / one   Shift: the other side   Double: gather   Drag: spread   1-9 over a slot: to that hotbar slot   E: close"
+# ---------------------------------------------------------------------------
+# The name beside the mouse
+
+func _process(_delta: float) -> void:
+	_update_tip()
+
+
+func _update_tip() -> void:
+	if _tip == null or get_viewport() == null:
 		return
-	var d := ItemCatalog.get_def(s.id)
-	var line := "%s  (%s)" % [ItemCatalog.label(s), d.get("kind", "?")]
-	if s.count > 1 and not (inv.creative and d.get("kind", "") == "block"):
-		line += "  x%d" % s.count
-	var desc := str(d.get("description", ""))
-	_info.text = line + ("\n" + desc if not desc.is_empty() else "")
+	var c: Control = get_viewport().gui_get_hovered_control()
+	var lines: Array = [] if inv.cursor != null else tip_lines(c)
+	var at := _mouse_at if _mouse_at.x >= 0.0 else get_viewport().get_mouse_position()
+	_tip.font_size = _font
+	_tip.show_lines(lines, at, get_viewport().get_visible_rect())
+
+
+## What the tooltip says over control `c`: [[text, colour], ...]; [] for none.
+func tip_lines(c: Control) -> Array:
+	if c == null or not c.is_visible_in_tree() or not is_ancestor_of(c):
+		return []
+	if c is McStyle.Tab:
+		var tb := c as McStyle.Tab
+		return [] if tb.tip.is_empty() else [[tb.tip, McStyle.TIP_NAME]]
+	if c is McStyle.Toggle:
+		var tg := c as McStyle.Toggle
+		return [[tg.tip, McStyle.TIP_NAME], ["On" if tg.on else "Off", McStyle.TIP_GREY]]
+	if not (c is InvSlot):
+		return []
+	var s := c as InvSlot
+	var near := _near()
+	if s.has_meta("r"):
+		var r: Dictionary = s.get_meta("r")
+		var out: Array = [[str(r.name) + ("  x%d" % int(r.count) if int(r.count) > 1 else ""), McStyle.TIP_NAME]]
+		if r.station != &"":
+			out.append(["Made " + RecipeBook.station_name(r), McStyle.TIP_GREY])
+		for m in inv.missing(r, near):
+			out.append(["Needs " + m, McStyle.TIP_RED])
+		return out
+	if s == _result:
+		if picked.is_empty():
+			return []
+		var ok := inv.can_craft(picked, near)
+		return [[str(picked.name) + ("  x%d" % int(picked.count) if int(picked.count) > 1 else ""), McStyle.TIP_NAME],
+				["Click: craft one  ·  Shift-click: craft all" if ok else "Cannot be made yet",
+						McStyle.TIP_GREY if ok else McStyle.TIP_RED]]
+	if s.has_meta("input"):
+		var inp: Dictionary = s.get_meta("input")
+		var have := inv.count_of(inp)
+		var nm: String = ("Any " + inp.tag) if inp.tag != "" else str(ItemCatalog.get_def(inp.id).get("name", inp.id))
+		return [[nm, McStyle.TIP_NAME], ["Needs %d  ·  you have %d" % [int(inp.count), have],
+				McStyle.TIP_GREY if have >= int(inp.count) else McStyle.TIP_RED]]
+	var st := s.stack()
+	if st == null:
+		if s == _backpack_slot:
+			return [["Backpack slot", McStyle.TIP_NAME], ["Wear a backpack here to carry more", McStyle.TIP_GREY]]
+		return []
+	var out2: Array = [[ItemCatalog.label(st), McStyle.TIP_NAME]]
+	var d := ItemCatalog.get_def(st.id)
+	for line in _wrap(str(d.get("description", "")), 40):
+		out2.append([line, McStyle.TIP_GREY])
+	if s.addr.is_empty() and s.show_count == 0 and inv.creative:
+		out2.append(["Click: take a stack  ·  Shift: into the inventory", Color("8080ff")])
+	return out2
+
+
+static func _wrap(text: String, width: int) -> PackedStringArray:
+	var out := PackedStringArray()
+	var line := ""
+	for w in text.split(" ", false):
+		if not line.is_empty() and line.length() + 1 + w.length() > width:
+			out.append(line)
+			line = w
+		else:
+			line = w if line.is_empty() else line + " " + w
+	if not line.is_empty():
+		out.append(line)
+	return out
 
 
 # ---------------------------------------------------------------------------
 # Mouse
 
 func _on_slot_hovered(s: InvSlot) -> void:
-	_hovered = s
 	if inv.is_dragging() and not s.addr.is_empty():
 		inv.drag_touch(s.addr)
-	_show_info()
 
 
 func _on_slot_pressed(s: InvSlot, button: int, shift: bool, double: bool) -> void:
@@ -418,12 +853,23 @@ func _input(event: InputEvent) -> void:
 			if s != null and not s.addr.is_empty():
 				inv.drag_touch(s.addr)
 		return
-	if event is InputEventMouseButton and not event.pressed and inv.is_dragging():
-		inv.finish_drag()
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		_mouse_at = mb.position
+		if mb.pressed and _search.has_focus() and not _search.get_global_rect().has_point(mb.position):
+			_search.release_focus()
+		if not mb.pressed and inv.is_dragging():
+			inv.finish_drag()
 		return
 	if not (event is InputEventKey):
 		return
 	var k := event as InputEventKey
+	if _search.has_focus():
+		# Typing in the search box: the keys are its, but for leaving it.
+		if k.pressed and (k.keycode == KEY_ESCAPE or k.keycode == KEY_ENTER or k.keycode == KEY_KP_ENTER):
+			_search.release_focus()
+			get_viewport().set_input_as_handled()
+		return
 	# Every key is the screen's while it is open: none walks, flies or fires.
 	get_viewport().set_input_as_handled()
 	if not k.pressed or k.echo:
@@ -460,7 +906,7 @@ func close_screen() -> void:
 		# No room: it is thrown in front of the player, not lost.
 		thrown.append(inv.cursor)
 		inv.cursor = null
-	# What is left in the craft grid goes back too (Minecraft's).
+	# What is left in the old craft grid goes back too (Minecraft's).
 	thrown.append_array(inv.clear_craft())
 	if host != null and host.has_method("drop_from_player"):
 		for s in thrown:
@@ -478,23 +924,81 @@ func _on_back() -> bool:
 # Layout: the slots as big as the room allows
 
 func _on_relayout(vp_size: Vector2) -> void:
-	var w := available_width(vp_size)
-	# 9 columns + the off-hand column beside the hotbars.
-	var by_w := (w - GAP * 15.0) / 11.4
-	# Rows of slots on the page, and the section titles over them: the hands
-	# (the last section) should be on screen without scrolling where it can.
-	var chest := inv != null and not inv.chest_key.is_empty()
-	var rows := ceilf(maxf(_storage_n, 0) / 9.0) + 2.0
-	var sections := 2.0
+	if _right == null or inv == null:
+		return
+	var chest := not inv.chest_key.is_empty()
+	var book := book_open and not chest
+	var pad_f := 0.36
+	# Widths in slots: the right panel 9 + padding; the book 7 + its scroll bar.
+	var w_slots := 9.0 + pad_f * 2.0 + 0.2
+	if book:
+		w_slots += BOOK_COLS + 0.5 + pad_f * 2.0 + 0.3
+	# Heights in slots: tabs, padding, the top section, titles and notes,
+	# the storage rows, the gap, two hotbars.
+	var store_rows := ceilf(maxf(_storage_n, 0) / 9.0) if _storage_n > 0 else 0.8
+	var top := 3.0 if station == &"workbench" else 2.0
+	var text_rows := 4.0
 	if chest:
-		rows += 3.0
-		sections += 1.0
-	var by_h := (vp_size.y - 220.0 - sections * 30.0) / (rows * 1.1)
+		top = ceilf(inv.area_size(&"chest") / 9.0)
+		text_rows = 2.0
+	var h_slots := 0.95 + pad_f * 2.0 + top + text_rows * 0.62 + store_rows + 0.3 + 2.1 + 0.25
+	var avail_h := vp_size.y - 2.0 * MenuFit.page_padding(vp_size) - 8.0
+	var by_w := (available_width(vp_size) - 4.0) / w_slots
+	var by_h := avail_h / h_slots
 	_slot_px = floorf(clampf(minf(by_w, by_h), MIN_SLOT, MAX_SLOT))
-	for s in _slots:
-		s.custom_minimum_size = Vector2(_slot_px, _slot_px)
+	_unit = maxf(1.0, roundf(_slot_px / 18.0))
+	_font = clampi(int(roundf(_slot_px * 0.42)), 10, 20)
+	var pad := int(roundf(_slot_px * pad_f))
+	var th := McStyle.theme(_font)
+	_right.theme = th
+	_left.theme = th
+	for b in [_left, _right]:
+		(b as McStyle.Box).unit = _unit
+		(b as McStyle.Box).set_pad(pad)
+		(b as Control).queue_redraw()
+	_row.add_theme_constant_override("separation", int(roundf(_slot_px * 0.3)))
+	var tab := Vector2(roundf(_slot_px * 1.05), roundf(_slot_px * 0.95))
+	for t in _tabs.values() + [_book_btn, _here_tab, _close]:
+		(t as McStyle.Tab).custom_minimum_size = tab
+		(t as McStyle.Tab).unit = _unit
+	_left_tabs.add_theme_constant_override("separation", int(_unit))
+	_right_tabs.add_theme_constant_override("separation", int(_unit))
+	_toggle.custom_minimum_size = Vector2(roundf(_slot_px * 1.5), roundf(_slot_px * 0.75))
+	_toggle.unit = _unit
+	_search.custom_minimum_size.y = roundf(_slot_px * 0.75)
+	var bar_w := 10.0
+	var vb := _book_scroll.get_v_scroll_bar()
+	if vb != null:
+		bar_w = maxf(vb.get_combined_minimum_size().x, 10.0)
+	var book_w := BOOK_COLS * _slot_px + bar_w + 2.0
+	# At least three rows; it stretches to the inventory panel's height.
+	for sc in [_book_scroll, _creative_scroll, _farm_scroll]:
+		(sc as ScrollContainer).custom_minimum_size = Vector2(book_w, _slot_px * 3.0)
+	_mid.custom_minimum_size = Vector2(roundf(_slot_px * (1.9 if station == &"furnace" else 1.4)), _slot_px)
+	_result.custom_minimum_size = Vector2(roundf(_slot_px * 1.35), roundf(_slot_px * 1.35))
+	_result.unit = _unit
+	(_right.find_child("Balance", true, false) as Control).custom_minimum_size.x = _slot_px
+	_hotbar_gap.custom_minimum_size.y = roundf(_slot_px * 0.2)
+	_craft_note.custom_minimum_size.x = 9.0 * _slot_px
+	_no_pack.custom_minimum_size.x = 9.0 * _slot_px
+	_set_slot_size()
 	if _cursor != null:
 		_cursor.size = Vector2(_slot_px, _slot_px)
+
+
+func _set_slot_size() -> void:
+	var sz := Vector2(_slot_px, _slot_px)
+	for s in _slots:
+		s.custom_minimum_size = sz
+		s.unit = _unit
+	if _book_grid != null:
+		for c in _book_grid.get_children() + _ingredients.get_children():
+			(c as InvSlot).custom_minimum_size = sz
+			(c as InvSlot).unit = _unit
+	if _farm_scroll != null:
+		for c in _farm_scroll.find_children("*", "InvSlot", true, false):
+			(c as InvSlot).custom_minimum_size = sz
+			(c as InvSlot).unit = _unit
 
 
 ## The held stack, drawn under the mouse over everything.
@@ -510,3 +1014,21 @@ class CursorView extends Control:
 	func _draw() -> void:
 		if inv != null and inv.cursor != null:
 			InvSlot.draw_stack(self, Rect2(Vector2.ZERO, size), inv.cursor, 0, false)
+
+
+## Between the ingredients and the result: the arrow, and at a furnace its
+## flame, lit when the picked recipe can be made.
+class Mid extends Control:
+	var furnace := false
+	var lit := false
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _draw() -> void:
+		var h := size.y
+		if furnace:
+			McStyle.draw_flame(self, Rect2(Vector2(h * 0.05, h * 0.15), Vector2(h * 0.7, h * 0.7)), lit)
+			McStyle.draw_arrow(self, Rect2(Vector2(h * 0.85, h * 0.3), Vector2(size.x - h * 1.0, h * 0.4)))
+		else:
+			McStyle.draw_arrow(self, Rect2(Vector2(size.x * 0.18, h * 0.3), Vector2(size.x * 0.64, h * 0.4)))

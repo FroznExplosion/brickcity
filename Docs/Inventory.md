@@ -4,7 +4,7 @@ Ported from zylanntest's `game/inventory/` (its README is the design this
 follows), shaped to brickcity: content packs, MenuScreen, no renderer
 read-backs, and the arsenal left alone.
 
-Status: stages 1-12 built (round three, 2026-11-24: guns as items, materials and shapes, Terraria crafting).
+Status: stages 1-12 built (round three, 2026-11-24: guns as items, materials and shapes, Terraria crafting); 2026-11-25 Minecraft's menus and Bedrock's recipe book (section 14).
 
 ## 1. Two systems, one pair of hands
 
@@ -427,3 +427,74 @@ workbench, pickaxe 12 wood (the handle) + 24 stone + 12 iron ore.
 `yield_cells`, the recipes, felled round trip. `--gate=inventory`: survival,
 a tree looked at, LMB, wood and leaves in the inventory, the tree gone from
 the set, a wood brick laid from the stack.
+
+## 14. Minecraft's menus (2026-11-25)
+
+The user: model the inventory, crafting, furnace and the other item menus on
+Minecraft's, crafting on Bedrock's recipe book; hover an item and its name
+pops up beside it; no armour, no off-hand, no player figure. Templates: the
+Minecraft wiki's Bedrock screenshots (crafting table with the recipe book,
+furnace recipe book, chest).
+
+**The look** (`McStyle`, scripts/inventory/mc_style.gd), drawn from colours,
+no textures, scaled by the slot size (one Minecraft pixel = slot / 18):
+light grey panel #C6C6C6 with a black edge (corners cut), white top-left and
+#555 bottom-right bevel; sunken #8B8B8B slots that touch (dark top-left,
+white bottom-right); dark grey #3F3F3F titles; Bedrock's red cell (#C8605D)
+for what cannot be made or is lacking; tabs over the panels; the tooltip
+near-black with a purple edge, the name white and the lines after it grey
+(red for what is missing). `InvSlot.mc` switches a slot to this look (the
+HUD hotbar keeps its dark one); `bad` makes it red, `picked` frames it.
+
+**The screen** (`InventoryScreen`, still a MenuScreen so it fits any window):
+
+| Left panel (the recipe book) | Right panel |
+|---|---|
+| tabs: Construction, Equipment, Items, Nature, Creative (creative only), Farming, All (search) | tabs: recipe book on/off, this screen, X close |
+| "Craftable recipes" / "All recipes", a search box, the craftable-only switch | "Crafting" (E), "Crafting Table", "Furnace", or the station's name: the backpack slot (where Minecraft has the armour), the picked recipe's ingredients in a grid (2x2; 3x3 at a crafting table; one column and a flame at a furnace), an arrow, the result |
+| the recipes as cells: grey can be made now, red cannot, what can be made first | the note: what it still needs (red), or "Click the result to craft · Shift-click: as many as you can" |
+| Creative: every item (search filters); Farming: the farming guide | "Inventory": the worn backpack's slots, then hotbar 2 and hotbar 1 |
+
+At a chest (or a backpack put down) the book is hidden and "Chest" with its
+slots stands where the crafting area is. Click a recipe cell to pick it;
+click the result to make one, Shift-click to make as many as you can (up to
+64 times; what does not fit is thrown in front of the player). The result
+goes into the inventory, as Terraria's did (stage 12): the recipes are still
+ingredient lists, not shapes, so the grid only shows them.
+
+- **Which recipes a screen shows.** E (no station): every recipe, those
+  needing a station not in reach red. A crafting table (RMB on a workbench):
+  by hand and the workbench's. Any other station (furnace, compost bin, a
+  mod's): only its own. `InventoryScreen.open_station(id)`; mine_world's
+  `open_chest` calls it for a station.
+- **Recipe tabs.** A recipe's `category` (in its table), else its output
+  item's `category`, else by kind: blocks construction; tools, weapons,
+  buckets, backpacks equipment; seeds, crops, fluids nature; the rest items
+  (`RecipeBook.category_of_item`).
+- **The tooltip.** Over any slot, recipe cell, ingredient, result, tab or
+  the switch: `InventoryScreen.tip_lines(control)`, placed right of and above
+  the mouse, kept on screen; hidden while a stack is held (Minecraft's).
+  An item's `description` shows as grey lines under its name.
+- **Kept between openings:** the book shown or hidden, the switch
+  (`book_open`, `craftable_only`, static).
+- The search box takes typing only after it is clicked; Escape or Enter
+  leaves it, a click elsewhere too. Otherwise every key is the screen's (E,
+  Tab, Escape, Q, 1-9 as before).
+
+**No off-hand.** Gone from the screen, the HUD and the rules: no X hold
+(X just swaps the hotbars), crafting and shift-click no longer use it, the
+hotbars take every item. An old save's off-hand items are moved into the
+inventory on load (`from_dict`); the save keeps the empty `offhand` array.
+
+**Not done (Minecraft has it):** furnaces that smelt over time with fuel,
+3x3 shapes, the result onto the cursor. The furnace screen makes its
+recipes at once, like the others.
+
+**Tests.** inventory_probe: the off-hand checks pruned (no off-hand), an old
+save's off-hand pickaxe moved into the inventory. `--gate=inventory`: the
+farming top-ups cleared first (they filled the slots the checks use); the
+recipe book's tabs; the name beside the mouse; Gravel picked in the book and
+made by a click on the result; Sandstone red without a workbench; the
+craftable-only switch; at the workbench Sandstone made the same way; the
+furnace screen lists only furnace recipes. Pictures: user://dev/inv_tooltip,
+inv_craft, inv_craftable_only, inv_workbench, inv_furnace, inv_chest.

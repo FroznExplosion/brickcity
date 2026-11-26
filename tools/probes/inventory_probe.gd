@@ -13,8 +13,8 @@ extends SceneTree
 ##             of its kind) and never past the max.
 ##   clicks    left/right/shift/double click and the drags do what
 ##             Minecraft's do (zylanntest's rules, Docs/Inventory.md 3.2).
-##   hands     the off-hand takes only one-handed items; 1-9/wheel/X choose
-##             the hand; pick finds a block or (creative) makes one;
+##   hands     no off-hand (Docs/Inventory.md 14: an old save's goes into
+##             the inventory); 1-9/wheel/X choose the hand; pick finds a block or (creative) makes one;
 ##             survival uses stacks up, creative never does.
 ##   chest     a borrowed chest array is changed in place by the clicks and
 ##             shift-click moves between it and the player.
@@ -120,9 +120,6 @@ func _screen_rules() -> void:
 	inv.swap_with_hotbar(A(&"main", 2), 4)
 	_ok("5 over a storage slot swaps it with hotbar slot 5", inv.hotbars[0][4].id == &"clay"
 			and inv.main[2].id == &"ice")
-	inv.offhands[0] = ItemStack.make(&"pickaxe", 1)
-	inv.swap_with_hotbar(A(&"offhand", 0), 4)
-	_ok("... never a block into the off-hand", inv.offhands[0].id == &"pickaxe" and inv.hotbars[0][4].id == &"clay")
 	inv.cursor = ItemStack.make(&"ice", 5)
 	_ok("the held stack goes back, onto its own kind first", inv.return_cursor() and inv.cursor == null
 			and inv.main[2].count == 8)
@@ -131,7 +128,6 @@ func _screen_rules() -> void:
 	for b in 2:
 		for i in Inventory.HOTBAR_SIZE:
 			inv.hotbars[b][i] = ItemStack.make(&"obsidian", 64)
-	inv.offhands[1] = ItemStack.make(&"pickaxe", 1)
 	inv.cursor = ItemStack.make(&"snow", 2)
 	_ok("no room: it stays on the cursor", not inv.return_cursor() and inv.cursor != null)
 ## The Mega Pickaxe (2026-11-19): in the kit right after the pickaxe, and put
@@ -260,12 +256,11 @@ func _hands() -> void:
 	inv.seed_default()
 	_ok("the kit: materials on bar 1, the bucket on bar 2", inv.hand() != null and inv.hand().id == &"soil"
 			and inv.hotbars[1][0] != null and inv.hotbars[1][0].id == &"bucket")
-	inv.cursor = ItemStack.make(&"stone", 1)
-	inv.left_click(A(&"offhand", 0))
-	_ok("a block does not go in the off-hand", inv.offhands[0] == null and inv.cursor != null)
-	inv.cursor = ItemStack.make(&"pickaxe", 1)
-	inv.left_click(A(&"offhand", 0))
-	_ok("a one-handed tool does", inv.offhands[0] != null and inv.cursor == null)
+	var oh := Inventory.new()
+	oh.from_dict({"format": 2, "hotbar_0": [], "hotbar_1": [], "offhand": [{"id": "pickaxe", "count": 1}],
+			"backpack": {"id": "large_backpack", "count": 1, "contents": []}})
+	_ok("no off-hand: an old save's off-hand pickaxe is moved into the inventory",
+			oh.offhands[0] == null and oh.count_of({"id": &"pickaxe", "tag": "", "count": 1}) == 1)
 	inv.select_slot(3)
 	inv.scroll(-4)
 	_ok("the wheel wraps round the bar", inv.active_slot == 8)
