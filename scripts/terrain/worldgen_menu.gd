@@ -221,15 +221,15 @@ func _build_world_tab() -> void:
 	r.add_child(_seed_box)
 	_button(r, "Random", func() -> void:
 		_seed_box.value = randi() % 2000000000)
-	_int_slider(p, "Full detail radius (tiles)", s, "detail_tiles", 2, 8)
-	# Underground: how far the caves are drawn (the deep tier), past which a
-	# black fade (MineWorld.md 19). Costs bakes and memory as it grows.
-	_int_slider(p, "Cave view distance (tiles)", s, "cave_tiles", 2, 8)
-	# The geometry chamfer on the ground near the camera (TerrainTile).
-	_check(p, "Chamfered brick edges", s, "chamfer")
+	# How the world is DRAWN (detail, cave and far distances, real brick
+	# edges, cave darkness) is the World view menu's, applied in play
+	# (Docs/MineWorld.md 22); everything here takes effect on Generate world.
+	var vr := _row(p, "")
+	_button(vr, "World view (distances, brick edges, caves)...", func() -> void:
+		host.open_view_menu(get_parent() as CanvasLayer))
+	p.add_child(_note("View settings apply at once, in this world, with their own Apply. Everything on these tabs is the world itself: it takes effect when you press Generate world."))
 	# Towns: city towers stamped into the ground (Docs/TerrainBuildings.md 8).
 	_check(p, "Towns (city buildings)", s, "towns")
-	_int_slider(p, "View distance (tiles of far rings)", s, "far_tiles", 16, 192)
 	_float_slider(p, "World height scale", s.gen, "height_scale", 0.2, 3.0, 0.05)
 	_section(p, "Game mode")
 	# Not part of the settings being edited: it changes THIS world at once,

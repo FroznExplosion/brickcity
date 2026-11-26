@@ -115,8 +115,8 @@ var hands: MineHands = null
 ## null with --no-sky-light.
 var sky_lit: MineSkyLit = null
 ## THE BRICK OVERLAY (Docs/BrickOverlay.md): real bevelled bricks over the
-## flat ground near the eye. On with the world setting Chamfered brick edges
-## (off: the flat ground alone).
+## flat ground near the eye. On with World view's Real brick edges near you
+## (WorldView "chamfer"; off: the flat ground alone).
 var bricks: TerrainBricks = null
 var _overlay_on := false
 
@@ -302,6 +302,9 @@ func _ready() -> void:
 			for p in Presets.list():
 				if str(p.name).to_lower() == arg.split("=")[1].to_lower():
 					start = Presets.load_settings(p.path)
+	# How the world is drawn (Docs/MineWorld.md 22): the player's, or the
+	# defaults for a gate; the old world settings seed it the first time.
+	WorldView.load_for(_gate, start)
 	generate(start)
 	if _gate:
 		if _water_gate:
@@ -356,6 +359,8 @@ func _ready() -> void:
 			_run_skylit_gate()
 		elif "--gate=seams" in OS.get_cmdline_user_args():
 			_run_seams_gate()
+		elif "--gate=view" in OS.get_cmdline_user_args():
+			_run_view_gate()
 		elif "--gate=slits" in OS.get_cmdline_user_args():
 			_run_slits_gate()
 		elif "--gate=bricks" in OS.get_cmdline_user_args():
@@ -439,7 +444,7 @@ func generate(s: Dictionary) -> void:
 	var cell := _find_spawn(want)
 	# The sea is water unless the settings say not (Docs/MineWater.md 9); its
 	# first shore field round the spawn.
-	water.reset_world(sea, clampi(int(settings.get("detail_tiles", 4)), 2, 8),
+	water.reset_world(sea, int(WorldView.get_value("detail_tiles")),
 			bool(settings.gen.get("water", true)), float(settings.gen.get("wave_scale", 1.0)), cell)
 	# The water's meshes carry each vertex's sky light (COLOR.b): a cave pool
 	# as dark as its cave (MineWorld.md 19).
@@ -453,9 +458,11 @@ func generate(s: Dictionary) -> void:
 	spawn_xz = Vector2((cell.x + 0.5) * stud, (cell.y + 0.5) * stud)
 	var feet := Vector3(spawn_xz.x, _ground_m(cell.x, cell.y) + 0.05, spawn_xz.y)
 
-	var near := clampi(int(settings.get("detail_tiles", 4)), 2, 8)
+	var near := int(WorldView.get_value("detail_tiles"))
 	# Real bevels near the camera (Chamfered brick edges): the brick overlay.
-	_overlay_on = bool(settings.get("chamfer", true))
+	_overlay_on = bool(WorldView.get_value("chamfer"))
+	TerrainCoarse.detail = int(WorldView.get_value("far_detail"))
+	_apply_cave_light()
 	# The solid behind the overlay's bricks, baked inside the ground, so a
 	# shot brick's hole shows real bricks the frame it is hit
 	# (Docs/BrickOverlay.md 6b); `-- --no-behind` = the stand-in box instead.
@@ -485,11 +492,11 @@ func generate(s: Dictionary) -> void:
 
 	_deep = TerrainDeep.new()
 	_deep.name = "Deep"
-	# How far caves are drawn (the settings' Cave view distance, default the
-	# surface's detail; it was 2, ~25 m: a long cave ended in nothing while
+	# How far caves are drawn (World view's Cave view distance; it was 2,
+	# ~25 m: a long cave ended in nothing while
 	# its water, drawn further, hung in the air). Past it, a black fade
 	# (_cave_fog).
-	_deep.radius = clampi(int(settings.get("cave_tiles", near)), 2, 8)
+	_deep.radius = int(WorldView.get_value("cave_tiles"))
 	# Up and down too: one section each way (~11 m) left a deep hole empty
 	# below while the fade only reached across. Half the radius in sections
 	# (a section is ~11 m, a tile 11.2 m), so 4 tiles -> 2, 8 -> 4.
@@ -599,7 +606,7 @@ func _new_far(tile: Vector2i) -> TerrainCoarse:
 
 
 func _far_tiles() -> int:
-	return clampi(int(settings.get("far_tiles", 64)), 16, 192)
+	return int(WorldView.get_value("far_tiles"))
 
 
 func _tile_of(p: Vector3) -> Vector2i:
@@ -1241,8 +1248,8 @@ var _sky_light_on := not ("--no-sky-light" in OS.get_cmdline_user_args())
 ## the ambient, the sun and the sky.
 var _cave_light := 1.0
 ## The light left deep underground (x the open-air light): the shader's
-## `sky_light_floor` too.
-const CAVE_DEEP_LIGHT := 0.015
+## `sky_light_floor` too. World view's Darkest cave light (WorldView).
+static var CAVE_DEEP_LIGHT := 0.015
 ## The shader's `sky_light_curve`: Minecraft's 0.8 a level.
 const SKY_LIGHT_CURVE := 0.8
 ## The eye's sky light level (0..15, BrickTerrain.sky_light_at), asked again
@@ -1358,7 +1365,8 @@ func _follow_far(eye: Vector3) -> void:
 	if _far_next == null:
 		var d := t - _far.anchor
 		# Re-laid as well when Distant Ground Detail changed (TerrainCoarse.detail).
-		if maxi(absi(d.x), absi(d.y)) >= REANCHOR_TILES or _far.built_detail != TerrainCoarse.detail:
+		if maxi(absi(d.x), absi(d.y)) >= REANCHOR_TILES or _far.built_detail != TerrainCoarse.detail \
+				or _far._reach_tiles != _far_tiles():
 			_far_next = _new_far(t)
 			_far_next.hold = fast_hold
 			_far_next.visible = false
@@ -1562,7 +1570,8 @@ func _cave_fog() -> void:
 	if water != null and int(water.get("_under_mode")) != 0:
 		_cave_fog_on = false
 		return
-	var k := clampf((1.0 - _cave_light) * 1.25 - 0.1, 0.0, 1.0) if _deep.active else 0.0
+	var k := clampf((1.0 - _cave_light) * 1.25 - 0.1, 0.0, 1.0) \
+			if _deep.active and bool(WorldView.get_value("cave_fade")) else 0.0
 	if k <= 0.01:
 		if _cave_fog_on:
 			env.fog_enabled = false
@@ -1653,6 +1662,59 @@ func toggle_menu() -> void:
 	if cam != null:
 		cam._set_captured(false)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+## THE WORLD VIEW MENU (world_view_menu.gd; Docs/MineWorld.md 22): its own
+## layer, over the world menu when opened from it.
+func open_view_menu(over: CanvasLayer = null) -> void:
+	var layer := CanvasLayer.new()
+	layer.name = "WorldViewLayer"
+	layer.layer = (over.layer + 1) if over != null else 80
+	layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(layer)
+	var m: Control = load("res://scripts/terrain/world_view_menu.gd").new()
+	m.name = "WorldViewMenu"
+	m.setup(self, layer)
+	layer.add_child(m)
+
+
+## Put WorldView's values in, now, in play: the radii follow at once (the
+## streamer and deep tier fill out or drop), the far tier is laid out again on
+## the workers and swapped in, the overlay goes on or off, the cave light and
+## fade change.
+func apply_view() -> void:
+	var near := int(WorldView.get_value("detail_tiles"))
+	if water != null:
+		water.set_near_tiles(near)
+	if _streamer != null:
+		_streamer.near_radius = near
+		_streamer.keep_radius = near + 2
+	if _deep != null:
+		_deep.radius = int(WorldView.get_value("cave_tiles"))
+		_deep.up = clampi(ceili(_deep.radius / 2.0), 1, 4)
+		_deep.down = _deep.up
+	var on := bool(WorldView.get_value("chamfer"))
+	if on != _overlay_on:
+		_overlay_on = on
+		BrickTerrain.set_behind_faces(on and not ("--no-behind" in OS.get_cmdline_user_args()))
+		if bricks != null:
+			bricks.set_enabled(on)
+	TerrainCoarse.detail = int(WorldView.get_value("far_detail"))
+	var far := _far_tiles() * BrickTerrain.get_tile_studs() * BrickWorld.get_stud_metres() + 300.0
+	if walker != null:
+		walker.camera.far = far
+	if cam != null:
+		cam.far = far
+	_apply_cave_light()
+
+
+## Darkest cave light: the ground's (and its studs') floor, and the exposure's.
+func _apply_cave_light() -> void:
+	var f := float(WorldView.get_value("cave_light"))
+	CAVE_DEEP_LIGHT = maxf(f, 0.001)
+	for m in [_mat, TerrainTile.sky_stud_material()]:
+		if m != null:
+			(m as ShaderMaterial).set_shader_parameter(&"sky_light_floor", f)
 
 
 func menu_closed() -> void:
@@ -7265,6 +7327,89 @@ func _behind_follow(eye: Vector3) -> void:
 		elif sec.behind_baked and (maxi(absi(k.x - c.x), absi(k.z - c.z)) > 3
 				or k.y * sp > c.y + 192 or (k.y + 1) * sp < c.y - 192):
 			sec.drop_behind()
+
+
+## -- --gate=view (Docs/MineWorld.md 22): the World view menu. Opened from the
+## world menu's button (whose World tab no longer has the view settings),
+## every value changed, Apply clicked: the world takes each at once -- the
+## detail and cave radii, the overlay off, the cave light, the far ground's
+## detail (its tier laid out again and swapped in) -- and a gate writes no
+## player file.
+func _run_view_gate() -> void:
+	await _frames(90)
+	var fails := [0]
+	var check := func(passed: bool, what: String) -> void:
+		print("[mine-view] %s  %s" % ["ok  " if passed else "FAIL", what])
+		if not passed:
+			fails[0] += 1
+	var had_file := FileAccess.file_exists(WorldView.PATH)
+	var file_time := FileAccess.get_modified_time(WorldView.PATH) if had_file else 0
+	toggle_menu()
+	await _frames(10)
+	var labels := []
+	for l: Label in _menu.find_children("*", "Label", true, false):
+		labels.append(l.text)
+	check.call(not labels.has("Full detail radius (tiles)") and not labels.has("Chamfered brick edges")
+			and not labels.has("Cave view distance (tiles)"),
+			"the world menu has no view settings left (they apply only on Generate there)")
+	var open_b: Button = null
+	for b: Button in _menu.find_children("*", "Button", true, false):
+		if b.text.begins_with("World view"):
+			open_b = b
+	check.call(open_b != null, "the world menu has a World view button")
+	if open_b != null:
+		await _click(open_b.get_global_rect().get_center())
+		await _frames(10)
+	var vm := find_child("WorldViewMenu", true, false)
+	check.call(vm != null, "it opens the World view menu")
+	if vm == null:
+		get_tree().quit()
+		return
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png(UserPaths.DEV + "mine_view_menu.png")
+	var before_tiles: int = _streamer._tiles.size()
+	vm.v["detail_tiles"] = 6
+	vm.v["cave_tiles"] = 6
+	vm.v["far_detail"] = 2
+	vm.v["chamfer"] = false
+	vm.v["cave_light"] = 0.05
+	vm.v["cave_fade"] = false
+	var apply_b: Button = null
+	for b: Button in vm.find_children("*", "Button", true, false):
+		if b.text == "Apply":
+			apply_b = b
+	await _click(apply_b.get_global_rect().get_center())
+	await _frames(5)
+	check.call(_streamer.near_radius == 6 and _deep.radius == 6,
+			"Apply: detail and cave radii 6 (streamer %d, caves %d)" % [_streamer.near_radius, _deep.radius])
+	check.call(not _overlay_on and bricks != null and not bricks.enabled and not BrickTerrain.get_behind_faces(),
+			"Apply: real brick edges off (overlay %s, behind faces %s)" % [_overlay_on, BrickTerrain.get_behind_faces()])
+	check.call(is_equal_approx(float(_mat.get_shader_parameter(&"sky_light_floor")), 0.05)
+			and is_equal_approx(CAVE_DEEP_LIGHT, 0.05), "Apply: darkest cave light 0.05 on the ground and the exposure")
+	check.call(TerrainCoarse.detail == 2 and not bool(WorldView.get_value("cave_fade")),
+			"Apply: distant ground Low, cave fade off")
+	vm.call("_close")
+	_menu.call("_close")
+	await _frames(5)
+	for w in 900:
+		if _far.built_detail == 2 and _far_next == null:
+			break
+		await get_tree().process_frame
+	check.call(_far.built_detail == 2 and _far.triangle_count() < 100000,
+			"the far ground laid out again at Low and swapped in (%d tris)" % _far.triangle_count())
+	await _frames(240)
+	check.call(_streamer._tiles.size() > before_tiles,
+			"more detail tiles round the eye after a radius of 6 (%d -> %d)" % [before_tiles, _streamer._tiles.size()])
+	var now_time := FileAccess.get_modified_time(WorldView.PATH) if FileAccess.file_exists(WorldView.PATH) else 0
+	check.call(FileAccess.file_exists(WorldView.PATH) == had_file and now_time == file_time,
+			"a gate writes no player view file")
+	# Back on: the overlay returns.
+	WorldView.values["chamfer"] = true
+	apply_view()
+	await _frames(30)
+	check.call(_overlay_on and bricks.enabled, "real brick edges back on")
+	print("[mine-view] %s (%d failures)" % ["PASS" if fails[0] == 0 else "FAIL", fails[0]])
+	get_tree().quit()
 
 
 ## -- --gate=slits: see-through slits in the OPEN ground near the eye (the
