@@ -381,11 +381,11 @@ a layout, not a rule.
   can, backpacks, stations; `two` = the other guns. RMB with a non-gun in
   the off-hand, up, is its place/pour (`place_target` on the off-hand).
 - **The quick slot** (`Inventory.quick`, one slot, saved; area `quick`):
-  B pulls it out (pad: hold RB) -- it is the main hand until B again, a
-  tap of X, 1-9, the wheel (pad: RB/LB tap, Y tap) puts it away and the
-  toolbar slot comes back. X tap only puts it away (it does not also swap
-  the bar); 1-9 and the wheel put it away and choose. Empty: B does
-  nothing. Meant for a grenade, a special gun or tool.
+  B pulls it out (pad: hold RB) -- it is the main hand until put away:
+  B again, a tap of X or a turn of the wheel (pad: an RB/LB tap, a Y tap)
+  only put it away -- the toolbar slot it left comes back, the bar is not
+  swapped, the slot not stepped; 1-9 put it away and take that slot. Empty:
+  B does nothing. Meant for a grenade, a special gun or tool.
 - **Pad** (no pad support exists elsewhere yet: moving, looking and the
   triggers are for later): LB/RB tap step the slot, hold (350 ms) = off-hand
   up/down / quick slot; Y tap = other bar (or put the quick slot away),
@@ -393,7 +393,9 @@ a layout, not a rule.
   also steps.
 - **The off-hand pistol**: its own GunController (`MineHands.off_gun`),
   RMB its trigger, its rounds kept in its stack like the main gun's; it
-  reloads by itself when empty, and with R. It is drawn low on the left
+  reloads by itself when empty, and with R. Its trigger rules are the
+  gun's own (GunFireMode): a pistol that charges fires on the release, so a
+  long hold charges instead. It is drawn low on the left
   of the view (no left arm pose yet: later, with ViewArms). Dual pistols
   are a main pistol + an off-hand pistol, up: LMB right, RMB left, no
   sights.
@@ -407,6 +409,11 @@ a layout, not a rule.
   going back never put an item into an empty off-hand slot (a stack of the
   same kind there is topped up by a pickup).
 - Shields: an `off` item needs blocking, which does not exist yet -- later.
+- Tests: inventory_probe (the off-hand rules, pickups never into it, the
+  quick slot and up flag saved); `--gate=inventory` 4a (stone laid from the
+  off-hand with C and RMB), 4b (the off-hand pistol fires on RMB taps, a
+  rifle lowers it, it comes back), 4c (B, X, the wheel, 3; saved).
+  2026-11-26: probe 141 ok, gate PASS (109 checks).
 
 ## 5. Tests
 

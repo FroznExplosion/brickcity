@@ -13,10 +13,14 @@ const HOW := [
 	"5  SOIL: each harvest uses up fertility; bare tilled soil gets 10 back a day; beans give some back. A crop of another family than the last one there grows 15% faster.",
 	"6  HARVEST: right- or left-click a ripe crop. It replants itself from the seeds you carry. Left-click a growing crop to pull it (seed back). A SCYTHE's right-click takes every ripe crop 3x3 round the plot. What will not fit your bags goes into the nearest chest (8 m), then the ground.",
 	"   WHOLE FIELDS: hold right-click with a hoe, seeds, a scythe or a watering can, move, let go: the whole rectangle between (up to 9 x 9 plots) is tilled, planted, harvested or watered.",
-	"   TOOLS: hoe (12 wood + 12 stone at a workbench), scythe (12 wood + 18 iron ore at a workbench), watering can (18 iron ore at a furnace).",
+	"   TOOLS: hoe (12 wood + 12 stone at a workbench), scythe (12 wood + 2 iron ingots at a workbench), watering can (2 iron ingots at a workbench); smelt iron ore into ingots at a furnace.",
 	"   COMPOST: put down a compost bin (24 wood at a workbench); near it, 48 leaves or 6 of any crop make 4 compost. Compost on a plot: +30 fertility. GROW MIX (4 compost + 2 coal ore at a workbench): the crop grows 50% faster for 2 days, +10 fertility. Both by drag over a field too.",
 	"   SAPLINGS: right-click the top of grass or dirt -- no hoe -- and the sapling grows into a real tree you can fell. Felling a tree gives its sapling half the time. A drag plants them 3 plots apart.",
 	"   TROUBLE: animals reach a field you have not closed in -- a wall or fence two bricks high, or a drop of two bricks, all round (the look line says 'open to animals') -- and eat crops back or trample plots to dirt. Birds peck ripe grain and beans: put a SCARECROW within 8 m (12 wood + 6 wheat at a workbench). Weeds slow a crop: left-click to pull them, or MULCH the plot first (12 leaves make 6, by hand). A field of 24+ plots of one crop can get BLIGHT: mix your crops. Turn all of it off for a world: M (world generation) > Game mode > Farm trouble.",
+	"   SEED TRAITS: every seed has Growth, Yield and Hardiness (G Y H, 0-10). Growth: 4% faster a point; Yield: 8% more a point; Hardiness: dry soil hurts less, and at 5+ a dry stage is no stress. A 3-star harvest's seeds gain a point 30% of the time (2 stars 10%), and the harvest replants with its own seeds -- so keep a crop well and it gets better generation by generation.",
+	"   BREEDING: leave a tilled plot bare between two ripe plants of the same crop (in a line). While you are near, it may sprout a cross: each trait the better parent's, and half the time one point more.",
+	"   COMPANIONS: some crops grow 15% faster next to others (beans by corn or wheat, carrots by cabbage...). GIANTS: a 2x2 of pumpkins or melons, all ripe at 3 stars, may merge into one giant -- worth twice what the four plots give.",
+	"   BIOME CROPS: cactus fruit only in desert, badlands or savanna; frostberries only where it snows; pineapple only in jungle.",
 	"7  QUALITY: every stage spent dry (for thirsty crops), too dark, on poor soil or in a biome it dislikes is a stress point. 0-1 points: 3 stars, 50% more; 4 or more: 1 star, less.",
 	"8  CAREFUL: landing on a field from 3 bricks up or more tramples that plot back to dirt (the seed pops out). Walking and jumping on it are fine.",
 	"9  TIME: crops grow on the world's clock while you play -- also where you are not, far across the world -- but not while the game is closed. Look at a plot to see its stage, time to ripe and what holds it back.",
@@ -72,6 +76,18 @@ static func crop_text(crop: Dictionary) -> String:
 		soil = "soil: GIVES BACK %d fertility a harvest" % roundi(float(crop.restores) - float(crop.drain))
 	wants.append(soil)
 	lines.append("Wants   " + "   ·   ".join(wants))
+	var extra := PackedStringArray()
+	if not (crop.only as PackedStringArray).is_empty():
+		extra.append("ONLY in " + ", ".join(crop.only))
+	if not (crop.companions as PackedStringArray).is_empty():
+		var names := PackedStringArray()
+		for cid in crop.companions:
+			names.append(str(FarmCrops.get_crop(StringName(cid)).get("name", cid)))
+		extra.append("companions: " + ", ".join(names) + " (+15%)")
+	if bool(crop.get("giant", false)):
+		extra.append("can grow GIANT (2x2 at 3 stars)")
+	if not extra.is_empty():
+		lines.append("Also    " + "   ·   ".join(extra))
 	var biomes := PackedStringArray()
 	if not crop.likes.is_empty():
 		biomes.append("likes " + ", ".join(crop.likes) + " (+25%)")

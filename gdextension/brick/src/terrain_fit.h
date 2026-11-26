@@ -92,5 +92,7 @@ public:
     /// The game's ground bricks from the fit (off: the old pattern). Every
     /// tile is drawn again.
     static void set_enabled(bool on);
+    /// generated_cells made fresh against the kept tile and sections.
+    static Dictionary check_generated(Vector2i tile, int y_lo, int y_hi);
     static bool get_enabled();
 };
