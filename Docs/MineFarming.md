@@ -422,8 +422,8 @@ the nearest chest or put-down backpack within 8 m (merged into its stacks,
 then empty slots), then the ground.
 
 **Recipes** (data/recipes/farming.json): hoe 12 wood + 12 stone at a
-workbench, scythe 12 wood + 18 iron ore at a workbench, watering can 18 iron
-ore at a furnace. Creative kits get all three. Icons for the scythe and can.
+workbench, scythe 12 wood + 2 iron ingots at a workbench, watering can 2 iron
+ingots at a workbench (ingots since the furnace smelts, Inventory.md 15). Creative kits get all three. Icons for the scythe and can.
 The guide's how-to says all of it.
 
 **Tests.** farm_probe +8 (63): exact across a can's water running out
