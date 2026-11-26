@@ -620,9 +620,8 @@ What the code has to do, from what the ground gives (section 6, 1):
   (section 9); any generated ground, bedrock, a device or a chest in the way
   of the moved cells stalls the push.
 - **The move:** read each brick's cells (material per plate via `solid_at`),
-  `fill_box` air over all of them, `fill_box` them at the new place (+1
-  course up, or +push studs sideways; a placed brick's step is its own
-  width along the push? no: one stud per push, so bricks stay on the stud
+  `fill_box` air over all of them, `fill_box` them at the new place (one
+  course up, or one stud sideways a push, so bricks stay on the stud
   lattice), `mark_placed` each brick again, one `terrain_edited` over the
   union (collapse survey, water, observers all follow). Pull (sticky) is the
   same backwards.
