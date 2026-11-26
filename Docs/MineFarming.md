@@ -1,7 +1,7 @@
 # Farming in the mine world -- plan
 
 Planned 2026-11-25; stages 1 and 2 BUILT the same day (section 15), stage 3
-on 2026-11-26 (section 16). The
+on 2026-11-26 (section 16), stage 4 the same day (section 17), stage 5 too (section 18). The
 scene is `scenes/terrain_test.tscn` (Docs/MineWorld.md). The user's answers
 to the questions are in section 14.
 
@@ -381,8 +381,7 @@ written from the crop table and the growth rules), `farm_gate.gd`.
 Crops: wheat, carrot, potato, beans (give fertility back), pumpkin (thirsty,
 slow), berry bush (regrows); items in content/base/data/items/farming.json.
 
-**Not yet** (later stages): compost and fertilisers, more crops, animals and enclosure, birds, weeds, blight,
-breeding, giant crops, automation, death.
+**Not yet** (later stages): real animals (abstract for now), breeding, giant crops, automation, death.
 
 **Tests.** `farm_probe` (headless, 55 checks): the materials and shader
 numbers, the crops and their items, one settle == many == saved half way for
@@ -434,3 +433,86 @@ old rows load, the recipes, the area cap. --gate=farm +7: a hoe drag tills
 drag waters exactly the dry ones (all dark after), four days on (the can's water lasts one) a scythe drag
 harvests and replants all 8, a scythe click takes the ripe 3 x 3, a harvest
 too big for the inventory lands in a chest by the field.
+
+## 17. Built (2026-11-26): stage 4, more plants
+
+**New crops** (crops.json): corn (grain, tall, thirsty and hungry, planted
+from a cob), cabbage (the leaf family: quickest, shade-happy, light on the
+soil), melon (gourd, the thirstiest). Nine crops over six families now.
+Models: `corn` (two stalks, cobs), `head` (stacked round plates), and the
+gourd shape in melon green.
+
+**Saplings -> real trees.** Oak, dark oak, birch and acacia saplings (one
+per tree variant, `tree` in their crop) are planted with RMB on the top of
+plain grass or dirt -- no hoe (`ground: "soil"`: a plot on plain soil,
+`MineFarming._soil_plot`, its four tops within a brick). They grow like any
+crop (drawn as a `sapling`: trunk and leaf block); when ripe the plot goes and
+`TerrainTrees.plant_tree` stands a real tree there: drawn, collided, felled
+and yielding like the seed's own. Grown trees are a `planted` list (trunk
+cell -> [plate, variant]) streamed in with their cell (even where a felled
+tree stood) and saved in the world file (`planted`). Felling any tree in
+survival gives its sapling half the time. A drag plants saplings 3 plots
+apart. Seeds of crops are refused on plain soil.
+
+**Compost and grow mix** (kind `fertiliser`, fields `fertility`,
+`boost_days`). A compost bin (24 wood at a workbench) is a station: within
+4 m of it, 48 leaves or 6 of any crop (tag `crop`, on every produce) make 4
+compost. Compost on a plot: +30 fertility. Grow mix (4 compost + 2 coal ore
+at a workbench): +10 fertility and x1.5 growth for 2 days (`boost_until`, a
+cut in `settle` like a can's water, so still exact). Both by click or drag.
+Plot rows now have 20 fields (boost_until, ground); older rows load.
+
+**Tests.** farm_probe 100: exact across a grow mix's end (corn, cabbage),
+boosted ripens sooner, rows keep ground and boost, a sapling per tree kind on
+plain soil, a sapling grows up, the recipes, every produce composts.
+--gate=farm adds: a sapling on plain grass (seeds refused there), corn,
+cabbage and melon planted, compost crafted at a bin, compost raises a plot's
+fertility, a grow mix drag boosts 8 plots, the sapling grows into a planted
+tree and is felled; picture user://dev/farm_stage4.png.
+
+## 18. Built (2026-11-26): stage 5, trouble
+
+**Events, still exact.** Each planted plot has a hazard: the sum of its
+trouble rates, which hold still between changes. It keeps `haz_acc` (hazard
+so far) and `haz_next` (an exponential drawn from its seed and its event
+count); an event happens when the one reaches the other. `settle` now walks
+in steps to the next of: a can's water or grow mix running out, the stage's
+end, the next event, or now -- so an event lands at the same moment however
+often the plot is settled (farm_probe: 12 plots with every trouble on, once ==
+often == saved half way). `FarmPlant.trouble` off: no events (a setting is
+later work; the gate's other checks run with it off).
+
+| Trouble | Rate a plot a day | Needs | Does | Stops it |
+|---|---|---|---|---|
+| animals | 0.25 | an open field | 3 in 4 eat it back 2 stages (a stress point); 1 in 4 trample it: crop lost, the tilled brick dirt again | close the field in |
+| birds | 0.6 | ripe grain or beans, open sky | peck it back from ripe to half a stage before | a scarecrow within 8 m (x0.2) |
+| weeds | 0.12 | a crop, no mulch | x0.6 growth, a stress point a stage, till pulled (LMB) | mulch (12 leaves -> 6, by hand) |
+| blight | 0.06 | a field of one crop (24+ plots, 90%) | the crop lost | mixed fields |
+
+**Fields** (FarmFields): plots touching 8 ways, within a brick of each
+other's height. Open or closed by a flood over stud columns from the field's
+plots: a step is allowed to a column whose top is within one brick (3
+plates) up or down with two plates of room over it; reaching 24 studs past
+the field means open. So a wall two bricks high, a two-brick drop, or a dug
+moat all round closes it. The flood runs on a WorkerThreadPool job, one
+field at a time, taken when done (never a wait); fields are worked out again
+when plots come or go or any terrain edit lands (MineWorld.terrain_edited ->
+`terrain_changed`), at most every 1.5 s, for fields within 96 m. The flags
+(open, mono) are set on the plots after settling them, and saved with them:
+while far away a field stays as it was.
+
+**In the world.** An animals' trample (`packed`) is applied when the plot is
+next settled in reach: the tilled brick turns to dirt and the plot goes. LMB
+on a weedy plot pulls the weeds first (the crop stays). The look line shows
+"open to animals", "one-crop field: blight", weeds, "mulched", "scarecrow
+near", and the last event with how long ago. Items: scarecrow (12 wood + 6
+wheat at a workbench, a placed station with its own model), mulch. Plot rows
+now have 31 fields; older rows load with no trouble.
+
+**Tests.** farm_probe 109 (+9): exact with every trouble on; animals only in
+open fields; mulch keeps weeds off; a scarecrow cuts bird visits; weeds slow
+growth; trouble off means no events; fields group and spot a one-crop field;
+old rows load. --gate=farm: the field open, a stone ring closes it, a gap
+opens it (real floods), a scarecrow marks plots, LMB pulls weeds and keeps
+the crop, mulch goes on, an animals' trample turns a plot to dirt, and three
+days with trouble on bring events.

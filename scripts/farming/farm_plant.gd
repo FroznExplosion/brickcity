@@ -27,6 +27,13 @@ extends RefCounted
 ##   wet      bool   water within reach (cached by MineFarming when loaded)
 ##   wet_until float world time a watering can's water lasts to (0: never
 ##                   watered); the soil is wet while either holds (`wet_at`)
+##   boost_until float world time a grow mix's boost lasts to (x GROW_BOOST)
+##   TROUBLE (stage 5, Docs/MineFarming.md 9): open, scared, mono (cached
+##   like wet: its field is open to animals, a scarecrow is near, its field is
+##   one crop); weeds, mulch; haz_acc / haz_next / events (the plot's hazard so
+##   far, its next draw, how many it has had); packed (trampled: the soil is
+##   to go back to dirt); last_event, event_at (for the look line)
+##   ground   String "farm" on tilled soil, "soil" on plain ground (a sapling)
 ##   sky      float  0..1, open sky above it (sky light / 15)
 ##   lamp     float  0..1, other light (lava; lamps later)
 ##   biome    int    BrickTerrain.biome_at under it
@@ -47,6 +54,29 @@ const LIKED := 1.25
 const DISLIKED := 0.7
 ## A watering can's water lasts this long on a plot (world seconds).
 const CAN_LASTS := DAY
+## A grow mix's boost: this much faster while it lasts.
+const GROW_BOOST := 1.5
+## TROUBLE (Docs/MineFarming.md 9): random events, drawn as event times from
+## the plot's own seed. Off: no events at all.
+static var trouble := true
+const EV_ANIMALS := 0
+const EV_BIRDS := 1
+const EV_WEEDS := 2
+const EV_BLIGHT := 3
+## Per plot per in-game day: animals in an open field, birds on a ripe
+## grain or legume under open sky, weeds on a plot not mulched, blight in a
+## field of one crop.
+const ANIMALS_PER_DAY := 0.25
+const BIRDS_PER_DAY := 0.6
+const WEEDS_PER_DAY := 0.12
+const BLIGHT_PER_DAY := 0.06
+## Of the animals' visits, this share tramples the plot; the rest eat it back.
+const TRAMPLE_SHARE := 0.25
+## A scarecrow leaves birds this share of their visits.
+const SCARED := 0.2
+const BIRD_FAMILIES := ["grain", "legume"]
+## Weeds take this share of a crop's growth.
+const WEEDS_SLOW := 0.6
 ## Under this fertility a stage counts as starved (a stress point).
 const POOR_SOIL := 25.0
 ## A crop counts as wanting water when dry soil drops it under this rate.
@@ -136,7 +166,9 @@ static func new_plot(b: Vector3i, now: float, fert: float, biome: int) -> Dictio
 	return {"b": b, "crop": &"", "stage": 0, "p": 0.0, "t": now, "seed": 0,
 			"fert": clampf(fert, 0.0, 100.0), "fam": "", "stress": 0,
 			"wet": false, "sky": 1.0, "lamp": 0.0, "biome": biome, "planted": now, "picks": 0,
-			"wet_until": 0.0}
+			"wet_until": 0.0, "boost_until": 0.0, "ground": "farm",
+			"open": false, "scared": false, "mono": false, "weeds": false, "mulch": false,
+			"haz_acc": 0.0, "haz_next": 1.0, "events": 0, "packed": false, "last_event": "", "event_at": 0.0}
 
 
 static func plant(plot: Dictionary, crop: StringName, now: float) -> void:
@@ -149,6 +181,11 @@ static func plant(plot: Dictionary, crop: StringName, now: float) -> void:
 	plot.planted = now
 	plot.picks = 0
 	plot.seed = seed_for(plot.b, now)
+	plot.weeds = false
+	plot.events = 0
+	plot.haz_acc = 0.0
+	plot.haz_next = _next_draw(plot)
+	plot.last_event = ""
 
 
 static func crop_of(plot: Dictionary) -> Dictionary:
@@ -193,9 +230,16 @@ static func jitter(plot: Dictionary) -> float:
 	return 0.85 + 0.3 * roll(int(plot.seed), int(plot.stage), int(plot.picks))
 
 
-## Stages a light-second, with the soil `wet` or not: everything but the light.
-static func rate(plot: Dictionary, crop: Dictionary, wet: bool) -> float:
+## Is a grow mix's boost on at world time `t`?
+static func boosted_at(plot: Dictionary, t: float) -> bool:
+	return t < float(plot.get("boost_until", 0.0))
+
+
+## Stages a light-second, with the soil `wet` or not and a grow mix's
+## `boost` on or not: everything but the light.
+static func rate(plot: Dictionary, crop: Dictionary, wet: bool, boost := false) -> float:
 	return soil_factor(plot, crop) * water_factor(crop, wet) * biome_factor(crop, int(plot.biome)) \
+			* (GROW_BOOST if boost else 1.0) * (WEEDS_SLOW if bool(plot.get("weeds", false)) else 1.0) \
 			/ (float(crop.stage_hours) * HOUR * jitter(plot))
 
 
@@ -209,6 +253,8 @@ static func stage_stress(plot: Dictionary, crop: Dictionary, wet: bool) -> int:
 	if float(plot.fert) < POOR_SOIL:
 		s += 1
 	if biome_factor(crop, int(plot.biome)) < 1.0:
+		s += 1
+	if bool(plot.get("weeds", false)):
 		s += 1
 	return s
 
@@ -227,50 +273,145 @@ static func settle(plot: Dictionary, now: float) -> bool:
 		plot.t = now
 		return false
 	var changed := false
-	# A can's water running out is a time like a stage's end: the interval is
-	# cut there, wet before, as the plot's own water says after.
-	while t0 < now:
+	var last := int(crop.stages) - 1
+	# Walk from t0 to now in steps, each to the next of: a can's water or a
+	# grow mix running out, the stage's end, the next random event (TROUBLE),
+	# or now. Between them nothing changes, so each step is plain arithmetic
+	# and a settle cut anywhere lands on the same plant.
+	var guard := 0
+	while t0 < now and guard < 4096:
+		guard += 1
 		var wu := float(plot.get("wet_until", 0.0))
-		var wet := wet_at(plot, t0)
+		var bu := float(plot.get("boost_until", 0.0))
 		var t1 := now
-		if not bool(plot.wet) and t0 < wu and wu < now:
+		if not bool(plot.wet) and t0 < wu and wu < t1:
 			t1 = wu
-		if _grow(plot, crop, t0, t1, wet):
+		if t0 < bu and bu < t1:
+			t1 = bu
+		var wet := wet_at(plot, t0)
+		var r := rate(plot, crop, wet, boosted_at(plot, t0))
+		var growing := int(plot.stage) < last and r > 0.0
+		# The stage's end, if before t1 (bisection on an increasing function).
+		var ts := INF
+		if growing:
+			var need := (1.0 - float(plot.p)) / r
+			if light_between(plot, t0, t1) >= need:
+				var lo := t0
+				var hi := t1
+				for _i in 50:
+					var mid := (lo + hi) * 0.5
+					if light_between(plot, t0, mid) < need:
+						lo = mid
+					else:
+						hi = mid
+				ts = hi
+		# The next event: the plot's hazard reaches its next draw.
+		var lam := hazard(plot, crop)
+		var te := INF
+		if lam > 0.0:
+			var at := t0 + maxf(float(plot.haz_next) - float(plot.haz_acc), 0.0) / lam
+			if at <= t1:
+				te = at
+		var tn := minf(t1, minf(ts, te))
+		plot.haz_acc = float(plot.haz_acc) + lam * (tn - t0)
+		if growing:
+			if ts <= tn:
+				plot.stress = int(plot.stress) + stage_stress(plot, crop, wet)
+				plot.stage = int(plot.stage) + 1
+				plot.p = 0.0
+				changed = true
+			else:
+				plot.p = float(plot.p) + light_between(plot, t0, tn) * r
+		t0 = tn
+		if te <= tn and te < ts:
 			changed = true
-		t0 = t1
+			if _event(plot, crop, te):
+				# The crop is gone: the rest of the time the soil rests.
+				plot.fert = minf(100.0, float(plot.fert) + FALLOW_PER_DAY * (now - te) / DAY)
+				break
+	if int(plot.stage) >= last and plot.crop != &"":
+		plot.p = 0.0
 	plot.t = now
 	return changed
 
 
-## Grow from t0 to t1 with the soil wet or not all through.
-static func _grow(plot: Dictionary, crop: Dictionary, t0: float, t1: float, wet: bool) -> bool:
-	var changed := false
-	var last := int(crop.stages) - 1
-	while int(plot.stage) < last:
-		var r := rate(plot, crop, wet)
-		var need := (1.0 - float(plot.p)) / maxf(r, 1e-12)
-		var have := light_between(plot, t0, t1)
-		if have < need or r <= 0.0:
-			plot.p = float(plot.p) + have * r
+## Random trouble (Docs/MineFarming.md 9), per second, for the plot as it is.
+static func hazards(plot: Dictionary, crop: Dictionary) -> PackedFloat64Array:
+	var out := PackedFloat64Array([0.0, 0.0, 0.0, 0.0])
+	if not trouble or crop.is_empty():
+		return out
+	var ripe := int(plot.stage) >= int(crop.stages) - 1
+	if bool(plot.get("open", false)):
+		out[EV_ANIMALS] = ANIMALS_PER_DAY / DAY
+	if ripe and BIRD_FAMILIES.has(str(crop.family)) and float(plot.sky) > 0.5:
+		out[EV_BIRDS] = BIRDS_PER_DAY / DAY * (SCARED if bool(plot.get("scared", false)) else 1.0)
+	if not bool(plot.get("weeds", false)) and not bool(plot.get("mulch", false)) and int(crop.tree) < 0:
+		out[EV_WEEDS] = WEEDS_PER_DAY / DAY
+	if bool(plot.get("mono", false)) and int(crop.tree) < 0:
+		out[EV_BLIGHT] = BLIGHT_PER_DAY / DAY
+	return out
+
+
+static func hazard(plot: Dictionary, crop: Dictionary) -> float:
+	var h := hazards(plot, crop)
+	return h[0] + h[1] + h[2] + h[3]
+
+
+## The next draw of the plot's hazard: an exponential, from its seed and how
+## many events it has had (so the same events come whenever it is settled).
+static func _next_draw(plot: Dictionary) -> float:
+	return -log(maxf(1.0 - roll(int(plot.seed), 5000 + int(plot.events), 13), 1e-9))
+
+
+## An event at time `t`: which one by the hazards' shares (a roll of its own).
+## True if the crop is gone.
+static func _event(plot: Dictionary, crop: Dictionary, t: float) -> bool:
+	var h := hazards(plot, crop)
+	var total := h[0] + h[1] + h[2] + h[3]
+	var u := roll(int(plot.seed), 6000 + int(plot.events), 29) * total
+	var kind := EV_ANIMALS
+	var acc := 0.0
+	for i in 4:
+		acc += h[i]
+		if u < acc:
+			kind = i
 			break
-		# The stage ends between t0 and t1: when, exactly (bisection on an
-		# increasing function; 50 halvings is under a microsecond of a day).
-		var lo := t0
-		var hi := t1
-		for _i in 50:
-			var mid := (lo + hi) * 0.5
-			if light_between(plot, t0, mid) < need:
-				lo = mid
+	var what := roll(int(plot.seed), 7000 + int(plot.events), 31)
+	plot.events = int(plot.events) + 1
+	plot.haz_acc = 0.0
+	plot.haz_next = _next_draw(plot)
+	plot.event_at = t
+	var gone := false
+	match kind:
+		EV_ANIMALS:
+			if what < TRAMPLE_SHARE:
+				# Trampled: the crop lost, the soil packed down (MineFarming
+				# turns the tilled brick back to dirt).
+				plot.last_event = "trampled by animals"
+				plot.packed = true
+				gone = true
 			else:
-				hi = mid
-		plot.stress = int(plot.stress) + stage_stress(plot, crop, wet)
-		plot.stage = int(plot.stage) + 1
+				plot.last_event = "eaten back by animals"
+				plot.stage = maxi(0, int(plot.stage) - 2)
+				plot.p = 0.0
+				plot.stress = int(plot.stress) + 1
+		EV_BIRDS:
+			plot.last_event = "pecked by birds"
+			plot.stage = maxi(0, int(crop.stages) - 2)
+			plot.p = 0.5
+		EV_WEEDS:
+			plot.last_event = "weeds came up"
+			plot.weeds = true
+		EV_BLIGHT:
+			plot.last_event = "lost to blight"
+			gone = true
+	if gone:
+		plot.crop = &""
+		plot.stage = 0
 		plot.p = 0.0
-		t0 = hi
-		changed = true
-	if int(plot.stage) >= last:
-		plot.p = 0.0
-	return changed
+		plot.stress = 0
+		plot.weeds = false
+	return gone
 
 
 ## Quality, 1-3 stars, from the stress of this growth.
@@ -325,10 +466,11 @@ static func eta(plot: Dictionary, now: float) -> float:
 	if light <= 0.0:
 		return INF
 	var wet := wet_at(plot, now)
+	var boost := boosted_at(plot, now)
 	var copy := plot.duplicate()
 	var secs := 0.0
 	while int(copy.stage) < int(crop.stages) - 1:
-		var r := rate(copy, crop, wet)
+		var r := rate(copy, crop, wet, boost)
 		if r <= 0.0:
 			return INF
 		secs += (1.0 - float(copy.p)) / r / light
@@ -351,6 +493,12 @@ static func limits(plot: Dictionary, now: float) -> PackedStringArray:
 		out.append("poor soil")
 	if biome_factor(crop, int(plot.biome)) < 1.0:
 		out.append("dislikes this biome")
+	if bool(plot.get("weeds", false)):
+		out.append("weeds (LMB to pull them)")
+	if bool(plot.get("open", false)) and trouble:
+		out.append("open to animals")
+	if bool(plot.get("mono", false)) and trouble:
+		out.append("one-crop field: blight")
 	return out
 
 
@@ -376,7 +524,11 @@ static func to_row(plot: Dictionary) -> Array:
 	return [b.x, b.y, b.z, String(plot.crop), int(plot.stage), float(plot.p), float(plot.t), int(plot.seed),
 			float(plot.fert), str(plot.fam), int(plot.stress), bool(plot.wet), float(plot.sky),
 			float(plot.lamp), int(plot.biome), float(plot.planted), int(plot.picks),
-			float(plot.get("wet_until", 0.0))]
+			float(plot.get("wet_until", 0.0)), float(plot.get("boost_until", 0.0)), str(plot.get("ground", "farm")),
+			bool(plot.get("open", false)), bool(plot.get("scared", false)), bool(plot.get("mono", false)),
+			bool(plot.get("weeds", false)), bool(plot.get("mulch", false)), float(plot.get("haz_acc", 0.0)),
+			float(plot.get("haz_next", 1.0)), int(plot.get("events", 0)), bool(plot.get("packed", false)),
+			str(plot.get("last_event", "")), float(plot.get("event_at", 0.0))]
 
 
 static func from_row(r: Array) -> Dictionary:
@@ -386,4 +538,12 @@ static func from_row(r: Array) -> Dictionary:
 			"stage": int(r[4]), "p": float(r[5]), "t": float(r[6]), "seed": int(r[7]),
 			"fert": float(r[8]), "fam": str(r[9]), "stress": int(r[10]), "wet": bool(r[11]),
 			"sky": float(r[12]), "lamp": float(r[13]), "biome": int(r[14]), "planted": float(r[15]),
-			"picks": int(r[16]), "wet_until": float(r[17]) if r.size() > 17 else 0.0}
+			"picks": int(r[16]), "wet_until": float(r[17]) if r.size() > 17 else 0.0,
+			"boost_until": float(r[18]) if r.size() > 18 else 0.0,
+			"ground": str(r[19]) if r.size() > 19 else "farm",
+			"open": bool(r[20]) if r.size() > 30 else false, "scared": bool(r[21]) if r.size() > 30 else false,
+			"mono": bool(r[22]) if r.size() > 30 else false, "weeds": bool(r[23]) if r.size() > 30 else false,
+			"mulch": bool(r[24]) if r.size() > 30 else false, "haz_acc": float(r[25]) if r.size() > 30 else 0.0,
+			"haz_next": float(r[26]) if r.size() > 30 else 1.0, "events": int(r[27]) if r.size() > 30 else 0,
+			"packed": bool(r[28]) if r.size() > 30 else false, "last_event": str(r[29]) if r.size() > 30 else "",
+			"event_at": float(r[30]) if r.size() > 30 else 0.0}

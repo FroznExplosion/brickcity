@@ -25,6 +25,11 @@ extends SceneTree
 ##             fallow.
 ##   save      FarmStore writes changed regions and reads them back the same.
 ##   guide     the guide has a line for every crop.
+##   stage4    a grow mix's boost runs out at a set time and the catch-up is
+##             exact across it; boosted grows faster; a plot row keeps its
+##             boost and ground; the new crops and the four saplings load, each
+##             sapling naming its tree; compost, grow mix and the bin have
+##             recipes; every produce is a #crop for compost.
 ##   can       stage 3: a watering can's water runs out at a set time and the
 ##             catch-up is still exact across it (once == often == saved half
 ##             way); watered grows faster than dry and slows again after; the
@@ -47,13 +52,18 @@ func _init() -> void:
 	print("farm probe")
 	_wiring()
 	_crops()
-	_exact()
+	_exact()            # with TROUBLE on: events must keep it exact too
+	# The growth rules alone: no random trouble in these.
+	FarmPlant.trouble = false
 	_light()
 	_factors()
 	_harvest()
 	_save()
 	_guide()
 	_can()
+	_stage4()
+	FarmPlant.trouble = true
+	_trouble()
 	print("farm probe: %d ok, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -95,8 +105,9 @@ func _crops() -> void:
 	for id in ids:
 		var c := FarmCrops.get_crop(id)
 		var seed_ok := ItemCatalog.kind(c.seed) == "seed" and StringName(str(ItemCatalog.get_def(c.seed).get("crop", ""))) == id
+		var produce_ok: bool = ItemCatalog.has(c.produce) or (int(c.tree) >= 0 and c.produce == &"")
 		_ok("%s: seed %s plants it, produce %s is an item" % [id, c.seed, c.produce],
-				seed_ok and ItemCatalog.has(c.produce) and FarmCrops.crop_of_seed(c.seed) == id)
+				seed_ok and produce_ok and FarmCrops.crop_of_seed(c.seed) == id)
 
 
 func _exact() -> void:
@@ -284,7 +295,7 @@ func _guide() -> void:
 	for id in FarmCrops.ids():
 		var c := FarmCrops.get_crop(id)
 		var txt := FarmGuide.crop_text(c)
-		ok = ok and txt.contains(c.name) and txt.contains("Ripe in") and txt.contains("Wants")
+		ok = ok and txt.contains(c.name) and (txt.contains("Ripe in") or txt.contains("Grown in")) and txt.contains("Wants")
 	_ok("a guide entry for every crop", ok)
 	var w := FarmCrops.get_crop(&"wheat")
 	_ok("the guide's times: wet sooner than dry", FarmGuide.ripe_seconds(w, true) < FarmGuide.ripe_seconds(w, false))
@@ -331,3 +342,165 @@ func _can() -> void:
 	_ok("the scythe and can are items of their kinds", ItemCatalog.kind(&"scythe") == "scythe" and ItemCatalog.kind(&"watering_can") == "can")
 	var area: Array[Vector2i] = MineFarming.area_blocks(Vector3i(0, 40, 0), Vector3i(100, 40, -100))
 	_ok("an area is at most 9 x 9 plots (%d)" % area.size(), area.size() == MineFarming.AREA_MAX * MineFarming.AREA_MAX)
+
+
+func _stage4() -> void:
+	print("stage4")
+	var d := FarmPlant.DAY
+	for id in [&"corn", &"cabbage"]:
+		var once := _plot(id, true)
+		once.boost_until = float(once.t) + d * 0.7
+		var often := once.duplicate()
+		var half := once.duplicate()
+		var t_end := float(once.t) + d * 1.9
+		FarmPlant.settle(once, t_end)
+		var t := float(often.t)
+		while t < t_end:
+			t = minf(t_end, t + 9.1)
+			FarmPlant.settle(often, t)
+		FarmPlant.settle(half, float(half.t) + d * 0.7 + 2.0)
+		var back := FarmPlant.from_row(FarmPlant.to_row(half))
+		FarmPlant.settle(back, t_end)
+		_ok("%s with a grow mix for 0.7 days: once == often == saved across its end (stage %d)" % [id, once.stage],
+				int(once.stage) == int(often.stage) and absf(float(once.p) - float(often.p)) < 1e-6
+				and int(once.stage) == int(back.stage) and absf(float(once.p) - float(back.p)) < 1e-6,
+				"often %d %.6f, saved %d %.6f" % [often.stage, often.p, back.stage, back.p])
+	var plain := _plot(&"corn", true)
+	var mixed := _plot(&"corn", true)
+	mixed.boost_until = float(mixed.t) + d * 2.0
+	var tm := _time_to_ripe(mixed)
+	var tp := _time_to_ripe(plain)
+	_ok("a grow mix makes corn ripen sooner (%.2f vs %.2f days)" % [tm / d, tp / d], tm < tp)
+	var soil := _plot(&"oak_tree")
+	soil.ground = "soil"
+	var row := FarmPlant.from_row(FarmPlant.to_row(soil))
+	_ok("a row keeps its ground and boost", row.ground == "soil" and float(row.boost_until) == float(soil.boost_until))
+	var ok_trees := true
+	for v in Trees.VARIANTS:
+		var sap := MineFarming.sapling_of(v)
+		ok_trees = ok_trees and sap != &"" and int(FarmCrops.get_crop(FarmCrops.crop_of_seed(sap)).tree) == v 				and str(FarmCrops.get_crop(FarmCrops.crop_of_seed(sap)).ground) == "soil"
+	_ok("a sapling for every tree kind, planted on plain soil", ok_trees)
+	var tree := _plot(&"birch_tree")
+	_ok("a sapling grows up in %.1f days" % (_time_to_ripe(tree) / d), FarmPlant.is_ripe(tree))
+	var outs := []
+	for r in RecipeBook.all():
+		outs.append(str(r.output))
+	_ok("compost bin, compost and grow mix have recipes", outs.has("compost_bin") and outs.count("compost") == 2
+			and outs.has("grow_mix"))
+	_ok("compost and grow mix are fertilisers", ItemCatalog.kind(&"compost") == "fertiliser"
+			and float(ItemCatalog.get_def(&"grow_mix").get("boost_days", 0)) > 0.0)
+	var crops := 0
+	for id in FarmCrops.ids():
+		var c := FarmCrops.get_crop(id)
+		if c.produce != &"" and PackedStringArray(ItemCatalog.get_def(c.produce).get("tags", [])).has("crop"):
+			crops += 1
+	_ok("every produce composts (%d tagged crop)" % crops, crops == 9)
+
+
+## Stage 5: random trouble, drawn from each plot's seed.
+func _trouble() -> void:
+	print("trouble")
+	var d := FarmPlant.DAY
+	# Exact with every hazard on: once == every few seconds == saved half way.
+	var all_same := true
+	var any_events := 0
+	for i in 12:
+		var once := FarmPlant.new_plot(Vector3i(i, 41, 3), 360.0, 70.0, -1)
+		once.wet = true
+		once.open = true
+		once.mono = true
+		FarmPlant.plant(once, [&"wheat", &"beans", &"corn"][i % 3], 360.0)
+		var often := once.duplicate()
+		var half := once.duplicate()
+		var t_end := 360.0 + d * 6.0
+		FarmPlant.settle(once, t_end)
+		var t := 360.0
+		while t < t_end:
+			t = minf(t_end, t + 23.7)
+			FarmPlant.settle(often, t)
+		FarmPlant.settle(half, 360.0 + d * 2.9)
+		var back := FarmPlant.from_row(FarmPlant.to_row(half))
+		FarmPlant.settle(back, t_end)
+		for other in [often, back]:
+			all_same = all_same and int(other.events) == int(once.events) and other.crop == once.crop \
+					and int(other.stage) == int(once.stage) and absf(float(other.p) - float(once.p)) < 1e-6 \
+					and bool(other.weeds) == bool(once.weeds) and bool(other.packed) == bool(once.packed)
+		any_events += int(once.events)
+	_ok("with every trouble on, once == often == saved half way (12 plots, %d events)" % any_events,
+			all_same and any_events > 0)
+	# Animals only in open fields; mulch keeps weeds off; a scarecrow most birds.
+	var open_ev := 0
+	var closed_ev := 0
+	var weeds_bare := 0
+	var weeds_mulch := 0
+	var birds_free := 0
+	var birds_scared := 0
+	for i in 40:
+		var a := _ripe_held(i, true, false, false)
+		var b := _ripe_held(i, false, false, false)
+		open_ev += _count_events(a, "animals")
+		closed_ev += _count_events(b, "animals")
+		weeds_bare += 1 if bool(b.weeds) else 0
+		var m := _ripe_held(i, false, true, false)
+		weeds_mulch += 1 if bool(m.weeds) else 0
+		birds_free += _count_events(b, "birds")
+		birds_scared += _count_events(_ripe_held(i, false, false, true), "birds")
+	_ok("animals visit open fields (%d) and never closed ones (%d)" % [open_ev, closed_ev], open_ev > 0 and closed_ev == 0)
+	_ok("mulch keeps weeds off (%d of 40 weedy bare, %d mulched)" % [weeds_bare, weeds_mulch], weeds_bare > 0 and weeds_mulch == 0)
+	_ok("a scarecrow keeps most birds off (%d visits free, %d scared)" % [birds_free, birds_scared], birds_scared < birds_free)
+	var w := _plot(&"wheat")
+	var r0 := FarmPlant.rate(w, FarmCrops.get_crop(&"wheat"), true)
+	w.weeds = true
+	_ok("weeds slow a crop", FarmPlant.rate(w, FarmCrops.get_crop(&"wheat"), true) < r0)
+	FarmPlant.trouble = false
+	var calm := FarmPlant.new_plot(Vector3i(0, 41, 0), 360.0, 70.0, -1)
+	calm.open = true
+	calm.mono = true
+	FarmPlant.plant(calm, &"wheat", 360.0)
+	FarmPlant.settle(calm, 360.0 + d * 10.0)
+	_ok("trouble off: no events at all", int(calm.events) == 0)
+	FarmPlant.trouble = true
+	# Fields: plots that touch, and a one-crop field.
+	var s := FarmStore.new()
+	for x in 5:
+		for z in 5:
+			var p := FarmPlant.new_plot(Vector3i(x, 41, z), 0.0, 70.0, -1)
+			p.crop = &"wheat"
+			s.put(p)
+	var lone := FarmPlant.new_plot(Vector3i(20, 41, 20), 0.0, 70.0, -1)
+	lone.crop = &"wheat"
+	s.put(lone)
+	var ff := FarmFields.new()
+	ff.regroup(s)
+	var sizes := []
+	for f in ff.fields:
+		sizes.append(f.plots.size())
+	sizes.sort()
+	_ok("two fields (1 and 25 plots): %s" % str(sizes), sizes == [1, 25])
+	var mono_ok := false
+	for f in ff.fields:
+		if f.plots.size() == 25:
+			mono_ok = f.mono == &"wheat"
+	_ok("25 plots of wheat is a one-crop field", mono_ok)
+	var old := FarmPlant.to_row(_plot(&"wheat"))
+	old.resize(20)
+	_ok("a 20-field row from stage 4 loads, no trouble flags", not bool(FarmPlant.from_row(old).open)
+			and int(FarmPlant.from_row(old).events) == 0)
+
+
+## A wheat plot held ripe for 3 days (birds come only then), with the flags.
+func _ripe_held(i: int, open: bool, mulch: bool, scared: bool) -> Dictionary:
+	var p := FarmPlant.new_plot(Vector3i(i, 41, 9), 360.0, 70.0, -1)
+	p.wet = true
+	p.open = open
+	p.mulch = mulch
+	p.scared = scared
+	FarmPlant.plant(p, &"wheat", 360.0)
+	p.stage = 4
+	FarmPlant.settle(p, 360.0 + FarmPlant.DAY * 3.0)
+	return p
+
+
+func _count_events(p: Dictionary, what: String) -> int:
+	# The last event says what came; a plot that had any shows it in its count.
+	return int(p.events) if str(p.last_event).contains(what) else 0

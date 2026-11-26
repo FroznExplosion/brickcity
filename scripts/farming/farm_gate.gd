@@ -26,6 +26,19 @@ extends RefCounted
 ##             click takes the ripe crops 3 x 3 round a plot.
 ##   chest     a harvest that will not fit the inventory goes into a chest
 ##             near the field.
+##   stage 4   a sapling planted on plain grass (no hoe) grows into a REAL
+##             tree -- saved in the trees' planted list, and felled like any
+##             other; compost made at a compost bin from crops; compost on a
+##             plot raises its fertility; a grow mix dragged over a field
+##             boosts every plot; corn, cabbage and melon planted and drawn
+##             (user://dev/farm_stage4.png).
+##   stage 5   (the checks above run with TROUBLE off, so they are certain)
+##             the field is open to animals; a stone ring round the patch
+##             closes it (the real flood, on its worker); a gap in the ring
+##             opens it again; a scarecrow marks plots near it; weeds are
+##             pulled with LMB, the crop staying; mulch goes on; an animals'
+##             trample turns a plot to dirt in the world; with trouble on,
+##             three days bring events to the open field.
 ##   save      the world generated again (saved, loaded): the plots, their
 ##             state and the clock come back.
 ##   pictures  user://dev/farm_field.png, farm_guide.png.
@@ -44,6 +57,7 @@ func check(what: String, ok: bool) -> void:
 func run(host: Node) -> void:
 	w = host
 	var f: MineFarming = w.farming
+	FarmPlant.trouble = false
 	var stud := BrickWorld.get_stud_metres()
 	var plate := BrickWorld.get_plate_metres()
 	w._time = 0.5
@@ -258,6 +272,145 @@ func run(host: Node) -> void:
 			in_chest += (sl as ItemStack).count
 	check("what will not fit the inventory goes into the chest by the field (%d wheat)" % in_chest, in_chest > 0)
 
+	# --- stage 4: saplings, compost, grow mix, the new crops
+	var sb := Vector3i(bx0 + 4, top, bz0 + 1)
+	_hold(&"oak_sapling")
+	w.builder.target = {"cell": Vector3i(sb.x * 2, top, sb.z * 2), "normal": Vector3i.UP}
+	var sap_ok: bool = w.builder.place_target()
+	var sp := f.store.get_plot(sb)
+	check("an oak sapling goes on plain grass, no hoe", sap_ok and not sp.is_empty()
+			and sp.crop == &"oak_tree" and sp.ground == "soil"
+			and BrickTerrain.solid_at(sb.x * 2, top, sb.z * 2) == BrickTerrain.MAT_GRASS)
+	check("seeds do not go on plain grass", not f.plant({"cell": Vector3i((bx0 + 4) * 2, top, (bz0 + 4) * 2),
+			"normal": Vector3i.UP}, &"wheat_seeds"))
+	# Corn, cabbage and melon on three of the carrot plots (pulled first).
+	var newc := [&"corn", &"cabbage_seeds", &"melon_seeds"]
+	for i in 3:
+		var nb: Vector3i = rect[i * 2 + 1]
+		w.builder.target = {"cell": Vector3i(nb.x * 2, top, nb.z * 2), "normal": Vector3i.UP}
+		w.builder.break_target()
+		f.plant({"cell": Vector3i(nb.x * 2, top, nb.z * 2)}, newc[i])
+	check("corn, cabbage and melon planted", f.store.get_plot(rect[1]).crop == &"corn"
+			and f.store.get_plot(rect[3]).crop == &"cabbage" and f.store.get_plot(rect[5]).crop == &"melon")
+	# Compost at a compost bin, from crops.
+	var feet_at: Vector3 = w.player_feet_local()
+	var bin := Vector3i(floori(feet_at.x / stud / 2.0) + 1, floori(feet_at.y / plate), floori(feet_at.z / stud / 2.0))
+	w.chests.place(bin, [], true, &"compost_bin")
+	var near: Array = w.stations_near()
+	var rec := {}
+	for r in RecipeBook.all():
+		if str(r.name) == "Compost from crops":
+			rec = r
+	var c0 := _count(inv, &"compost")
+	var made: Dictionary = inv.craft(rec, near) if not rec.is_empty() else {"made": 0}
+	check("compost made at a compost bin from crops (bin in reach: %s, made %d)" % [near.has(&"compost_bin"),
+			int(made.made)], near.has(&"compost_bin") and int(made.made) == 1
+			# (the chest check above filled the bags: the compost may be in `left`)
+			and (_count(inv, &"compost") > c0 or not (made.get("left", []) as Array).is_empty()))
+	# Compost on a plot; a grow mix over the field.
+	var fb: Vector3i = rect[7]
+	f.store.get_plot(fb).fert = 40.0
+	_hold(&"compost")
+	w.builder.target = {"cell": Vector3i(fb.x * 2, top, fb.z * 2), "normal": Vector3i.UP}
+	w.builder.place_target()
+	check("compost on a plot: fertility 40 -> %d" % roundi(float(f.store.get_plot(fb).fert)),
+			is_equal_approx(float(f.store.get_plot(fb).fert), 70.0))
+	_hold(&"grow_mix")
+	await _drag(a3, b3)
+	var boosted := 0
+	for b in rect:
+		if FarmPlant.boosted_at(f.store.get_plot(b), w.world_time):
+			boosted += 1
+	check("a grow mix dragged over the field boosts all 8 plots (%d)" % boosted, boosted == 8)
+	# A day and a half on: the new crops half grown, the sapling a small tree.
+	w.world_time += FarmPlant.DAY * 1.5
+	await w._frames(20)
+	f.settle_all()
+	var mid4: Vector3 = f._top_middle(rect[3])
+	var cam4 := mid4 + Vector3(-2.6, 1.8, -2.4)
+	var d4 := (mid4 - cam4).normalized()
+	w._fly_to(cam4 - Vector3(0, 1.6, 0), Vector3(d4.x, 0, d4.z))
+	w.walker.pitch = asin(clampf(d4.y, -1.0, 1.0))
+	if w._hud_layer != null:
+		w._hud_layer.visible = false
+	await w._frames(60)
+	await w._shot(UserPaths.DEV + "farm_stage4.png")
+	if w._hud_layer != null:
+		w._hud_layer.visible = true
+	# Eight more days (dry, maybe a biome it dislikes): the sapling is a tree.
+	w.world_time += FarmPlant.DAY * 8.0
+	await w._frames(10)
+	f.settle_all()
+	var tcell := Vector2i(sb.x * 2, sb.z * 2)
+	check("the sapling grew into a real tree (%d grown, in the planted list: %s)" % [f.trees_grown,
+			w._trees.planted.has(tcell)], f.trees_grown >= 1 and f.store.get_plot(sb).is_empty()
+			and w._trees.planted.has(tcell))
+	var felled: Dictionary = w.fell_tree(tcell)
+	check("and it can be felled like any tree", not felled.is_empty() and not w._trees.planted.has(tcell))
+
+	# --- stage 5: trouble
+	var p_field := field[0]
+	await _fields_settle(f)
+	check("the field is open to animals (%d floods)" % f.fields.floods, bool(f.store.get_plot(p_field).open))
+	# A stone ring a stud outside the patch, from well down to two bricks up.
+	var ring := [[Vector3i(x0 - 1, top - 6, z0 - 1), Vector3i(x0 + 14, top + 6, z0 - 1)],
+			[Vector3i(x0 - 1, top - 6, z0 + 12), Vector3i(x0 + 14, top + 6, z0 + 12)],
+			[Vector3i(x0 - 1, top - 6, z0 - 1), Vector3i(x0 - 1, top + 6, z0 + 12)],
+			[Vector3i(x0 + 14, top - 6, z0 - 1), Vector3i(x0 + 14, top + 6, z0 + 12)]]
+	for side in ring:
+		w.terrain_edited(BrickTerrain.fill_box(side[0], side[1], BrickTerrain.MAT_STONE, false))
+	await _fields_settle(f)
+	check("a stone ring round it closes it", not bool(f.store.get_plot(p_field).open)
+			and not bool(f.store.get_plot(field[4]).open))
+	# A gap two studs wide, its floor at the field's height: open again.
+	w.terrain_edited(BrickTerrain.fill_box(Vector3i(x0 + 6, top + 1, z0 + 12), Vector3i(x0 + 7, top + 6, z0 + 12), 0, false))
+	w.terrain_edited(BrickTerrain.fill_box(Vector3i(x0 + 6, top - 6, z0 + 12), Vector3i(x0 + 7, top, z0 + 12),
+			BrickTerrain.MAT_GRASS, false))
+	await _fields_settle(f)
+	check("a gap in the ring opens it again", bool(f.store.get_plot(p_field).open))
+	# A scarecrow by the field.
+	w.chests.place(Vector3i(bx0 + 4, top + 1, bz0 + 2), [], true, &"scarecrow")
+	for b in field:
+		if not f.store.get_plot(b).is_empty():
+			f.refresh(b)
+	check("a scarecrow marks the plots near it", bool(f.store.get_plot(field[4]).scared))
+	# Weeds pulled by LMB; mulch on.
+	var wb: Vector3i = rect[0]
+	f.store.get_plot(wb).weeds = true
+	var crop_before: StringName = f.store.get_plot(wb).crop
+	_hold(&"hoe")
+	w.builder.target = {"cell": Vector3i(wb.x * 2, top, wb.z * 2), "normal": Vector3i.UP}
+	w.builder.break_target()
+	check("LMB pulls the weeds and leaves the crop", not bool(f.store.get_plot(wb).weeds)
+			and f.store.get_plot(wb).crop == crop_before and crop_before != &"")
+	_hold(&"mulch")
+	w.builder.target = {"cell": Vector3i(wb.x * 2, top, wb.z * 2), "normal": Vector3i.UP}
+	w.builder.place_target()
+	check("mulch goes on a plot", bool(f.store.get_plot(wb).mulch))
+	# An animals' trample: the plot goes back to dirt in the world.
+	var pk: Vector3i = rect[6]
+	f.store.get_plot(pk).packed = true
+	f.settle_all()
+	check("animals' trample: the plot is gone, the soil dirt", f.store.get_plot(pk).is_empty()
+			and BrickTerrain.solid_at(pk.x * 2, top, pk.z * 2) == BrickTerrain.MAT_DIRT)
+	# Trouble on, three days: the open field gets visits.
+	FarmPlant.trouble = true
+	var ev0 := 0
+	for b in f.store.plots:
+		ev0 += int(f.store.plots[b].get("events", 0))
+	w.world_time += FarmPlant.DAY * 3.0
+	await w._frames(10)
+	f.settle_all()
+	var ev1 := 0
+	var kinds := {}
+	for b in f.store.plots:
+		var pl: Dictionary = f.store.plots[b]
+		ev1 += int(pl.get("events", 0))
+		if str(pl.get("last_event", "")) != "":
+			kinds[pl.last_event] = true
+	check("with trouble on, three days bring events (%d: %s)" % [ev1 - ev0, ", ".join(kinds.keys())], ev1 > ev0)
+	FarmPlant.trouble = false
+
 	# --- away: out of reach, the clock runs, the plot is not touched; back, it
 	# is where one settle puts it
 	var away_b := field[4]
@@ -345,6 +498,16 @@ func _drag(a: Vector3i, b: Vector3i) -> void:
 	await w._frames(2)
 	w.builder.target = {"cell": b, "normal": Vector3i.UP}
 	w.builder.farm_drag_end()
+	await w._frames(2)
+
+
+## Let the fields be worked out (regroup and floods, on the worker).
+func _fields_settle(f: MineFarming) -> void:
+	await w._frames(5)
+	for i in 600:
+		if not f.fields.busy():
+			break
+		await w._frames(1)
 	await w._frames(2)
 
 

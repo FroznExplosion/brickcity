@@ -1,26 +1,266 @@
 {
 	"items": {
-		"hoe": { "name": "Hoe", "kind": "hoe", "max_stack": 1, "hand": "right", "colour": "#a8a8b0", "glyph": "H",
-			"description": "Right-click the top of soil (grass, dirt, podzol): that 2x2 brick becomes tilled soil, smooth and furrowed. Seeds go on tilled soil." },
-		"scythe": { "name": "Scythe", "kind": "scythe", "max_stack": 1, "hand": "right", "colour": "#c0c4cc", "glyph": "S",
-			"description": "Right-click: harvests every ripe crop 3x3 round the plot (replanting from your seeds). Hold right-click and let go elsewhere: the whole rectangle." },
-		"watering_can": { "name": "Watering can", "kind": "can", "max_stack": 1, "hand": "right", "colour": "#5f8fb0", "glyph": "V",
-			"description": "Left-click water to fill it (16 plots). Right-click tilled soil: wet for a day. Hold right-click and let go elsewhere: a whole rectangle." },
-		"wheat_seeds": { "name": "Wheat seeds", "kind": "seed", "crop": "wheat", "max_stack": 99, "colour": "#c9b25a", "glyph": ".",
-			"description": "Right-click tilled soil to plant. Found breaking grass by hand." },
-		"pumpkin_seeds": { "name": "Pumpkin seeds", "kind": "seed", "crop": "pumpkin", "max_stack": 99, "colour": "#e8dca0", "glyph": ".",
-			"description": "Right-click tilled soil to plant. Slow and thirsty: plant near water." },
-		"carrot": { "name": "Carrot", "kind": "seed", "crop": "carrot", "max_stack": 99, "colour": "#ef8a1e", "glyph": "c", "model": "produce",
-			"description": "Food. Right-click tilled soil to plant one." },
-		"potato": { "name": "Potato", "kind": "seed", "crop": "potato", "max_stack": 99, "colour": "#c9a467", "glyph": "p", "model": "produce",
-			"description": "Food. Right-click tilled soil to plant one." },
-		"beans": { "name": "Beans", "kind": "seed", "crop": "beans", "max_stack": 99, "colour": "#7fbf4d", "glyph": "b", "model": "produce",
-			"description": "Food. Right-click tilled soil to plant; beans give fertility back to the soil." },
-		"berries": { "name": "Berries", "kind": "seed", "crop": "berry_bush", "max_stack": 99, "colour": "#c3243e", "glyph": "o", "model": "produce",
-			"description": "Food. Right-click tilled soil to plant a berry bush, which regrows after picking." },
-		"wheat": { "name": "Wheat", "kind": "misc", "max_stack": 99, "colour": "#dcb84a", "glyph": "w", "model": "produce",
-			"description": "Grain from a wheat field." },
-		"pumpkin": { "name": "Pumpkin", "kind": "misc", "max_stack": 16, "colour": "#f07a18", "glyph": "P", "model": "produce",
-			"description": "A whole pumpkin." }
+		"hoe": {
+			"name": "Hoe",
+			"kind": "hoe",
+			"max_stack": 1,
+			"hand": "right",
+			"colour": "#a8a8b0",
+			"glyph": "H",
+			"description": "Right-click the top of soil (grass, dirt, podzol): that 2x2 brick becomes tilled soil, smooth and furrowed. Seeds go on tilled soil."
+		},
+		"scythe": {
+			"name": "Scythe",
+			"kind": "scythe",
+			"max_stack": 1,
+			"hand": "right",
+			"colour": "#c0c4cc",
+			"glyph": "S",
+			"description": "Right-click: harvests every ripe crop 3x3 round the plot (replanting from your seeds). Hold right-click and let go elsewhere: the whole rectangle."
+		},
+		"watering_can": {
+			"name": "Watering can",
+			"kind": "can",
+			"max_stack": 1,
+			"hand": "right",
+			"colour": "#5f8fb0",
+			"glyph": "V",
+			"description": "Left-click water to fill it (16 plots). Right-click tilled soil: wet for a day. Hold right-click and let go elsewhere: a whole rectangle."
+		},
+		"wheat_seeds": {
+			"name": "Wheat seeds",
+			"kind": "seed",
+			"crop": "wheat",
+			"max_stack": 99,
+			"colour": "#c9b25a",
+			"glyph": ".",
+			"description": "Right-click tilled soil to plant. Found breaking grass by hand."
+		},
+		"pumpkin_seeds": {
+			"name": "Pumpkin seeds",
+			"kind": "seed",
+			"crop": "pumpkin",
+			"max_stack": 99,
+			"colour": "#e8dca0",
+			"glyph": ".",
+			"description": "Right-click tilled soil to plant. Slow and thirsty: plant near water."
+		},
+		"carrot": {
+			"name": "Carrot",
+			"kind": "seed",
+			"crop": "carrot",
+			"max_stack": 99,
+			"colour": "#ef8a1e",
+			"glyph": "c",
+			"model": "produce",
+			"description": "Food. Right-click tilled soil to plant one.",
+			"tags": [
+				"crop"
+			]
+		},
+		"potato": {
+			"name": "Potato",
+			"kind": "seed",
+			"crop": "potato",
+			"max_stack": 99,
+			"colour": "#c9a467",
+			"glyph": "p",
+			"model": "produce",
+			"description": "Food. Right-click tilled soil to plant one.",
+			"tags": [
+				"crop"
+			]
+		},
+		"beans": {
+			"name": "Beans",
+			"kind": "seed",
+			"crop": "beans",
+			"max_stack": 99,
+			"colour": "#7fbf4d",
+			"glyph": "b",
+			"model": "produce",
+			"description": "Food. Right-click tilled soil to plant; beans give fertility back to the soil.",
+			"tags": [
+				"crop"
+			]
+		},
+		"berries": {
+			"name": "Berries",
+			"kind": "seed",
+			"crop": "berry_bush",
+			"max_stack": 99,
+			"colour": "#c3243e",
+			"glyph": "o",
+			"model": "produce",
+			"description": "Food. Right-click tilled soil to plant a berry bush, which regrows after picking.",
+			"tags": [
+				"crop"
+			]
+		},
+		"wheat": {
+			"name": "Wheat",
+			"kind": "misc",
+			"max_stack": 99,
+			"colour": "#dcb84a",
+			"glyph": "w",
+			"model": "produce",
+			"description": "Grain from a wheat field.",
+			"tags": [
+				"crop"
+			]
+		},
+		"pumpkin": {
+			"name": "Pumpkin",
+			"kind": "misc",
+			"max_stack": 16,
+			"colour": "#f07a18",
+			"glyph": "P",
+			"model": "produce",
+			"description": "A whole pumpkin.",
+			"tags": [
+				"crop"
+			]
+		},
+		"corn": {
+			"name": "Corn",
+			"kind": "seed",
+			"crop": "corn",
+			"max_stack": 99,
+			"colour": "#f2cc3a",
+			"glyph": "c",
+			"model": "produce",
+			"tags": [
+				"crop"
+			],
+			"description": "A cob of corn. Food; right-click tilled soil to plant one."
+		},
+		"cabbage_seeds": {
+			"name": "Cabbage seeds",
+			"kind": "seed",
+			"crop": "cabbage",
+			"max_stack": 99,
+			"colour": "#a8c88a",
+			"glyph": ".",
+			"description": "Right-click tilled soil to plant. The quickest crop; fine in shade."
+		},
+		"cabbage": {
+			"name": "Cabbage",
+			"kind": "misc",
+			"max_stack": 99,
+			"colour": "#9fd27a",
+			"glyph": "C",
+			"model": "produce",
+			"tags": [
+				"crop"
+			],
+			"description": "A head of cabbage."
+		},
+		"melon_seeds": {
+			"name": "Melon seeds",
+			"kind": "seed",
+			"crop": "melon",
+			"max_stack": 99,
+			"colour": "#3b3b2a",
+			"glyph": ".",
+			"description": "Right-click tilled soil to plant. Very thirsty: plant beside water."
+		},
+		"melon": {
+			"name": "Melon",
+			"kind": "misc",
+			"max_stack": 16,
+			"colour": "#3f9a3a",
+			"glyph": "M",
+			"model": "produce",
+			"tags": [
+				"crop"
+			],
+			"description": "A whole melon."
+		},
+		"oak_sapling": {
+			"name": "Oak sapling",
+			"kind": "seed",
+			"crop": "oak_tree",
+			"max_stack": 64,
+			"colour": "#5e9e3b",
+			"glyph": "t",
+			"model": "sapling",
+			"description": "Right-click the top of grass or dirt (no hoe needed): it grows into an oak. Felling a tree sometimes gives one."
+		},
+		"dark_oak_sapling": {
+			"name": "Dark oak sapling",
+			"kind": "seed",
+			"crop": "dark_oak_tree",
+			"max_stack": 64,
+			"colour": "#2f6e34",
+			"glyph": "t",
+			"model": "sapling",
+			"description": "Right-click the top of grass or dirt: it grows into a dark oak."
+		},
+		"birch_sapling": {
+			"name": "Birch sapling",
+			"kind": "seed",
+			"crop": "birch_tree",
+			"max_stack": 64,
+			"colour": "#7ab84a",
+			"glyph": "t",
+			"model": "sapling",
+			"description": "Right-click the top of grass or dirt: it grows into a birch."
+		},
+		"acacia_sapling": {
+			"name": "Acacia sapling",
+			"kind": "seed",
+			"crop": "acacia_tree",
+			"max_stack": 64,
+			"colour": "#7e8a2e",
+			"glyph": "t",
+			"model": "sapling",
+			"description": "Right-click the top of grass or dirt: it grows into an acacia."
+		},
+		"compost": {
+			"name": "Compost",
+			"kind": "fertiliser",
+			"fertility": 30,
+			"max_stack": 99,
+			"colour": "#4a3524",
+			"glyph": "%",
+			"description": "Right-click tilled soil: +30 fertility. Made at a compost bin from leaves or crops."
+		},
+		"grow_mix": {
+			"name": "Grow mix",
+			"kind": "fertiliser",
+			"fertility": 10,
+			"boost_days": 2,
+			"max_stack": 99,
+			"colour": "#6a8a3a",
+			"glyph": "+",
+			"description": "Right-click a plot: the crop grows 50% faster for 2 days, +10 fertility. Made at a workbench from compost and coal."
+		},
+		"compost_bin": {
+			"name": "Compost bin",
+			"kind": "station",
+			"model": "bin",
+			"hand": "right",
+			"colour": "#6b4a2a",
+			"glyph": "B",
+			"description": "Place it: compost recipes (leaves or crops into compost) can be made within 4 m of it."
+		},
+		"scarecrow": {
+			"name": "Scarecrow",
+			"kind": "station",
+			"model": "scarecrow",
+			"hand": "right",
+			"colour": "#c9a24a",
+			"glyph": "Y",
+			"description": "Place it by a field: birds keep off ripe crops within 8 m (most of them)."
+		},
+		"mulch": {
+			"name": "Mulch",
+			"kind": "fertiliser",
+			"mulch": true,
+			"max_stack": 99,
+			"colour": "#5b4a2a",
+			"glyph": "~",
+			"description": "Right-click a plot (or drag over a field): no weeds come up there, and the ones there are smothered. Made from leaves."
+		}
 	}
 }

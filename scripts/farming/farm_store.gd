@@ -20,6 +20,8 @@ const REGION_STUDS := 256
 var plots := {}
 ## Regions changed since the last save: Vector2i -> true.
 var _dirty := {}
+## Bumped when a plot comes or goes (FarmFields regroups).
+var version := 0
 
 
 static func region_of(b: Vector3i) -> Vector2i:
@@ -31,6 +33,7 @@ static func region_of(b: Vector3i) -> Vector2i:
 func clear() -> void:
 	plots.clear()
 	_dirty.clear()
+	version += 1
 
 
 func count() -> int:
@@ -44,11 +47,13 @@ func get_plot(b: Vector3i) -> Dictionary:
 func put(plot: Dictionary) -> void:
 	plots[plot.b] = plot
 	touch(plot.b)
+	version += 1
 
 
 func remove(b: Vector3i) -> void:
 	if plots.erase(b):
 		touch(b)
+		version += 1
 
 
 ## The plot at `b` changed: its region is saved next time.
@@ -128,6 +133,7 @@ func load_dir(dir: String) -> int:
 				var plot := FarmPlant.from_row(row)
 				if not plot.is_empty():
 					plots[plot.b] = plot
+	version += 1
 	return plots.size()
 
 

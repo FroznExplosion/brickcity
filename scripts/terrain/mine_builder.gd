@@ -91,12 +91,14 @@ var _hold_break := 0.0
 var _pick_jobs: Array = []
 const MAX_PICK_JOBS := 2
 var _hold_place := 0.0
+## RMB held down: place_target is repeating (a lever is turned once a press).
+var rmb_repeat := false
 ## A gate that tests the keys the player's way (--gate=inventory) turns this on.
 var gate_keys := false
 ## A farm tool's RMB drag (Docs/MineFarming.md stage 3): the plate cell it
 ## began on, or empty when none is held.
 var farm_from := {}
-const FARM_DRAG := ["hoe", "seed", "scythe", "can"]
+const FARM_DRAG := ["hoe", "seed", "scythe", "can", "fertiliser"]
 ## Trees are looked at (Docs/Inventory.md 13); a gate aiming at the ground
 ## beside one turns it off.
 var aim_trees := true
@@ -285,6 +287,8 @@ func _process(delta: float) -> void:
 	if host == null:
 		return
 	if not active:
+		if host.wiring != null:
+			host.wiring.show_wrench(false, {})
 		return
 	update_target()
 	var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
@@ -297,7 +301,13 @@ func _process(delta: float) -> void:
 		_hold_place -= delta
 		if _hold_place <= 0.0:
 			place_target()
+			rmb_repeat = true
 			_hold_place = REPEAT
+	else:
+		rmb_repeat = false
+	# The wrench (Docs/MineWiring.md 14): cables through walls, the readout.
+	if host.wiring != null:
+		host.wiring.show_wrench(hand_kind() == "wrench", target)
 
 
 # ---------------------------------------------------------------------------
@@ -426,13 +436,13 @@ func farm_drag_end() -> bool:
 	var k := str(d.get("kind", ""))
 	var h := inv.hand()
 	var budget := 1 << 30
-	if k == "seed" and not inv.creative:
+	if (k == "seed" or k == "fertiliser") and not inv.creative:
 		budget = h.count if h != null else 0
 	elif k == "can":
 		budget = int(h.data.get("water", 0)) if h != null else 0
 	var n: int = host.farming.area(k, a, b, d.id, budget)
 	if n > 0:
-		if k == "seed":
+		if k == "seed" or k == "fertiliser":
 			inv.consume_hand(n)
 		elif k == "can" and h != null:
 			_set_data(h, "water", int(h.data.get("water", 0)) - n)
@@ -623,6 +633,13 @@ func _fell(cell: Vector2i, at: Vector3) -> bool:
 				var left := inv.add_item(ItemStack.make(id, int(got[k])))
 				if left != null:
 					host.drops.spawn(left, at)
+		# Its sapling, half the time (Docs/MineFarming.md 17).
+		var sap := MineFarming.sapling_of(int(got.get("variant", -1)))
+		if sap != &"" and randf() < MineFarming.SAPLING_CHANCE:
+			var left2 := inv.add_item(ItemStack.make(sap, 1))
+			if left2 != null:
+				host.drops.spawn(left2, at)
+			log_blocks.append("found %s" % sap)
 	return true
 
 
@@ -702,10 +719,23 @@ func place_target() -> bool:
 		target = {}
 		return true
 	if target.has("device"):
-		# RMB on a lever turns it, whatever is in the hand (Docs/MineWiring.md).
-		var used: bool = host.wiring.use_device(target.device)
+		# RMB on a device, once a press (Docs/MineWiring.md): a lever turns, a
+		# button presses, a delay steps; with the wrench a gate turns, and
+		# shift takes the device back.
+		if rmb_repeat:
+			return false
+		var dev: Vector3i = target.device
+		var used := false
+		if hand_kind() == "wrench" and Input.is_key_pressed(KEY_SHIFT):
+			var it: StringName = host.wiring.devices[dev].item
+			used = host.wiring.remove_device(dev, false)
+			if used and not inv.creative:
+				inv.add_item(ItemStack.make(it, 1))
+				inv.changed.emit()
+		else:
+			used = host.wiring.use_device(dev, "turn" if hand_kind() == "wrench" else "use")
 		if used:
-			log_blocks.append("use device %s" % target.device)
+			log_blocks.append("use device %s" % dev)
 		target = {}
 		return used
 	var d := hand_def()
@@ -715,8 +745,9 @@ func place_target() -> bool:
 	# Farming (MineFarming): a ripe crop is picked whatever is in the hand;
 	# a hoe tills, a seed plants.
 	if host.farming != null:
-		# (A scythe takes the ripe crops round it too: its own branch below.)
-		if k != "scythe" and host.farming.harvest_target(target):
+		# (A scythe takes the ripe crops round it too: its own branch below. A
+		# fertiliser, mulch or the can goes on the plot, ripe or not.)
+		if not ["scythe", "fertiliser", "can"].has(k) and host.farming.harvest_target(target):
 			log_blocks.append("harvest %s" % target.cell)
 			target = {}
 			return true
@@ -732,6 +763,15 @@ func place_target() -> bool:
 			var n3: int = host.farming.area("scythe", c, c)
 			target = {}
 			return n3 > 0
+		if k == "fertiliser":
+			var c5: Vector3i = target.get("cell", Vector3i.ZERO)
+			var n5: int = host.farming.area("fertiliser", c5, c5, d.id, 1)
+			if n5 > 0:
+				inv.consume_hand(1)
+				placed += 1
+				log_blocks.append("fertilise %s %s" % [d.id, c5])
+			target = {}
+			return n5 > 0
 		if k == "can":
 			var h := inv.hand()
 			var left := int(h.data.get("water", 0)) if h != null else 0
@@ -944,8 +984,13 @@ func _place_wiring(k: String, id: StringName) -> bool:
 	var ok := false
 	if k == "wire":
 		ok = host.wiring.place_cable(cell)
-	elif not _box_hits_player(host.wiring.device_box(cell)) and not host.chests.overlaps(host.wiring.device_box(cell)):
-		ok = host.wiring.place_device(cell, id)
+	else:
+		# A device faces away from the player placing it.
+		var cam: Camera3D = host._eye_camera()
+		var f := MineWiring.facing_of(host.global_transform.basis.inverse() * -cam.global_transform.basis.z) if cam != null else 0
+		var dbox: AABB = host.wiring.device_box(cell, id, f)
+		if not _box_hits_player(dbox) and not host.chests.overlaps(dbox):
+			ok = host.wiring.place_device(cell, id, false, false, f)
 	if not ok:
 		return false
 	inv.consume_hand(1)

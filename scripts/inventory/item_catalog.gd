@@ -13,7 +13,7 @@ extends RefCounted
 ##   fluid (1 water, 2 lava, 0 none), fluid_kind ("source" / "still").
 
 const KINDS := ["block", "fluid", "bucket", "source_bucket", "chest", "station", "tool", "backpack", "gun", "grenade",
-		"hoe", "seed", "scythe", "can", "wire", "device", "misc"]
+		"hoe", "seed", "scythe", "can", "fertiliser", "wire", "device", "wrench", "misc"]
 ## Which hand an item may be in (zylanntest's HandUse).
 const HANDS := ["any", "right", "off", "two"]
 ## Tilled soil is made with a hoe, never laid; breaking it gives soil
@@ -184,7 +184,8 @@ static func _complete(e: Dictionary) -> Dictionary:
 	# A tool's own numbers (the Mega Pickaxe): how much one break clears and
 	# how often it repeats while held (MineBuilder._break_cells/_break_repeat).
 	# A seed's crop (Docs/MineFarming.md): what it grows into.
-	for k in ["break_area", "break_repeat", "model", "crop"]:
+	# A fertiliser's fertility and boost (Docs/MineFarming.md 17).
+	for k in ["break_area", "break_repeat", "model", "crop", "fertility", "boost_days", "mulch"]:
 		if e.has(k):
 			out[k] = e[k]
 	return out

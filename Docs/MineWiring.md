@@ -284,9 +284,13 @@ Small stages, each with a probe and a gate, each merged:
 1. Cable tile layer (store, nets on a worker, own mesh, saved) + lever + lamp.
    **Built 2026-11-25** (section 13).
 2. Button, pressure tile, trip string; gates, delay, pulse; the view tool
-   (also the wrench: look, turn, take; section 12); first Ponder-style dioramas.
+   (also the wrench: look, turn, take; section 12). **Built 2026-11-25**
+   (section 14). The Ponder-style dioramas moved to their own stage, 2b.
+2b. Ponder-style dioramas: a little animated scene per part, played from
+   the inventory (section 12).
 3. Door, trapdoor, gate tile; observer (from `terrain_edited`); sequencer
-   brick; number tile.
+   brick; number tile. **Door, trapdoor, observer built 2026-11-25** (section
+   15); gate tile, sequencer, number tile are stage 3b.
 4. Piston: up first (unclutch + group + limit), then sideways with the hop,
    the stand-in slide, the kinematic shove; sticky piston. Moving groups are
    contraptions (section 12): one body, riders carried by contact.
@@ -474,6 +478,93 @@ taken with LMB, the lever lights both lamps (one up a climb), a real shot
 cuts a run (its lamp dark, the other branch lit), dug-out ground breaks a
 cable, generated again: all back. Pictures `user://dev/wiring_on.png`,
 `wiring_cut.png`.
+
+## 14. Stage 2, built (2026-11-25)
+
+All in `MineWiring` (DEVICES is the table: kind, height, omni, facing);
+items in `content/base/data/items/wiring.json`.
+
+| Device | Height | Drives | Does |
+|---|---|---|---|
+| button | brick | every side | RMB: 15 for 10 ticks (1 s) |
+| pressure tile | plate | every side | 15 while a body's feet are on its top (and 5 ticks after) |
+| trip hook | brick | every side | pairs with the first hook in FRONT of it within 12 studs that faces back, nothing solid or a device on the string's line; while a body crosses the string both hooks give 15 (and 5 ticks after) |
+| AND / OR / XOR / NOT gate | brick | its front only | inputs at the back, left, right: AND = every side with something at it on; OR = any; XOR = an odd number; NOT = the back off |
+| latch | brick | front | left sets, right resets (reset wins) |
+| delay | brick | front | the back, 1-10 ticks later (RMB steps it; default 2) |
+| pulse | brick | front | the back turning on gives 2/5/10/20 ticks (RMB steps; default 5) |
+
+- **Facing.** A device that faces is laid facing away from the player (the
+  camera's horizontal direction, `facing_of`); the wrench turns it a
+  quarter to the right. Its output reaches only the net and the device in
+  front of it -- so an OR is also a one-way joint. Gates show a white arrow
+  at the front and a light on top while their output is on.
+- **The tick.** Sensors, then drivers' outputs, then net levels, then
+  lamps, then every gate's next output from what it reads, applied together
+  -- each gate is one tick, and a NOT feeding its own back flips every tick
+  (a 5 Hz clock), never a hang. The tick works only while something can
+  change: a sensor, a gate, a running timer, or something changed.
+- **The wrench** (`wrench`, kind `wrench`): in the hand in build mode, every
+  cable is drawn again through walls (the same MultiMeshes, an unshaded
+  material with no depth test), and a readout beside the cross-hair says
+  what is looked at: a cable's whole net (level, cables, devices on it -- the
+  Create lesson: the net's sum, not one part), a device's output, facing,
+  inputs, its delay or pulse, its string, a lamp's state. RMB turns a
+  facing device; shift + RMB takes any device back (into the inventory in
+  survival).
+- **Held RMB** repeats placing; a device is now used only on the press
+  (`MineBuilder.rmb_repeat`): stage 1 turned a lever every 0.22 s while the
+  button was held.
+- **Bodies** are the player's feet (`player_feet_local`); AI pawns do not
+  press tiles or trip strings yet.
+- Saved: each device's facing and setting beside its item and state.
+
+Tests: `wiring_probe` 82 ok (stage 2: the button's second, the tile on and
+off and not from above, the string paired / crossed / not from far above /
+blocked by ground / unpaired by a turn / too far, every gate's truth
+table, the latch remembering, delay 3 = on in the 4th tick, pulse 5 = 5
+ticks, the clock, the OR as a one-way joint, the wrench readouts, facing
+and settings saved). `--gate=wiring` stage 2 section in the real world:
+a NOT laid by the builder faces away from the camera and lights its lamp,
+the button darkens it for its second, the wrench's readout and x-ray, the
+wrench turning a gate, a held RMB not turning a lever, the player standing
+on a tile and crossing a string, all saved. Picture
+`user://dev/wiring_gates.png`.
+
+## 15. Stage 3a, built (2026-11-25): door, trapdoor, observer
+
+- **Devices of more than one stud.** A DEVICES entry may have `w` (studs to
+  the right of its facing) and `d` (studs to its front); `footprint` gives
+  its bottom cells, `cells_of` every plate cell it fills, and an occupancy
+  map (`_occupied`, cell -> its device) answers "what is here" for cables,
+  devices and strings. `device_box` covers the footprint. Support per kind
+  (`_supported`): a trapdoor by ground under or beside any of its cells,
+  everything else by ground under every bottom cell. A multi-stud device is
+  not turned by the wrench (taken up and laid again instead).
+- **Door**: 2 studs wide (to the right of its facing), 14 plates tall (the
+  room modules' door height), laid across the player's view. A wooden panel
+  with a window and a handle hangs from a hinge at its left edge with its
+  collider (WORLD): open, the hinge turns 90 degrees to the front, collider
+  and all. Power from any side of its two studs turning on opens it,
+  turning off shuts it (`power_in`); RMB opens or shuts it by hand between.
+- **Trapdoor**: 2 x 2 studs, a plate thick, hinged at its back edge; open,
+  it swings down (collider too), so whoever stood on it falls. Held by the
+  ground beside it, so it lies over a pit. The same power and hand rules.
+- **Observer**: a brick facing a way; it watches the stud in front of it,
+  its height. Ground edits there (`check`'s edit box, from
+  `terrain_edited`), a cable laid or taken there, a device's cells placed or
+  taken there: 15 out of its BACK for 2 ticks (`OBSERVER_TICKS`). Not for a
+  whole check, and not for loading a world.
+- Saved: a door's or trapdoor's open state is its `on`.
+
+Tests: `wiring_probe` 102 ok (stage 3a: the door's cells, no cable in it,
+power open/shut, RMB, no wrench turn, breaking when its ground goes; the
+trapdoor over a pit, not in mid-air, opened by a lever a step up; the
+observer's 2-tick pulse at its back only, nothing for an edit elsewhere, a
+pulse for a cable laid in front, none for a load). `--gate=wiring`: a door
+laid by the builder faces across the view and a lever swings its panel and
+collider open and shut; a real ground edit flashes an observer's lamp; a
+trapdoor over a dug pit opens from a lever; all back after a reload.
 
 ## Sources
 
