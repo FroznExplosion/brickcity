@@ -8,6 +8,7 @@
 using namespace godot;
 
 #include <array>
+#include <functional>
 #include <memory>
 #include <vector>
 #include <unordered_map>
@@ -49,6 +50,28 @@ private:
 };
 /// The game's ground bricks come from the fit (TerrainFit.set_enabled).
 bool fit_enabled();
+
+/// THE TOP COURSE's bricks (Docs/TerrainRegions.md 12.3): the surface's
+/// pieces cut by the fit, not the old pattern. A cell's brick is fitted in
+/// its square of its course among the cells `group` says go with it (the
+/// packer's rule: same height, material, colour, free), each one's bond
+/// group (BOND_MEDIUM / STRONG; NONE: not with it): a pure function of
+/// those cells, so tiles either side of an edge agree. One course only.
+/// `cls` names the group (the packer's height, material and colour), the
+/// memo keeps a square's fit for one caller.
+class TopFitMemo {
+public:
+    TopFitMemo();
+    ~TopFitMemo();
+    struct Square;
+    std::unordered_map<uint64_t, std::unique_ptr<Square>> squares;
+};
+bool fit_top(TopFitMemo &memo, int x, int course, int z, uint64_t cls,
+        const std::function<int(int, int)> &group, FitBrick &out);
+/// Column (x, z)'s GENERATED top plate and the material there (edits
+/// ignored), kept by tile. False without the biome generator.
+bool generated_top(int x, int z, int &plate, int &mat);
+
 /// Drops every kept region (new settings, a new world).
 void fitted_clear();
 } // namespace brick

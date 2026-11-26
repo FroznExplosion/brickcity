@@ -735,3 +735,29 @@ region_fit_probe's numbers the same, lookup PASS):
 --fitted`: a cold 2 x 2 at the mountain spot 129 ms (allowed 120), 96 at the
 other. The rest of a cold tile is mostly its neighbours' noise (a region's
 fit reads ~1.5 tiles round). The switch stays off until that check passes.
+
+### 12.3 The top course from the fit (built 2026-11-26)
+
+With the fit on, the packer cuts the surface's top course from the fit too
+(`brick::fit_top`, `pack_tile`): a column's top cell takes the brick of a
+one-course region fit of its square among the columns of its GENERATED
+class (generated top plate, material, colour; `brick::generated_top`, kept
+by tile), by the material's group (sand and gravel 1x1, grass and dirt 8
+cells at most). A fitted top brick is kept while every cell of it is as
+generated and free (not smooth, a ramp's or slope's, placed); a column an
+edit changed, or the rest of a brick it cut, takes the old pattern among
+the cells no whole fitted brick holds -- so a hole re-lays only the bricks
+it touches (`mine_world_probe`: every other brick laid as before). Placed
+blocks first, as always. Studs: the old rule (a brick whose old 4 x 2 cut
+reaches under a higher column is studded), so the surface stays a mix.
+
+Checks with `--fitted`: bricks, audit, collapse PASS; `mine_world_probe`
+all but the cold bake (136 ms, 120 allowed); `--gate=bricks` PASS.
+`terrain_bricks_probe` now counts a surface piece under a laid plate apart
+(a listed brick of the same footprint on it): with the plates off there
+are none without a face, so all of them were that harmless case; the fit
+has more top pieces, so more of them (60 a tile, the old 28).
+
+Open (the user, 2026-11-26): should building materials be left out of the
+"a group of 500+ cells floats" rule (stage D) so an undermined building
+still tips? Left open; building cells reach the collapse as placed blocks.
