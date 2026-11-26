@@ -26,6 +26,12 @@ extends RefCounted
 ##             click takes the ripe crops 3 x 3 round a plot.
 ##   chest     a harvest that will not fit the inventory goes into a chest
 ##             near the field.
+##   stage 4   a sapling planted on plain grass (no hoe) grows into a REAL
+##             tree -- saved in the trees' planted list, and felled like any
+##             other; compost made at a compost bin from crops; compost on a
+##             plot raises its fertility; a grow mix dragged over a field
+##             boosts every plot; corn, cabbage and melon planted and drawn
+##             (user://dev/farm_stage4.png).
 ##   save      the world generated again (saved, loaded): the plots, their
 ##             state and the clock come back.
 ##   pictures  user://dev/farm_field.png, farm_guide.png.
@@ -257,6 +263,82 @@ func run(host: Node) -> void:
 		if sl is ItemStack and (sl as ItemStack).id == &"wheat":
 			in_chest += (sl as ItemStack).count
 	check("what will not fit the inventory goes into the chest by the field (%d wheat)" % in_chest, in_chest > 0)
+
+	# --- stage 4: saplings, compost, grow mix, the new crops
+	var sb := Vector3i(bx0 + 4, top, bz0 + 1)
+	_hold(&"oak_sapling")
+	w.builder.target = {"cell": Vector3i(sb.x * 2, top, sb.z * 2), "normal": Vector3i.UP}
+	var sap_ok: bool = w.builder.place_target()
+	var sp := f.store.get_plot(sb)
+	check("an oak sapling goes on plain grass, no hoe", sap_ok and not sp.is_empty()
+			and sp.crop == &"oak_tree" and sp.ground == "soil"
+			and BrickTerrain.solid_at(sb.x * 2, top, sb.z * 2) == BrickTerrain.MAT_GRASS)
+	check("seeds do not go on plain grass", not f.plant({"cell": Vector3i((bx0 + 4) * 2, top, (bz0 + 4) * 2),
+			"normal": Vector3i.UP}, &"wheat_seeds"))
+	# Corn, cabbage and melon on three of the carrot plots (pulled first).
+	var newc := [&"corn", &"cabbage_seeds", &"melon_seeds"]
+	for i in 3:
+		var nb: Vector3i = rect[i * 2 + 1]
+		w.builder.target = {"cell": Vector3i(nb.x * 2, top, nb.z * 2), "normal": Vector3i.UP}
+		w.builder.break_target()
+		f.plant({"cell": Vector3i(nb.x * 2, top, nb.z * 2)}, newc[i])
+	check("corn, cabbage and melon planted", f.store.get_plot(rect[1]).crop == &"corn"
+			and f.store.get_plot(rect[3]).crop == &"cabbage" and f.store.get_plot(rect[5]).crop == &"melon")
+	# Compost at a compost bin, from crops.
+	var feet_at: Vector3 = w.player_feet_local()
+	var bin := Vector3i(floori(feet_at.x / stud / 2.0) + 1, floori(feet_at.y / plate), floori(feet_at.z / stud / 2.0))
+	w.chests.place(bin, [], true, &"compost_bin")
+	var near: Array = w.stations_near()
+	var rec := {}
+	for r in RecipeBook.all():
+		if str(r.name) == "Compost from crops":
+			rec = r
+	var c0 := _count(inv, &"compost")
+	var made: Dictionary = inv.craft(rec, near) if not rec.is_empty() else {"made": 0}
+	check("compost made at a compost bin from crops (bin in reach: %s, made %d)" % [near.has(&"compost_bin"),
+			int(made.made)], near.has(&"compost_bin") and int(made.made) == 1
+			# (the chest check above filled the bags: the compost may be in `left`)
+			and (_count(inv, &"compost") > c0 or not (made.get("left", []) as Array).is_empty()))
+	# Compost on a plot; a grow mix over the field.
+	var fb: Vector3i = rect[7]
+	f.store.get_plot(fb).fert = 40.0
+	_hold(&"compost")
+	w.builder.target = {"cell": Vector3i(fb.x * 2, top, fb.z * 2), "normal": Vector3i.UP}
+	w.builder.place_target()
+	check("compost on a plot: fertility 40 -> %d" % roundi(float(f.store.get_plot(fb).fert)),
+			is_equal_approx(float(f.store.get_plot(fb).fert), 70.0))
+	_hold(&"grow_mix")
+	await _drag(a3, b3)
+	var boosted := 0
+	for b in rect:
+		if FarmPlant.boosted_at(f.store.get_plot(b), w.world_time):
+			boosted += 1
+	check("a grow mix dragged over the field boosts all 8 plots (%d)" % boosted, boosted == 8)
+	# A day and a half on: the new crops half grown, the sapling a small tree.
+	w.world_time += FarmPlant.DAY * 1.5
+	await w._frames(20)
+	f.settle_all()
+	var mid4: Vector3 = f._top_middle(rect[3])
+	var cam4 := mid4 + Vector3(-2.6, 1.8, -2.4)
+	var d4 := (mid4 - cam4).normalized()
+	w._fly_to(cam4 - Vector3(0, 1.6, 0), Vector3(d4.x, 0, d4.z))
+	w.walker.pitch = asin(clampf(d4.y, -1.0, 1.0))
+	if w._hud_layer != null:
+		w._hud_layer.visible = false
+	await w._frames(60)
+	await w._shot(UserPaths.DEV + "farm_stage4.png")
+	if w._hud_layer != null:
+		w._hud_layer.visible = true
+	# Eight more days (dry, maybe a biome it dislikes): the sapling is a tree.
+	w.world_time += FarmPlant.DAY * 8.0
+	await w._frames(10)
+	f.settle_all()
+	var tcell := Vector2i(sb.x * 2, sb.z * 2)
+	check("the sapling grew into a real tree (%d grown, in the planted list: %s)" % [f.trees_grown,
+			w._trees.planted.has(tcell)], f.trees_grown >= 1 and f.store.get_plot(sb).is_empty()
+			and w._trees.planted.has(tcell))
+	var felled: Dictionary = w.fell_tree(tcell)
+	check("and it can be felled like any tree", not felled.is_empty() and not w._trees.planted.has(tcell))
 
 	# --- away: out of reach, the clock runs, the plot is not touched; back, it
 	# is where one settle puts it

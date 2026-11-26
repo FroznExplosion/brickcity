@@ -65,6 +65,10 @@ static func _complete(e: Dictionary) -> Dictionary:
 		"leaf": Color.html(str(look.get("leaf", "#4f9a32"))),
 		"ripe": Color.html(str(look.get("ripe", "#d9b648"))),
 		"found": e.get("found", []) if e.get("found") is Array else [],
+		## A sapling: the tree variant (Trees) it grows into when ripe, -1 for a crop.
+		"tree": int(e.get("tree", -1)),
+		## Where it is planted: "farm" tilled soil only; "soil" plain soil or tilled.
+		"ground": str(e.get("ground", "farm")),
 		"tips": str(e.get("tips", "")),
 	}
 

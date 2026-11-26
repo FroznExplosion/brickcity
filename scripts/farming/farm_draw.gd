@@ -171,6 +171,36 @@ func mesh_for(crop_id: StringName, stage: int) -> Mesh:
 					var y := h * (0.3 + 0.45 * float(i % 3) / 2.0)
 					var c := Vector3(cos(a) * w * 0.5, y, sin(a) * w * 0.5)
 					_cyl(st, c - Vector3(0, 0.03, 0), 0.06, 0.07, fruit)
+		"corn":
+			# Two tall stalks with long leaves; ripe, a yellow cob on each.
+			var h := lerpf(P * 2.0, P * 3.0 * 4.0, k)
+			for sx in [-0.45, 0.45]:
+				var c := Vector3(sx * S, 0, -sx * S * 0.6)
+				_cyl(st, c, 0.045, h, leaf.darkened(0.1))
+				for i in 1 + stage:
+					var a: float = float(i) * 2.1 + sx
+					_leaf(st, c + Vector3(0, h * (0.2 + 0.13 * i), 0), Vector3(cos(a), 0, sin(a)), S * 0.9, leaf)
+				if stage >= 3:
+					var cob := leaf.lerp(fruit, 1.0 if ripe else 0.2)
+					_cyl(st, c + Vector3(0.06, h * 0.55, 0), 0.06, P * 1.6, cob)
+				_cyl(st, c + Vector3(0, h, 0), 0.02, P * 1.0, fruit.darkened(0.3) if k > 0.6 else leaf)
+		"head":
+			# A cabbage: round plates stacked into a head, wider each stage.
+			var r := lerpf(S * 0.2, S * 0.75, k)
+			for i in 2 + stage:
+				var w := r * (1.0 - 0.18 * i)
+				_cyl(st, Vector3(0, P * 0.6 * i, 0), maxf(w, 0.04), P * 0.7,
+						leaf.lerp(fruit, float(i) / (2.0 + stage)), 12)
+			if ripe:
+				_stud_on(st, Vector3(0, P * 0.6 * (2 + stage), 0), fruit)
+		"sapling":
+			# A thin trunk and a leaf block on it that grows each stage.
+			var h := lerpf(P * 1.5, P * 3.0 * 2.0, k)
+			_cyl(st, Vector3.ZERO, lerpf(0.025, 0.07, k), h, Color(0.42, 0.28, 0.15))
+			var w := lerpf(S * 0.35, S * 1.3, k)
+			_box(st, Vector3(0, h + w * 0.35, 0), Vector3(w, w * 0.7, w), leaf)
+			if k > 0.4:
+				_box(st, Vector3(0, h + w * 0.85, 0), Vector3(w * 0.6, w * 0.4, w * 0.6), leaf.lightened(0.08))
 		_:
 			_box(st, Vector3(0, P, 0), Vector3(S, P * 2.0, S), leaf)
 	st.generate_normals()

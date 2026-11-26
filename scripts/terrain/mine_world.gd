@@ -516,6 +516,7 @@ func generate(s: Dictionary) -> void:
 	_trees.solid_m = 64.0   # trunks the player and rounds meet
 	# The trees this world's player cut down stay down (Docs/Inventory.md 13).
 	_trees.set_felled(_felled_load)
+	_trees.set_planted(_planted_load)
 	# The instance pool, filled now rather than by the first new ground's
 	# never-drawn nodes (the spawn spike, Docs/MineWorld.md 14).
 	if _prewarm_on:
@@ -1825,7 +1826,19 @@ func fell_tree(cell: Vector2i) -> Dictionary:
 		return {}
 	_world_dirty = true
 	print("[mine] tree felled at %s (variant %d)" % [cell, variant])
-	return Trees.yield_cells(variant).duplicate()
+	var got := Trees.yield_cells(variant).duplicate()
+	got["variant"] = variant
+	return got
+
+
+## A sapling grown into a tree (MineFarming, Docs/MineFarming.md 17).
+func plant_tree(cell: Vector3i, variant: int) -> bool:
+	if _trees == null:
+		return false
+	_trees.plant_tree(cell, variant)
+	_world_dirty = true
+	print("[mine] tree grown at %s (variant %d)" % [cell, variant])
+	return true
 
 
 # ---------------------------------------------------------------------------
@@ -1991,6 +2004,8 @@ var _inv_loaded := false
 var survival := false
 ## The world file's felled trees, until the trees are made (generate).
 var _felled_load: Array = []
+## And its trees grown from saplings (Docs/MineFarming.md 17).
+var _planted_load: Array = []
 
 
 static func _inventory_path(edits_path: String) -> String:
@@ -2034,6 +2049,8 @@ func _load_inventory() -> void:
 	survival = bool(world.get("survival", not bool(world.get("creative", true))))
 	var fl = world.get("felled", [])
 	_felled_load = fl if fl is Array else []
+	var pl = world.get("planted", [])
+	_planted_load = pl if pl is Array else []
 	# Buildings stamped into the ground (Docs/TerrainBuildings.md): their
 	# balance records, and the towns already laid.
 	MineBuildings.from_save(world.get("buildings", []))
@@ -2082,7 +2099,9 @@ func how_kit_added(inv: Inventory) -> bool:
 	# Wiring (Docs/MineWiring.md): cable tiles, levers and lamps are in the
 	# creative catalog, not the kit -- the kit's storage starts empty
 	# (--gate=inventory counts on it).
-	for it in [&"hoe", &"scythe", &"watering_can", &"wheat_seeds", &"carrot", &"potato", &"beans", &"pumpkin_seeds", &"berries"]:
+	for it in [&"hoe", &"scythe", &"watering_can", &"wheat_seeds", &"carrot", &"potato", &"beans", &"pumpkin_seeds", &"berries", &"corn",
+			&"cabbage_seeds", &"melon_seeds", &"oak_sapling", &"birch_sapling", &"dark_oak_sapling", &"acacia_sapling",
+			&"compost", &"grow_mix", &"compost_bin"]:
 		if ItemCatalog.has(it) and inv.ensure_item(it):
 			print("[mine] %s added to the inventory" % it)
 			added = true
@@ -2146,6 +2165,7 @@ func save_edits(wait := false) -> void:
 	# The world file: only what is the world's (stage 6).
 	var inv_save := {"format": 3, "survival": survival,
 			"felled": _trees.felled_list() if _trees != null else _felled_load, "time": world_time,
+			"planted": _trees.planted_list() if _trees != null else _planted_load,
 			"buildings": MineBuildings.to_save(), "towns": MineBuildings.towns_to_save()}
 	_time_saved = world_time
 	var farm_regions: Array = farming.store.take_dirty() if farming != null else []

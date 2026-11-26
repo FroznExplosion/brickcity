@@ -27,6 +27,8 @@ extends RefCounted
 ##   wet      bool   water within reach (cached by MineFarming when loaded)
 ##   wet_until float world time a watering can's water lasts to (0: never
 ##                   watered); the soil is wet while either holds (`wet_at`)
+##   boost_until float world time a grow mix's boost lasts to (x GROW_BOOST)
+##   ground   String "farm" on tilled soil, "soil" on plain ground (a sapling)
 ##   sky      float  0..1, open sky above it (sky light / 15)
 ##   lamp     float  0..1, other light (lava; lamps later)
 ##   biome    int    BrickTerrain.biome_at under it
@@ -47,6 +49,8 @@ const LIKED := 1.25
 const DISLIKED := 0.7
 ## A watering can's water lasts this long on a plot (world seconds).
 const CAN_LASTS := DAY
+## A grow mix's boost: this much faster while it lasts.
+const GROW_BOOST := 1.5
 ## Under this fertility a stage counts as starved (a stress point).
 const POOR_SOIL := 25.0
 ## A crop counts as wanting water when dry soil drops it under this rate.
@@ -136,7 +140,7 @@ static func new_plot(b: Vector3i, now: float, fert: float, biome: int) -> Dictio
 	return {"b": b, "crop": &"", "stage": 0, "p": 0.0, "t": now, "seed": 0,
 			"fert": clampf(fert, 0.0, 100.0), "fam": "", "stress": 0,
 			"wet": false, "sky": 1.0, "lamp": 0.0, "biome": biome, "planted": now, "picks": 0,
-			"wet_until": 0.0}
+			"wet_until": 0.0, "boost_until": 0.0, "ground": "farm"}
 
 
 static func plant(plot: Dictionary, crop: StringName, now: float) -> void:
@@ -193,10 +197,16 @@ static func jitter(plot: Dictionary) -> float:
 	return 0.85 + 0.3 * roll(int(plot.seed), int(plot.stage), int(plot.picks))
 
 
-## Stages a light-second, with the soil `wet` or not: everything but the light.
-static func rate(plot: Dictionary, crop: Dictionary, wet: bool) -> float:
+## Is a grow mix's boost on at world time `t`?
+static func boosted_at(plot: Dictionary, t: float) -> bool:
+	return t < float(plot.get("boost_until", 0.0))
+
+
+## Stages a light-second, with the soil `wet` or not and a grow mix's
+## `boost` on or not: everything but the light.
+static func rate(plot: Dictionary, crop: Dictionary, wet: bool, boost := false) -> float:
 	return soil_factor(plot, crop) * water_factor(crop, wet) * biome_factor(crop, int(plot.biome)) \
-			/ (float(crop.stage_hours) * HOUR * jitter(plot))
+			* (GROW_BOOST if boost else 1.0) / (float(crop.stage_hours) * HOUR * jitter(plot))
 
 
 ## Stress points a stage ending now earns (what held it back).
@@ -229,25 +239,28 @@ static func settle(plot: Dictionary, now: float) -> bool:
 	var changed := false
 	# A can's water running out is a time like a stage's end: the interval is
 	# cut there, wet before, as the plot's own water says after.
+	# A grow mix's boost running out is one more such time.
 	while t0 < now:
 		var wu := float(plot.get("wet_until", 0.0))
-		var wet := wet_at(plot, t0)
+		var bu := float(plot.get("boost_until", 0.0))
 		var t1 := now
-		if not bool(plot.wet) and t0 < wu and wu < now:
+		if not bool(plot.wet) and t0 < wu and wu < t1:
 			t1 = wu
-		if _grow(plot, crop, t0, t1, wet):
+		if t0 < bu and bu < t1:
+			t1 = bu
+		if _grow(plot, crop, t0, t1, wet_at(plot, t0), boosted_at(plot, t0)):
 			changed = true
 		t0 = t1
 	plot.t = now
 	return changed
 
 
-## Grow from t0 to t1 with the soil wet or not all through.
-static func _grow(plot: Dictionary, crop: Dictionary, t0: float, t1: float, wet: bool) -> bool:
+## Grow from t0 to t1 with the soil wet or not, boosted or not, all through.
+static func _grow(plot: Dictionary, crop: Dictionary, t0: float, t1: float, wet: bool, boost: bool) -> bool:
 	var changed := false
 	var last := int(crop.stages) - 1
 	while int(plot.stage) < last:
-		var r := rate(plot, crop, wet)
+		var r := rate(plot, crop, wet, boost)
 		var need := (1.0 - float(plot.p)) / maxf(r, 1e-12)
 		var have := light_between(plot, t0, t1)
 		if have < need or r <= 0.0:
@@ -325,10 +338,11 @@ static func eta(plot: Dictionary, now: float) -> float:
 	if light <= 0.0:
 		return INF
 	var wet := wet_at(plot, now)
+	var boost := boosted_at(plot, now)
 	var copy := plot.duplicate()
 	var secs := 0.0
 	while int(copy.stage) < int(crop.stages) - 1:
-		var r := rate(copy, crop, wet)
+		var r := rate(copy, crop, wet, boost)
 		if r <= 0.0:
 			return INF
 		secs += (1.0 - float(copy.p)) / r / light
@@ -376,7 +390,7 @@ static func to_row(plot: Dictionary) -> Array:
 	return [b.x, b.y, b.z, String(plot.crop), int(plot.stage), float(plot.p), float(plot.t), int(plot.seed),
 			float(plot.fert), str(plot.fam), int(plot.stress), bool(plot.wet), float(plot.sky),
 			float(plot.lamp), int(plot.biome), float(plot.planted), int(plot.picks),
-			float(plot.get("wet_until", 0.0))]
+			float(plot.get("wet_until", 0.0)), float(plot.get("boost_until", 0.0)), str(plot.get("ground", "farm"))]
 
 
 static func from_row(r: Array) -> Dictionary:
@@ -386,4 +400,6 @@ static func from_row(r: Array) -> Dictionary:
 			"stage": int(r[4]), "p": float(r[5]), "t": float(r[6]), "seed": int(r[7]),
 			"fert": float(r[8]), "fam": str(r[9]), "stress": int(r[10]), "wet": bool(r[11]),
 			"sky": float(r[12]), "lamp": float(r[13]), "biome": int(r[14]), "planted": float(r[15]),
-			"picks": int(r[16]), "wet_until": float(r[17]) if r.size() > 17 else 0.0}
+			"picks": int(r[16]), "wet_until": float(r[17]) if r.size() > 17 else 0.0,
+			"boost_until": float(r[18]) if r.size() > 18 else 0.0,
+			"ground": str(r[19]) if r.size() > 19 else "farm"}
