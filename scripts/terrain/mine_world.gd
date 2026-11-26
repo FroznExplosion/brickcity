@@ -97,6 +97,7 @@ var _inv_walker_frozen := false
 var chests: MineChests = null
 ## Cable tiles, levers, lamps (Docs/MineWiring.md).
 var wiring: MineWiring = null
+var buildings_far: MineBuildingsFar = null
 var drops: DroppedItems = null
 ## Farming (Docs/MineFarming.md): tilled plots, crops on the world clock.
 var farming: MineFarming = null
@@ -274,6 +275,11 @@ func _ready() -> void:
 	wiring.name = "Wiring"
 	add_child(wiring)
 	wiring.setup(self, drops)
+	# Stamped buildings' far facades (Docs/TerrainBuildings.md 7).
+	buildings_far = MineBuildingsFar.new()
+	buildings_far.name = "BuildingsFar"
+	add_child(buildings_far)
+	buildings_far.setup(self)
 	wiring.set_hud(_hud_layer)
 	farming = MineFarming.new()
 	farming.name = "Farming"
@@ -579,6 +585,9 @@ func _tend_towns(delta: float, eye: Vector3) -> void:
 func _teardown() -> void:
 	MineBuildings.registry.clear()
 	MineBuildings.towns_from_save([])
+	if buildings_far != null:
+		for c in buildings_far.get_children():
+			c.queue_free()
 	fast_hold = false
 	_speed = 0.0
 	_speed_from = Vector3.INF
@@ -7191,6 +7200,48 @@ func _run_buildings_gate() -> void:
 	await shoot_pic.call("near", centre + Vector3(-12.0, 1.8, -9.0), centre + Vector3(0, 3.0, 0))
 	await shoot_pic.call("mid", centre + Vector3(-40.0, 6.0, -22.0), look)
 	await shoot_pic.call("far", centre + Vector3(-110.0, 25.0, -60.0), look)
+	# Stage 7, the far view: from well past the near tiles the coarse tier
+	# draws it, and its facade (MineBuildingsFar) is drawn over that.
+	var far_from := centre + Vector3(-420.0, 70.0, -260.0)
+	cam.global_transform = Transform3D(Basis(), to_global(far_from)).looking_at(to_global(look))
+	# The eye the tiles follow is the player's (the walker): taken there too.
+	_fly_to(far_from, look - far_from)
+	_streamer.settle(Vector2(far_from.x, far_from.z))
+	var far_built0 := buildings_far.built
+	for k in 12:
+		buildings_far.tend()
+		await _frames(10)
+	await _frames(30)
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png(dev + "mine_building_far_facade.png")
+	var fnode: MeshInstance3D = MineBuildings.registry[0].get("far_node") if not MineBuildings.registry.is_empty() else null
+	ok = fnode != null and fnode.visible and fnode.mesh != null and fnode.mesh.get_surface_count() > 0
+	check.call(ok, "from %.0f m its far facade is drawn (%d made, %d triangles)" % [far_from.distance_to(centre),
+			buildings_far.built - far_built0,
+			0 if fnode == null or fnode.mesh == null or fnode.mesh.get_surface_count() == 0
+			else int(fnode.mesh.surface_get_array_len(0) / 3.0)])
+	fails += 0 if ok else 1
+	# Near again: the facade hidden, the real bricks drawn.
+	_fly_to(e, Vector3.FORWARD)
+	_streamer.settle(Vector2(centre.x, centre.z))
+	await _frames(10)
+	buildings_far.tend()
+	ok = fnode != null and not fnode.visible
+	check.call(ok, "near, the facade is hidden (the real bricks drawn)")
+	fails += 0 if ok else 1
+	# Room streaming (6d): its fittings drawn only near.
+	var ranged := 0
+	for c: Vector3i in wiring.devices.keys():
+		var dn: Node = wiring.devices[c].get("node")
+		if dn != null and in_box.call(c):
+			for g in dn.find_children("*", "GeometryInstance3D", true, false):
+				if (g as GeometryInstance3D).visibility_range_end > 0.0:
+					ranged += 1
+					break
+	ok = ranged >= int(info.get("doors", 0)) + int(info.get("lamps", 0)) * 2
+	check.call(ok, "its fittings are drawn only near (%d of %d)" % [ranged,
+			int(info.get("doors", 0)) + int(info.get("lamps", 0)) * 2])
+	fails += 0 if ok else 1
 	# Inside, its first floor: furniture and the windows' light (stages 5, 6).
 	var floor1 := (base + 3) * plate + 1.2
 	await shoot_pic.call("inside", Vector3((lo.x + 3.5) * stud, floor1, (lo.z + 3.5) * stud),
