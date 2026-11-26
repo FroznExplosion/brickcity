@@ -2006,7 +2006,7 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
         const std::vector<int32_t> pre_owned = owner;
         // The region fit's top course (Docs/TerrainRegions.md 12.3), when
         // the game's bricks come from the fit.
-        const bool fit_top_on = brick::fit_enabled();
+        const bool fit_top_on = brick::fit_top_enabled();
         brick::TopFitMemo top_memo;
         // A column's generated class (top plate, material, colour), kept by
         // absolute column for this pack.
@@ -2431,11 +2431,11 @@ struct BondView {
 
 /// clear_runs' runs for a top-course piece's whole brick (tile `s`'s piece;
 /// its brick may reach into the next tile, whose tops the view reads).
-void piece_runs(const TileSample &s, const Piece &p, BondView &view, PackedInt32Array &runs) {
-    for (int dz = 0; dz < p.brick_sz(); ++dz) {
-        for (int dx = 0; dx < p.brick_sx(); ++dx) {
-            const int x = s.tx * TILE + p.brick_x() + dx;
-            const int z = s.tz * TILE + p.brick_z() + dz;
+void piece_runs(const TileSample &s, int bx, int bz, int bsx, int bsz, BondView &view, PackedInt32Array &runs) {
+    for (int dz = 0; dz < bsz; ++dz) {
+        for (int dx = 0; dx < bsx; ++dx) {
+            const int x = s.tx * TILE + bx + dx;
+            const int z = s.tz * TILE + bz + dz;
             const int t = view.top_plate(x, z);
             runs.push_back(x);
             runs.push_back(z);
@@ -3479,27 +3479,29 @@ Dictionary BrickTerrain::find_brick(Vector3 point, Vector3 normal) {
     }
     const int tx = floor_div(x, TILE), tz = floor_div(z, TILE);
     const int lx = x - tx * TILE, lz = z - tz * TILE;
+    // The tile sampled (its kept cells plus the edits) and its kept tops:
+    // the packs are no longer kept (Docs/TerrainRegions.md 12.5).
     TileSample s;
-    const std::shared_ptr<const brick::TilePack> packed = brick::packed_tile(tx, tz, s);
-    const std::vector<Piece> &pieces = packed->pieces;
-    const std::vector<int32_t> &owner = packed->owner;
+    sample_tile(g_field, tx, tz, s);
+    const std::shared_ptr<const brick::TileTops> tops = brick::packed_tops(tx, tz);
 
     const int col_top = s.tp[TileSample::idx(lx, lz)];
     const int course = floor_div(col_top, PLATES_PER_CELL) * PLATES_PER_CELL;
-    const int32_t o = owner[(size_t)lx + TILE * lz];
+    const int8_t *pr = &tops->rect[(size_t)(lx + TILE * lz) * 4];
     Color col = filament_colour(material_filament(g_field.solid_at(x, yp, z)));
     Vector3 lo_m, hi_m;
-    if (o >= 0 && yp >= course) {
+    if (pr[2] != 0 && yp >= course) {
         // The top course: the whole piece -- the whole BRICK, where the
         // bond's top course laid one across a tile edge.
-        const Piece &p = pieces[(size_t)o];
-        col = piece_colour(s, p.ox, p.oz, p.mat, false);
+        const int cx = std::max(0, std::min(TILE - 1, (int)pr[0]));
+        const int cz = std::max(0, std::min(TILE - 1, (int)pr[1]));
+        col = piece_colour(s, cx, cz, s.mat[TileSample::idx(lx, lz)], false);
         BondView view(s, true);
-        piece_runs(s, p, view, runs);
-        lo_m = Vector3((float)(tx * TILE + p.brick_x()) * STUD_M, (float)course * PLATE_M,
-                (float)(tz * TILE + p.brick_z()) * STUD_M);
-        hi_m = lo_m + Vector3((float)p.brick_sx() * STUD_M, (float)(col_top - course + 1) * PLATE_M,
-                (float)p.brick_sz() * STUD_M);
+        piece_runs(s, pr[0], pr[1], pr[2], pr[3], view, runs);
+        lo_m = Vector3((float)(tx * TILE + pr[0]) * STUD_M, (float)course * PLATE_M,
+                (float)(tz * TILE + pr[1]) * STUD_M);
+        hi_m = lo_m + Vector3((float)pr[2] * STUD_M, (float)(col_top - course + 1) * PLATE_M,
+                (float)pr[3] * STUD_M);
     } else {
         // A wall, a cave face, the face of a pit: the whole brick of the
         // ground's bond (Docs/TerrainBond.md), the one the wall draws.
@@ -3530,7 +3532,7 @@ struct PackStore {
     struct Entry {
         uint64_t version = 0;
         uint64_t used = 0;
-        std::shared_ptr<const brick::TilePack> pack;
+        std::shared_ptr<const brick::TileTops> pack;
     };
     std::unordered_map<uint64_t, Entry> tiles;
     uint64_t clock = 0;
@@ -3545,19 +3547,12 @@ constexpr size_t PACKS_MAX = 768;
 
 std::shared_ptr<const brick::TilePack> brick::packed_tile(int tx, int tz, TileSample &s) {
     // The version BEFORE sampling: an edit landing after it changes it, and
-    // the pack is then not kept.
+    // the tops are then not kept.
     const uint64_t ver = tile_version(tx, tz);
     sample_tile(g_field, tx, tz, s);
     const uint64_t k = (uint64_t)tile_key(tx, tz);
-    {
-        std::lock_guard<std::mutex> lk(g_packs.lock);
-        auto it = g_packs.tiles.find(k);
-        if (it != g_packs.tiles.end() && it->second.version == ver) {
-            it->second.used = ++g_packs.clock;
-            ++g_packs.hits;
-            return it->second.pack;
-        }
-    }
+    // Packed every time (the packs are no longer kept); what is kept is the
+    // tile's TileTops, for the readers that need only those.
     auto fresh = std::make_shared<TilePack>();
     pack_tile(g_field, s, fresh->pieces, fresh->owner);
     fresh->top.resize((size_t)TILE * TILE);
@@ -3565,6 +3560,21 @@ std::shared_ptr<const brick::TilePack> brick::packed_tile(int tx, int tz, TileSa
         for (int lx = 0; lx < TILE; ++lx) {
             fresh->top[(size_t)lx + TILE * lz] = s.tp[TileSample::idx(lx, lz)];
         }
+    }
+    auto tops = std::make_shared<TileTops>();
+    tops->top = fresh->top;
+    tops->rect.assign((size_t)TILE * TILE * 4, 0);
+    for (int i = 0; i < TILE * TILE; ++i) {
+        const int32_t o = fresh->owner[(size_t)i];
+        if (o < 0) {
+            continue;
+        }
+        const Piece &p = fresh->pieces[(size_t)o];
+        int8_t *r = &tops->rect[(size_t)i * 4];
+        r[0] = (int8_t)p.brick_x();
+        r[1] = (int8_t)p.brick_z();
+        r[2] = (int8_t)std::max(1, std::min(127, p.brick_sx()));
+        r[3] = (int8_t)std::max(1, std::min(127, p.brick_sz()));
     }
     std::lock_guard<std::mutex> lk(g_packs.lock);
     ++g_packs.packs;
@@ -3582,12 +3592,12 @@ std::shared_ptr<const brick::TilePack> brick::packed_tile(int tx, int tz, TileSa
                 it = it->second.used <= cut ? g_packs.tiles.erase(it) : std::next(it);
             }
         }
-        g_packs.tiles[k] = PackStore::Entry{ ver, ++g_packs.clock, fresh };
+        g_packs.tiles[k] = PackStore::Entry{ ver, ++g_packs.clock, tops };
     }
     return fresh;
 }
 
-std::shared_ptr<const brick::TilePack> brick::packed_tops(int tx, int tz, bool *packed) {
+std::shared_ptr<const brick::TileTops> brick::packed_tops(int tx, int tz, bool *packed) {
     if (packed) {
         *packed = false;
     }
@@ -3606,7 +3616,23 @@ std::shared_ptr<const brick::TilePack> brick::packed_tops(int tx, int tz, bool *
         *packed = true;
     }
     TileSample s;
-    return packed_tile(tx, tz, s);
+    packed_tile(tx, tz, s);
+    const uint64_t k = (uint64_t)tile_key(tx, tz);
+    std::lock_guard<std::mutex> lk(g_packs.lock);
+    auto it = g_packs.tiles.find(k);
+    if (it != g_packs.tiles.end()) {
+        return it->second.pack;
+    }
+    // Edited while packing (not kept): this answer once.
+    auto t = std::make_shared<TileTops>();
+    t->top.assign((size_t)TILE * TILE, (int16_t)0);
+    t->rect.assign((size_t)TILE * TILE * 4, 0);
+    for (int lz = 0; lz < TILE; ++lz) {
+        for (int lx = 0; lx < TILE; ++lx) {
+            t->top[(size_t)lx + TILE * lz] = s.tp[TileSample::idx(lx, lz)];
+        }
+    }
+    return t;
 }
 
 Dictionary BrickTerrain::get_tile_pack_stats(bool reset) {
@@ -3642,22 +3668,19 @@ Dictionary BrickTerrain::get_tile_pack_stats(bool reset) {
 }
 
 void brick::top_columns(int tx, int tz, std::vector<TopColumn> &out, bool *was_packed) {
-    const std::shared_ptr<const brick::TilePack> packed = brick::packed_tops(tx, tz, was_packed);
-    const std::vector<Piece> &pieces = packed->pieces;
-    const std::vector<int32_t> &owner = packed->owner;
+    const std::shared_ptr<const brick::TileTops> packed = brick::packed_tops(tx, tz, was_packed);
     out.assign((size_t)TILE * TILE, TopColumn());
     for (int lz = 0; lz < TILE; ++lz) {
         for (int lx = 0; lx < TILE; ++lx) {
             TopColumn &c = out[(size_t)lx + TILE * lz];
             c.top = packed->top[(size_t)lx + TILE * lz];
-            const int32_t o = owner[(size_t)lx + TILE * lz];
-            if (o >= 0) {
-                const Piece &p = pieces[(size_t)o];
+            const int8_t *r = &packed->rect[(size_t)(lx + TILE * lz) * 4];
+            if (r[2] != 0) {
                 c.piece = true;
-                c.px = tx * TILE + p.brick_x();   // the whole brick: it may cross the tile edge
-                c.pz = tz * TILE + p.brick_z();
-                c.psx = p.brick_sx();
-                c.psz = p.brick_sz();
+                c.px = tx * TILE + r[0];   // the whole brick: it may cross the tile edge
+                c.pz = tz * TILE + r[1];
+                c.psx = r[2];
+                c.psz = r[3];
             }
         }
     }
@@ -3679,10 +3702,8 @@ Dictionary BrickTerrain::find_bricks(Vector3i lo, Vector3i hi) {
     for (int tz = floor_div(z0, TILE); tz <= floor_div(z1, TILE); ++tz) {
         for (int tx = floor_div(x0, TILE); tx <= floor_div(x1, TILE); ++tx) {
             TileSample s;
-            const std::shared_ptr<const brick::TilePack> packed = brick::packed_tile(tx, tz, s);
-            const std::vector<Piece> &pieces = packed->pieces;
-            const std::vector<int32_t> &owner = packed->owner;
-            std::vector<uint8_t> taken(pieces.size(), 0);
+            sample_tile(g_field, tx, tz, s);
+            const std::shared_ptr<const brick::TileTops> tops = brick::packed_tops(tx, tz);
             BondView view(s, true);
             const int ax0 = std::max(x0, tx * TILE), ax1 = std::min(x1, tx * TILE + TILE - 1);
             const int az0 = std::max(z0, tz * TILE), az1 = std::min(z1, tz * TILE + TILE - 1);
@@ -3691,19 +3712,17 @@ Dictionary BrickTerrain::find_bricks(Vector3i lo, Vector3i hi) {
                     const int lx = x - tx * TILE, lz = z - tz * TILE;
                     const int col_top = s.tp[TileSample::idx(lx, lz)];
                     const int course = floor_div(col_top, PLATES_PER_CELL) * PLATES_PER_CELL;
-                    const int32_t o = owner[(size_t)lx + TILE * lz];
+                    const int8_t *pr = &tops->rect[(size_t)(lx + TILE * lz) * 4];
                     int below_hi = y1;
-                    if (o >= 0) {
+                    if (pr[2] != 0) {
                         below_hi = std::min(y1, course - 1);
                         // The top course in the box: its whole brick, once
                         // (a brick across a tile edge is two tiles' pieces).
-                        if (y1 >= course && y0 <= col_top && !taken[(size_t)o]) {
-                            taken[(size_t)o] = 1;
-                            const Piece &p = pieces[(size_t)o];
-                            const int64_t k = bond_key(tx * TILE + p.brick_x(),
-                                    floor_div(col_top, PLATES_PER_CELL) + (1 << 20), tz * TILE + p.brick_z());
+                        if (y1 >= course && y0 <= col_top) {
+                            const int64_t k = bond_key(tx * TILE + pr[0],
+                                    floor_div(col_top, PLATES_PER_CELL) + (1 << 20), tz * TILE + pr[1]);
                             if (bond_taken.insert(k).second) {
-                                piece_runs(s, p, view, runs);
+                                piece_runs(s, pr[0], pr[1], pr[2], pr[3], view, runs);
                             }
                         }
                     }
@@ -8708,10 +8727,9 @@ Dictionary BrickTerrain::memory_stats() {
         int64_t bytes = 0;
         int64_t pieces = 0;
         for (const auto &e : g_packs.tiles) {
-            const brick::TilePack &p = *e.second.pack;
-            bytes += (int64_t)(sizeof(brick::TilePack) + vec_bytes(p.pieces) + vec_bytes(p.owner) + vec_bytes(p.top));
+            const brick::TileTops &p = *e.second.pack;
+            bytes += (int64_t)(sizeof(brick::TileTops) + vec_bytes(p.top) + vec_bytes(p.rect));
             bytes += 64;   // the map node, the shared_ptr's control block
-            pieces += (int64_t)p.pieces.size();
         }
         d["packs_kept"] = (int64_t)g_packs.tiles.size();
         d["packs_bytes"] = bytes;
