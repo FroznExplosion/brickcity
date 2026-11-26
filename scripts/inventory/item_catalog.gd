@@ -238,4 +238,8 @@ static func label(s: ItemStack) -> String:
 			return "%s (%s)" % [n, ["empty", "water", "lava"][clampi(int(s.data.get("fluid", 0)), 0, 2)]]
 		"can":
 			return "%s %d/%d" % [n, int(s.data.get("water", 0)), MineFarming.CAN_WATER]
+		"seed":
+			# A seed's traits (Docs/MineFarming.md 20): growth, yield, hardiness.
+			if s.data.has("g") or s.data.has("y") or s.data.has("h"):
+				return "%s (G%d Y%d H%d)" % [n, int(s.data.get("g", 0)), int(s.data.get("y", 0)), int(s.data.get("h", 0))]
 	return n

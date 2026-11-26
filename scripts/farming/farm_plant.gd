@@ -33,6 +33,11 @@ extends RefCounted
 ##   one crop); weeds, mulch; haz_acc / haz_next / events (the plot's hazard so
 ##   far, its next draw, how many it has had); packed (trampled: the soil is
 ##   to go back to dirt); last_event, event_at (for the look line)
+##   DEPTH (stage 6, Docs/MineFarming.md 20): tg, ty, th -- the plant's
+##   traits (growth, yield, hardiness, 0..TRAIT_MAX), from its seed;
+##   companion (cached: a companion crop grows next to it); giant (0, 1 the
+##   corner plot of a giant crop, 2 one of its other plots) and gdx, gdz (a
+##   giant's other plot: where its corner is, in plots)
 ##   ground   String "farm" on tilled soil, "soil" on plain ground (a sapling)
 ##   sky      float  0..1, open sky above it (sky light / 15)
 ##   lamp     float  0..1, other light (lava; lamps later)
@@ -77,6 +82,20 @@ const SCARED := 0.2
 const BIRD_FAMILIES := ["grain", "legume"]
 ## Weeds take this share of a crop's growth.
 const WEEDS_SLOW := 0.6
+## SEED TRAITS (stage 6): growth, yield, hardiness, 0..TRAIT_MAX each.
+const TRAIT_MAX := 10
+## A point of growth: this much faster; of yield: this much more of a
+## harvest; of hardiness: dry soil this much nearer full speed.
+const GROWTH_PER := 0.04
+const YIELD_PER := 0.08
+const HARDY_PER := 0.06
+## Hardiness this high: dry stages are no stress.
+const HARDY_NO_STRESS := 5
+## A companion crop next to it: this much faster.
+const COMPANION_BONUS := 1.15
+## A harvest's seeds gain a point in one trait this often, by its stars.
+const MUTATE_3 := 0.3
+const MUTATE_2 := 0.1
 ## Under this fertility a stage counts as starved (a stress point).
 const POOR_SOIL := 25.0
 ## A crop counts as wanting water when dry soil drops it under this rate.
@@ -168,11 +187,33 @@ static func new_plot(b: Vector3i, now: float, fert: float, biome: int) -> Dictio
 			"wet": false, "sky": 1.0, "lamp": 0.0, "biome": biome, "planted": now, "picks": 0,
 			"wet_until": 0.0, "boost_until": 0.0, "ground": "farm",
 			"open": false, "scared": false, "mono": false, "weeds": false, "mulch": false,
-			"haz_acc": 0.0, "haz_next": 1.0, "events": 0, "packed": false, "last_event": "", "event_at": 0.0}
+			"haz_acc": 0.0, "haz_next": 1.0, "events": 0, "packed": false, "last_event": "", "event_at": 0.0,
+			"tg": 0, "ty": 0, "th": 0, "companion": false, "giant": 0, "gdx": 0, "gdz": 0}
 
 
-static func plant(plot: Dictionary, crop: StringName, now: float) -> void:
+## A seed stack's traits ({"g", "y", "h"} in its data) as a Vector3i.
+static func traits_of(data: Dictionary) -> Vector3i:
+	return Vector3i(clampi(int(data.get("g", 0)), 0, TRAIT_MAX), clampi(int(data.get("y", 0)), 0, TRAIT_MAX),
+			clampi(int(data.get("h", 0)), 0, TRAIT_MAX))
+
+
+## Traits as a seed stack's data: {} when all are 0, so plain seeds stack.
+static func traits_data(t: Vector3i) -> Dictionary:
+	if t == Vector3i.ZERO:
+		return {}
+	return {"g": t.x, "y": t.y, "h": t.z}
+
+
+static func traits(plot: Dictionary) -> Vector3i:
+	return Vector3i(int(plot.get("tg", 0)), int(plot.get("ty", 0)), int(plot.get("th", 0)))
+
+
+static func plant(plot: Dictionary, crop: StringName, now: float, seed_traits := Vector3i.ZERO) -> void:
 	settle(plot, now)
+	plot.tg = seed_traits.x
+	plot.ty = seed_traits.y
+	plot.th = seed_traits.z
+	plot.giant = 0
 	plot.crop = crop
 	plot.stage = 0
 	plot.p = 0.0
@@ -221,8 +262,10 @@ static func wet_at(plot: Dictionary, t: float) -> bool:
 	return bool(plot.wet) or t < float(plot.get("wet_until", 0.0))
 
 
-static func water_factor(crop: Dictionary, wet: bool) -> float:
-	return 1.0 if wet else float(crop.dry_rate)
+static func water_factor(crop: Dictionary, wet: bool, hardy := 0) -> float:
+	if wet:
+		return 1.0
+	return lerpf(float(crop.dry_rate), 1.0, clampf(HARDY_PER * hardy, 0.0, 1.0))
 
 
 ## This stage's spread: 0.85 .. 1.15 of the crop's time, the plant's own.
@@ -238,15 +281,18 @@ static func boosted_at(plot: Dictionary, t: float) -> bool:
 ## Stages a light-second, with the soil `wet` or not and a grow mix's
 ## `boost` on or not: everything but the light.
 static func rate(plot: Dictionary, crop: Dictionary, wet: bool, boost := false) -> float:
-	return soil_factor(plot, crop) * water_factor(crop, wet) * biome_factor(crop, int(plot.biome)) \
+	return soil_factor(plot, crop) * water_factor(crop, wet, int(plot.get("th", 0))) \
+			* biome_factor(crop, int(plot.biome)) \
 			* (GROW_BOOST if boost else 1.0) * (WEEDS_SLOW if bool(plot.get("weeds", false)) else 1.0) \
+			* (1.0 + GROWTH_PER * int(plot.get("tg", 0))) \
+			* (COMPANION_BONUS if bool(plot.get("companion", false)) else 1.0) \
 			/ (float(crop.stage_hours) * HOUR * jitter(plot))
 
 
 ## Stress points a stage ending now earns (what held it back).
 static func stage_stress(plot: Dictionary, crop: Dictionary, wet: bool) -> int:
 	var s := 0
-	if not wet and float(crop.dry_rate) < THIRSTY:
+	if not wet and float(crop.dry_rate) < THIRSTY and int(plot.get("th", 0)) < HARDY_NO_STRESS:
 		s += 1
 	if maxf(float(plot.sky), float(plot.lamp)) < float(crop.light):
 		s += 1
@@ -338,7 +384,7 @@ static func settle(plot: Dictionary, now: float) -> bool:
 ## Random trouble (Docs/MineFarming.md 9), per second, for the plot as it is.
 static func hazards(plot: Dictionary, crop: Dictionary) -> PackedFloat64Array:
 	var out := PackedFloat64Array([0.0, 0.0, 0.0, 0.0])
-	if not trouble or crop.is_empty():
+	if not trouble or crop.is_empty() or int(plot.get("giant", 0)) != 0:
 		return out
 	var ripe := int(plot.stage) >= int(crop.stages) - 1
 	if bool(plot.get("open", false)):
@@ -438,8 +484,19 @@ static func harvest(plot: Dictionary, now: float) -> Dictionary:
 	var seeds := sb.x + int(roll(int(plot.seed), 2000, int(plot.picks)) * (sb.y - sb.x + 1))
 	if st == 3 and sb.y > 0:
 		seeds += 1
+	# Yield trait: more of it.
+	n += roundi(n * YIELD_PER * int(plot.get("ty", 0)))
+	# Its seeds carry its traits; a well kept plant's sometimes one point more.
+	var tr := traits(plot)
+	var chance := MUTATE_3 if st == 3 else (MUTATE_2 if st == 2 else 0.0)
+	if roll(int(plot.seed), 3000, int(plot.picks)) < chance:
+		var which := int(roll(int(plot.seed), 3100, int(plot.picks)) * 3.0) % 3
+		tr[which] = mini(tr[which] + 1, TRAIT_MAX)
+	var seed_data := traits_data(tr)
 	var out := {"produce": crop.produce, "count": n, "seed": crop.seed, "seeds": seeds, "stars": st,
-			"crop": crop.id}
+			"crop": crop.id, "seed_data": seed_data,
+			# Planted as it is (a carrot): the produce carries the traits too.
+			"produce_data": seed_data if crop.produce == crop.seed else {}}
 	plot.fert = clampf(float(plot.fert) - float(crop.drain) + float(crop.restores), 0.0, 100.0)
 	plot.fam = crop.family
 	plot.picks = int(plot.picks) + 1
@@ -528,7 +585,9 @@ static func to_row(plot: Dictionary) -> Array:
 			bool(plot.get("open", false)), bool(plot.get("scared", false)), bool(plot.get("mono", false)),
 			bool(plot.get("weeds", false)), bool(plot.get("mulch", false)), float(plot.get("haz_acc", 0.0)),
 			float(plot.get("haz_next", 1.0)), int(plot.get("events", 0)), bool(plot.get("packed", false)),
-			str(plot.get("last_event", "")), float(plot.get("event_at", 0.0))]
+			str(plot.get("last_event", "")), float(plot.get("event_at", 0.0)),
+			int(plot.get("tg", 0)), int(plot.get("ty", 0)), int(plot.get("th", 0)), bool(plot.get("companion", false)),
+			int(plot.get("giant", 0)), int(plot.get("gdx", 0)), int(plot.get("gdz", 0))]
 
 
 static func from_row(r: Array) -> Dictionary:
@@ -546,4 +605,8 @@ static func from_row(r: Array) -> Dictionary:
 			"mulch": bool(r[24]) if r.size() > 30 else false, "haz_acc": float(r[25]) if r.size() > 30 else 0.0,
 			"haz_next": float(r[26]) if r.size() > 30 else 1.0, "events": int(r[27]) if r.size() > 30 else 0,
 			"packed": bool(r[28]) if r.size() > 30 else false, "last_event": str(r[29]) if r.size() > 30 else "",
-			"event_at": float(r[30]) if r.size() > 30 else 0.0}
+			"event_at": float(r[30]) if r.size() > 30 else 0.0,
+			"tg": int(r[31]) if r.size() > 37 else 0, "ty": int(r[32]) if r.size() > 37 else 0,
+			"th": int(r[33]) if r.size() > 37 else 0, "companion": bool(r[34]) if r.size() > 37 else false,
+			"giant": int(r[35]) if r.size() > 37 else 0, "gdx": int(r[36]) if r.size() > 37 else 0,
+			"gdz": int(r[37]) if r.size() > 37 else 0}

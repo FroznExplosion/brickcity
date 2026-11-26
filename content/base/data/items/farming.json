@@ -261,6 +261,45 @@
 			"colour": "#5b4a2a",
 			"glyph": "~",
 			"description": "Right-click a plot (or drag over a field): no weeds come up there, and the ones there are smothered. Made from leaves."
+		},
+		"cactus_fruit": {
+			"name": "Cactus fruit",
+			"kind": "seed",
+			"crop": "cactus_fruit",
+			"max_stack": 99,
+			"colour": "#e0457a",
+			"glyph": "c",
+			"model": "produce",
+			"tags": [
+				"crop"
+			],
+			"description": "Food. Right-click tilled soil in a desert, badlands or savanna to plant one."
+		},
+		"frostberries": {
+			"name": "Frostberries",
+			"kind": "seed",
+			"crop": "frostberry",
+			"max_stack": 99,
+			"colour": "#6fa8e8",
+			"glyph": "o",
+			"model": "produce",
+			"tags": [
+				"crop"
+			],
+			"description": "Food. Right-click tilled soil where it snows to plant a frostberry bush."
+		},
+		"pineapple": {
+			"name": "Pineapple",
+			"kind": "seed",
+			"crop": "pineapple",
+			"max_stack": 32,
+			"colour": "#e8c33a",
+			"glyph": "P",
+			"model": "produce",
+			"tags": [
+				"crop"
+			],
+			"description": "Food. Right-click tilled soil in a jungle to plant one."
 		}
 	}
 }

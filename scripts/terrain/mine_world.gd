@@ -2177,13 +2177,14 @@ func how_kit_added(inv: Inventory) -> bool:
 		if inv.ensure_item(st):
 			print("[mine] %s added to the inventory" % st)
 			added = true
-	# Farming (Docs/MineFarming.md): a hoe and every crop's seed.
+	# Farming (Docs/MineFarming.md 20): the tools, wheat seeds and compost --
+	# the other seeds, saplings and farm things are in the Creative tab. Every
+	# crop's seed in the kit filled a fresh character's bags, and a harvest
+	# then fell on the ground.
 	# Wiring (Docs/MineWiring.md): cable tiles, levers and lamps are in the
 	# creative catalog, not the kit -- the kit's storage starts empty
 	# (--gate=inventory counts on it).
-	for it in [&"hoe", &"scythe", &"watering_can", &"wheat_seeds", &"carrot", &"potato", &"beans", &"pumpkin_seeds", &"berries", &"corn",
-			&"cabbage_seeds", &"melon_seeds", &"oak_sapling", &"birch_sapling", &"dark_oak_sapling", &"acacia_sapling",
-			&"compost", &"grow_mix", &"compost_bin", &"scarecrow", &"mulch"]:
+	for it in [&"hoe", &"scythe", &"watering_can", &"wheat_seeds", &"compost"]:
 		if ItemCatalog.has(it) and inv.ensure_item(it):
 			print("[mine] %s added to the inventory" % it)
 			added = true

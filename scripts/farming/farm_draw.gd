@@ -43,7 +43,13 @@ func rebuild(plots: Dictionary, eye: Vector3) -> void:
 		var at := Vector3((b.x * 2 + 1) * _stud, (b.y + 1) * _plate, (b.z * 2 + 1) * _stud)
 		if Vector2(at.x - eye.x, at.z - eye.z).length_squared() > r2:
 			continue
+		var giant := int(plot.get("giant", 0))
+		if giant == 2:
+			continue                 # drawn once, by its corner plot
 		var key := "%s:%d" % [plot.crop, plot.stage]
+		if giant == 1:
+			key = "%s:giant" % plot.crop
+			at += Vector3(_stud, 0, _stud)      # the middle of its four plots
 		if not by.has(key):
 			by[key] = []
 		# A quarter turn and a little size of its own, so a row is not stamped.
@@ -59,7 +65,8 @@ func rebuild(plots: Dictionary, eye: Vector3) -> void:
 		var mmi: MultiMeshInstance3D = _mmis.get(key)
 		if mmi == null:
 			var parts: PackedStringArray = key.split(":")
-			var mesh := mesh_for(StringName(parts[0]), int(parts[1]))
+			var mesh := giant_mesh(StringName(parts[0])) if parts[1] == "giant" \
+					else mesh_for(StringName(parts[0]), int(parts[1]))
 			if mesh == null:
 				continue
 			mmi = MultiMeshInstance3D.new()
@@ -193,6 +200,19 @@ func mesh_for(crop_id: StringName, stage: int) -> Mesh:
 						leaf.lerp(fruit, float(i) / (2.0 + stage)), 12)
 			if ripe:
 				_stud_on(st, Vector3(0, P * 0.6 * (2 + stage), 0), fruit)
+		"cactus":
+			# A green column of round bricks, arms from half grown, fruit on top.
+			var h := lerpf(P * 2.0, P * 3.0 * 2.5, k)
+			_cyl(st, Vector3.ZERO, lerpf(0.06, 0.13, k), h, leaf, 10)
+			if k >= 0.5:
+				for sx in [-1.0, 1.0]:
+					var y: float = h * (0.35 + 0.15 * sx)
+					_box(st, Vector3(sx * 0.13, y, 0), Vector3(0.14, 0.07, 0.07), leaf)
+					_cyl(st, Vector3(sx * 0.2, y - 0.03, 0), 0.05, h * 0.3, leaf, 8)
+			if ripe:
+				for i in 3:
+					var a := TAU * float(i) / 3.0
+					_cyl(st, Vector3(cos(a) * 0.08, h, sin(a) * 0.08), 0.045, 0.06, fruit, 8)
 		"sapling":
 			# A thin trunk and a leaf block on it that grows each stage.
 			var h := lerpf(P * 1.5, P * 3.0 * 2.0, k)
@@ -203,6 +223,37 @@ func mesh_for(crop_id: StringName, stage: int) -> Mesh:
 				_box(st, Vector3(0, h + w * 0.85, 0), Vector3(w * 0.6, w * 0.4, w * 0.6), leaf.lightened(0.08))
 		_:
 			_box(st, Vector3(0, P, 0), Vector3(S, P * 2.0, S), leaf)
+	st.generate_normals()
+	var mesh := st.commit()
+	_meshes[key] = mesh
+	return mesh
+
+
+## A giant (Docs/MineFarming.md 20): one big round brick of the crop's colour
+## over its four plots, studs on top, a stem and leaves -- 4 x 4 studs.
+func giant_mesh(crop_id: StringName) -> Mesh:
+	var key := "%s:giant" % crop_id
+	if _meshes.has(key):
+		return _meshes[key]
+	var crop := FarmCrops.get_crop(crop_id)
+	if crop.is_empty():
+		return null
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var S := _stud
+	var P := _plate
+	var col: Color = crop.ripe
+	var h := P * 3.0 * 3.0
+	_cyl(st, Vector3.ZERO, S * 1.9, h, col, 24)
+	_cyl(st, Vector3(0, h * 0.3, 0), S * 1.95, P * 0.6, col.darkened(0.12), 24)
+	for sx in [-1.5, -0.5, 0.5, 1.5]:
+		for sz in [-1.5, -0.5, 0.5, 1.5]:
+			if Vector2(sx, sz).length() < 1.9:
+				_stud_on(st, Vector3(sx * S, h, sz * S), col)
+	_cyl(st, Vector3(0, h, 0), 0.07, P * 2.0, (crop.leaf as Color).darkened(0.3), 8)
+	for i in 4:
+		var a := TAU * float(i) / 4.0 + 0.4
+		_leaf(st, Vector3(0, h + P * 0.5, 0), Vector3(cos(a), 0, sin(a)), S * 1.4, crop.leaf)
 	st.generate_normals()
 	var mesh := st.commit()
 	_meshes[key] = mesh

@@ -440,7 +440,7 @@ func farm_drag_end() -> bool:
 		budget = h.count if h != null else 0
 	elif k == "can":
 		budget = int(h.data.get("water", 0)) if h != null else 0
-	var n: int = host.farming.area(k, a, b, d.id, budget)
+	var n: int = host.farming.area(k, a, b, d.id, budget, h.data if h != null else {})
 	if n > 0:
 		if k == "seed" or k == "fertiliser":
 			inv.consume_hand(n)
@@ -783,7 +783,7 @@ func place_target() -> bool:
 			target = {}
 			return n4 > 0
 		if k == "seed":
-			var ok2: bool = host.farming.plant(target, d.id)
+			var ok2: bool = host.farming.plant(target, d.id, inv.hand().data if inv.hand() != null else {})
 			if ok2:
 				inv.consume_hand(1)
 				placed += 1
