@@ -2083,7 +2083,7 @@ func how_kit_added(inv: Inventory) -> bool:
 	# Wiring (Docs/MineWiring.md): cable tiles, levers and lamps are in the
 	# creative catalog, not the kit -- the kit's storage starts empty
 	# (--gate=inventory counts on it).
-	for it in [&"hoe", &"wheat_seeds", &"carrot", &"potato", &"beans", &"pumpkin_seeds", &"berries"]:
+	for it in [&"hoe", &"scythe", &"watering_can", &"wheat_seeds", &"carrot", &"potato", &"beans", &"pumpkin_seeds", &"berries"]:
 		if ItemCatalog.has(it) and inv.ensure_item(it):
 			print("[mine] %s added to the inventory" % it)
 			added = true

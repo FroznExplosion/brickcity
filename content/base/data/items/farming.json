@@ -2,6 +2,10 @@
 	"items": {
 		"hoe": { "name": "Hoe", "kind": "hoe", "max_stack": 1, "hand": "right", "colour": "#a8a8b0", "glyph": "H",
 			"description": "Right-click the top of soil (grass, dirt, podzol): that 2x2 brick becomes tilled soil, smooth and furrowed. Seeds go on tilled soil." },
+		"scythe": { "name": "Scythe", "kind": "scythe", "max_stack": 1, "hand": "right", "colour": "#c0c4cc", "glyph": "S",
+			"description": "Right-click: harvests every ripe crop 3x3 round the plot (replanting from your seeds). Hold right-click and let go elsewhere: the whole rectangle." },
+		"watering_can": { "name": "Watering can", "kind": "can", "max_stack": 1, "hand": "right", "colour": "#5f8fb0", "glyph": "V",
+			"description": "Left-click water to fill it (16 plots). Right-click tilled soil: wet for a day. Hold right-click and let go elsewhere: a whole rectangle." },
 		"wheat_seeds": { "name": "Wheat seeds", "kind": "seed", "crop": "wheat", "max_stack": 99, "colour": "#c9b25a", "glyph": ".",
 			"description": "Right-click tilled soil to plant. Found breaking grass by hand." },
 		"pumpkin_seeds": { "name": "Pumpkin seeds", "kind": "seed", "crop": "pumpkin", "max_stack": 99, "colour": "#e8dca0", "glyph": ".",

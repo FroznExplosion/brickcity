@@ -18,6 +18,14 @@ extends RefCounted
 ##             replants it; LMB on a growing one pulls it.
 ##   trample   a real fall from over 3 bricks onto a plot tramples it (dirt,
 ##             the crop gone); a small hop does not.
+##   areas     stage 3, the player's way (MineBuilder.farm_drag_begin/end):
+##             a hoe dragged over 4 x 2 plots tills all 8, carrots dragged
+##             plant all 8, the watering can fills from the channel (LMB) and
+##             a drag waters the dry ones (wet for a day, dark soil); two days
+##             on a scythe drag harvests and replants them all, and a scythe
+##             click takes the ripe crops 3 x 3 round a plot.
+##   chest     a harvest that will not fit the inventory goes into a chest
+##             near the field.
 ##   save      the world generated again (saved, loaded): the plots, their
 ##             state and the clock come back.
 ##   pictures  user://dev/farm_field.png, farm_guide.png.
@@ -165,6 +173,91 @@ func run(host: Node) -> void:
 	w.builder.target = {"cell": Vector3i(dry_wheat.x * 2, top, dry_wheat.z * 2), "normal": Vector3i.UP}
 	check("LMB on growing wheat pulls it", w.builder.break_target() and f.store.get_plot(dry_wheat).crop == &"")
 
+	# --- stage 3: whole rectangles by RMB drag, the can, the scythe
+	var a3 := Vector3i(bx0 * 2, top, (bz0 + 3) * 2)
+	var b3 := Vector3i((bx0 + 3) * 2, top, (bz0 + 4) * 2)
+	var rect: Array[Vector3i] = []
+	for i in 4:
+		for k in 2:
+			rect.append(Vector3i(bx0 + i, top, bz0 + 3 + k))
+	_hold(&"hoe")
+	await _drag(a3, b3)
+	var n_till := 0
+	for b in rect:
+		if not f.store.get_plot(b).is_empty():
+			n_till += 1
+	check("a hoe dragged over 4 x 2 plots tills all 8 (%d)" % n_till, n_till == 8)
+	_hold(&"carrot")
+	await _drag(a3, b3)
+	var n_plant := 0
+	for b in rect:
+		if f.store.get_plot(b).get("crop", &"") == &"carrot":
+			n_plant += 1
+	check("carrots dragged over them plant all 8 (%d)" % n_plant, n_plant == 8)
+	# The can: filled from the channel, looking straight down at it.
+	_hold(&"watering_can")
+	var can: ItemStack = inv.hand()
+	can.data.erase("water")
+	var over := Vector3((tx + 1) * stud, (top + 1) * plate + 1.2, (field[1].z * 2 + 1) * stud)
+	w._fly_to(over - Vector3(0, 1.6, 0), Vector3.FORWARD)
+	w.walker.pitch = -PI * 0.5 + 0.02
+	await w._frames(10)
+	check("LMB with the can on water fills it (%d)" % int(can.data.get("water", 0)),
+			w.builder.fill_can() and int(can.data.get("water", 0)) == MineFarming.CAN_WATER)
+	var dry_before := 0
+	for b in rect:
+		if not bool(f.store.get_plot(b).wet):
+			dry_before += 1
+	await _drag(a3, b3)
+	var watered := 0
+	var dark := 0
+	for b in rect:
+		var p := f.store.get_plot(b)
+		if float(p.wet_until) > w.world_time:
+			watered += 1
+		if BrickTerrain.solid_at(b.x * 2, top, b.z * 2) == BrickTerrain.MAT_WET_FARMLAND:
+			dark += 1
+	check("a can drag waters the %d dry plots (%d), all 8 dark, %d water left" % [dry_before, watered,
+			int(can.data.get("water", 0))], watered == dry_before and dark == 8
+			and int(can.data.get("water", 0)) == MineFarming.CAN_WATER - dry_before)
+	# Four days: the can's water lasted one, the far ones grow dry after it.
+	w.world_time += FarmPlant.DAY * 4.0
+	await w._frames(10)
+	f.settle_all()
+	var ripe := 0
+	for b in rect:
+		if FarmPlant.is_ripe(f.store.get_plot(b)):
+			ripe += 1
+	_hold(&"scythe")
+	var h0 := f.harvested
+	await _drag(a3, b3)
+	var replanted := 0
+	for b in rect:
+		var p := f.store.get_plot(b)
+		if p.crop == &"carrot" and int(p.stage) == 0:
+			replanted += 1
+	check("four days on, a scythe drag harvests the %d ripe carrots (%d) and replants them (%d)" % [ripe,
+			f.harvested - h0, replanted], ripe == 8 and f.harvested - h0 == 8 and replanted == 8)
+	var ripe_field := 0
+	for b in field:
+		var p := f.store.get_plot(b)
+		if not p.is_empty() and FarmPlant.is_ripe(p):
+			ripe_field += 1
+	var h1 := f.harvested
+	w.builder.target = {"cell": Vector3i(field[4].x * 2, top, field[4].z * 2), "normal": Vector3i.UP}
+	w.builder.place_target()
+	check("a scythe click takes the ripe crops 3 x 3 round a plot (%d of %d)" % [f.harvested - h1, ripe_field],
+			ripe_field > 0 and f.harvested - h1 == ripe_field)
+	# A harvest too big for the inventory goes into a chest by the field.
+	var cblock := Vector3i(bx0 + 5, top + 1, bz0 + 4)
+	w.chests.place(cblock, [], true)
+	f._give(&"wheat", 99 * 60, f._top_middle(rect[7]))
+	var in_chest := 0
+	for sl in w.chests.slots_of(MineChests.key_of(cblock)):
+		if sl is ItemStack and (sl as ItemStack).id == &"wheat":
+			in_chest += (sl as ItemStack).count
+	check("what will not fit the inventory goes into the chest by the field (%d wheat)" % in_chest, in_chest > 0)
+
 	# --- away: out of reach, the clock runs, the plot is not touched; back, it
 	# is where one settle puts it
 	var away_b := field[4]
@@ -243,6 +336,16 @@ func _hold(id: StringName) -> void:
 	if not inv.select_item(id):
 		inv.pick(id)
 	check("%s in the hand" % id, inv.hand() != null and inv.hand().id == id)
+
+
+## A farm tool's RMB drag from cell a to cell b, the builder's own way.
+func _drag(a: Vector3i, b: Vector3i) -> void:
+	w.builder.target = {"cell": a, "normal": Vector3i.UP}
+	w.builder.farm_drag_begin()
+	await w._frames(2)
+	w.builder.target = {"cell": b, "normal": Vector3i.UP}
+	w.builder.farm_drag_end()
+	await w._frames(2)
 
 
 func _count(inv: Inventory, id: StringName) -> int:
