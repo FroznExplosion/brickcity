@@ -148,8 +148,8 @@ sunken face is hard to see for that time.
   the chamfered near surface; the streamer's chamfer bakes; the mine world's
   --old-chamfer, the GPU gate's chamfered row; terrain_bench's G key and its
   chamfer shots; terrain_probe's chamfer-width check; terrain.gdshader's
-  geo_bevel. ~940 lines. The overlay is the only real bevel; the world
-  setting Chamfered brick edges turns it off. Probes: terrain_bricks,
+  geo_bevel. ~940 lines. The overlay is the only real bevel; World view's
+  "Real brick edges near you" (MineWorld.md 22) turns it off. Probes: terrain_bricks,
   terrain (same 2 failures as before), mine_world, terrain_audit,
   terrain_cost; --gate=bricks, --gate=seams, --deep --at-top,
   bevel_gap_probe, ground_tools_probe.
