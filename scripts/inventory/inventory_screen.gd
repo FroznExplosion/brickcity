@@ -21,7 +21,10 @@ extends MenuScreen
 ##     -- or at a furnace (Docs/Inventory.md 15): "Furnace" -- the input over
 ##       the flame over the fuel, the arrow filling as it smelts, the output;
 ##       the book lists what smelts, and a click puts what you carry of it in
-##     "Inventory": the worn backpack's slots, then hotbar 2 and hotbar 1.
+##     "Inventory": the worn backpack's slots, then hotbar 2 and hotbar 1,
+##       the two off-hand slots in a column left of them and the quick slot
+##       right of hotbar 1 -- as the HUD has them (Docs/Inventory.md round
+##       four; the user asked for them in the screen, 2026-11-26).
 ##
 ## No armour, no off-hand, no player figure (the user, 2026-11-25). Hover
 ## over anything that shows an item and its name pops up beside the mouse
@@ -50,6 +53,8 @@ const MIN_SLOT := 22.0
 const MAX_SLOT := 52.0
 ## The recipe book's grid, Bedrock's.
 const BOOK_COLS := 7
+## The off-hand / quick slot column beside the hotbars, with its gap, in slots.
+const HAND_COL := 1.3
 const TAB_ICONS := {
 	"construction": [&"stone", &"sandstone", &"soil"],
 	"equipment": [&"pickaxe", &"mega_pickaxe", &"bucket"],
@@ -124,6 +129,12 @@ var _craft_note: Label
 var _inv_title: Label
 var _no_pack: Label
 var _hotbar_gap: Control
+## Round four's hands: the off-hand column, the quick slot, and the gaps and
+## pads that keep the storage over the hotbars.
+var _off_slots: Array[InvSlot] = []
+var _quick_slot: InvSlot
+var _hand_gaps: Array[Control] = []
+var _hand_pads: Array[Control] = []
 ## The storage: the worn backpack's slots (Docs/Inventory.md 8), rebuilt when
 ## the backpack changes.
 var _storage_grid: GridContainer
@@ -369,12 +380,32 @@ func _build_right() -> void:
 	_no_pack.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(_no_pack)
 	_storage_grid = _cell_grid(Inventory.HOTBAR_SIZE)
-	v.add_child(_storage_grid)
+	# The storage stands over the hotbars: padded as wide as the hand columns.
+	var srow := HBoxContainer.new()
+	srow.alignment = BoxContainer.ALIGNMENT_CENTER
+	srow.add_theme_constant_override("separation", 0)
+	srow.add_child(_pad())
+	srow.add_child(_storage_grid)
+	srow.add_child(_pad())
+	v.add_child(srow)
 	_rebuild_storage()
 	_hotbar_gap = Control.new()
 	_hotbar_gap.name = "HotbarGap"
 	_hotbar_gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(_hotbar_gap)
+	var hands := HBoxContainer.new()
+	hands.name = "Hands"
+	hands.alignment = BoxContainer.ALIGNMENT_CENTER
+	hands.add_theme_constant_override("separation", 0)
+	var offcol := VBoxContainer.new()
+	offcol.name = "OffHand"
+	offcol.add_theme_constant_override("separation", 3)
+	for i in Inventory.OFFHAND_SIZE:
+		var o := InvSlot.make(inv, Inventory.addr(&"offhand", i))
+		_add_slot(offcol, o)
+		_off_slots.append(o)
+	hands.add_child(offcol)
+	hands.add_child(_gap())
 	var bars := VBoxContainer.new()
 	bars.name = "Hotbars"
 	bars.add_theme_constant_override("separation", 3)
@@ -383,7 +414,30 @@ func _build_right() -> void:
 		for i in Inventory.HOTBAR_SIZE:
 			_add_slot(g, InvSlot.make(inv, Inventory.addr(area, i)))
 		bars.add_child(g)
-	v.add_child(bars)
+	hands.add_child(bars)
+	hands.add_child(_gap())
+	var qcol := VBoxContainer.new()
+	qcol.name = "Quick"
+	qcol.add_theme_constant_override("separation", 3)
+	qcol.alignment = BoxContainer.ALIGNMENT_END
+	_quick_slot = InvSlot.make(inv, Inventory.addr(&"quick", 0))
+	_add_slot(qcol, _quick_slot)
+	hands.add_child(qcol)
+	v.add_child(hands)
+
+
+func _gap() -> Control:
+	var g := Control.new()
+	g.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hand_gaps.append(g)
+	return g
+
+
+func _pad() -> Control:
+	var g := Control.new()
+	g.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hand_pads.append(g)
+	return g
 
 
 func _cell_grid(cols: int) -> GridContainer:
@@ -760,7 +814,16 @@ func _refresh() -> void:
 			if a.area == &"chest":
 				# A backpack put down has fewer slots than a chest.
 				s.visible = int(a.index) < inv.area_size(&"chest")
-			s.selected = a.area == inv.hotbar_area() and a.index == inv.active_slot
+			# The main hand's slot (the quick slot while it is out), the
+			# active off-hand slot.
+			match a.area:
+				&"offhand":
+					s.selected = int(a.index) == inv.active_offhand
+					s.modulate = Color.WHITE if inv.offhand_up else Color(1, 1, 1, 0.7)
+				&"quick":
+					s.selected = inv.quick_out
+				_:
+					s.selected = a.area == inv.hotbar_area() and a.index == inv.active_slot and not inv.quick_out
 		s.queue_redraw()
 	if not chest:
 		_rebuild_left()
@@ -848,6 +911,12 @@ func tip_lines(c: Control) -> Array:
 	if st == null:
 		if s == _backpack_slot:
 			return [["Backpack slot", McStyle.TIP_NAME], ["Wear a backpack here to carry more", McStyle.TIP_GREY]]
+		if s in _off_slots:
+			return [["Off-hand %d" % (int(s.addr.index) + 1), McStyle.TIP_NAME],
+					["C over an item puts it here; C in play raises it", McStyle.TIP_GREY]]
+		if s == _quick_slot:
+			return [["Quick slot", McStyle.TIP_NAME],
+					["B over an item puts it here; B in play takes it out", McStyle.TIP_GREY]]
 		if _furnace_mode() and not s.addr.is_empty() and s.addr.area == &"chest":
 			match int(s.addr.index):
 				Smelting.INPUT:
@@ -1040,7 +1109,7 @@ func _on_relayout(vp_size: Vector2) -> void:
 	var book := book_open and not chest
 	var pad_f := 0.36
 	# Widths in slots: the right panel 9 + padding; the book 7 + its scroll bar.
-	var w_slots := 9.0 + pad_f * 2.0 + 0.2
+	var w_slots := 9.0 + pad_f * 2.0 + 0.2 + 2.0 * HAND_COL
 	if book:
 		w_slots += BOOK_COLS + 0.5 + pad_f * 2.0 + 0.3
 	# Heights in slots: tabs, padding, the top section, titles and notes,
@@ -1094,6 +1163,10 @@ func _on_relayout(vp_size: Vector2) -> void:
 	_farrow.custom_minimum_size = Vector2(roundf(_slot_px * 1.6), _slot_px)
 	(_right.find_child("Balance", true, false) as Control).custom_minimum_size.x = _slot_px
 	_hotbar_gap.custom_minimum_size.y = roundf(_slot_px * 0.2)
+	for g in _hand_gaps:
+		g.custom_minimum_size.x = roundf(_slot_px * (HAND_COL - 1.0))
+	for g in _hand_pads:
+		g.custom_minimum_size.x = roundf(_slot_px * (HAND_COL - 1.0)) + _slot_px
 	_craft_note.custom_minimum_size.x = 9.0 * _slot_px
 	_no_pack.custom_minimum_size.x = 9.0 * _slot_px
 	_set_slot_size()
