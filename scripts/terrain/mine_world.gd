@@ -7332,6 +7332,12 @@ func _run_buildings_gate() -> void:
 	ok = let > 0 and fell > 0
 	check.call(ok, "cut loose, it falls (%d pieces, %d bricks)" % [let, fell])
 	fails += 0 if ok else 1
+	if "--dig-all" in OS.get_cmdline_user_args():
+		# Let go by MineBuildings, not the survey (whose fitted ground floats
+		# big groups): no support at all is a topple straight down.
+		ok = MineBuildings.toppled == tipped0 + 1
+		check.call(ok, "nothing under it, it is let go whole by its own balance check")
+		fails += 0 if ok else 1
 	if not "--dig-all" in OS.get_cmdline_user_args():
 		ok = MineBuildings.toppled == tipped0 + 1
 		check.call(ok, "undermined past its middle, it tips (%d balance checks)" % MineBuildings.checks)
