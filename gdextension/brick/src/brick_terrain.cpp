@@ -2245,6 +2245,10 @@ static Field g_field;
 // --- the bond's view of a tile (Docs/TerrainBond.md) -------------------------
 
 namespace {
+static void face_band(const TileSample &s, int &lo, int &hi);
+} // namespace
+
+namespace {
 
 /// What the bond (terrain_bond.h) needs to know of one course cell -- its
 /// group, or none -- read from a tile's sample where it reaches and from the
@@ -2367,16 +2371,29 @@ struct BondView {
         }
         std::vector<std::array<int, 3>> cells;
         const int ylo = s.y0, yhi = s.y0 + s.ysize;
+        // Only the plates that can draw a face (the mesher's band), and a
+        // plate with all six neighbours solid skipped from the voxels alone
+        // (most are): this ran on every rebake.
+        int band_lo = ylo, band_hi = yhi;
+        face_band(s, band_lo, band_hi);
+        const int scan_lo = std::max(ylo, band_lo), scan_hi = std::min(yhi, band_hi);
+        const size_t sy = (size_t)SPAN, sz = (size_t)SPAN * (size_t)s.ysize;
         for (int lz = -MARGIN; lz < TILE + MARGIN; ++lz) {
             for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
                 int last_c = INT_MIN;
-                for (int yp = ylo; yp < yhi; ++yp) {
+                const bool inner = lx > -MARGIN && lz > -MARGIN && lx < TILE + MARGIN - 1 && lz < TILE + MARGIN - 1;
+                for (int yp = scan_lo; yp < scan_hi; ++yp) {
                     const size_t i = (size_t)s.vidx(lx, yp, lz);
                     if (s.vox[i] == MAT_AIR) {
                         continue;
                     }
                     const int c = floor_div(yp, PLATES_PER_CELL);
                     if (c == last_c) {
+                        continue;
+                    }
+                    if (inner && yp > ylo && yp < yhi - 1 && s.vox[i - 1] != MAT_AIR && s.vox[i + 1] != MAT_AIR
+                            && s.vox[i - sy] != MAT_AIR && s.vox[i + sy] != MAT_AIR
+                            && s.vox[i - sz] != MAT_AIR && s.vox[i + sz] != MAT_AIR) {
                         continue;
                     }
                     if (!(s.open_air(lx - 1, yp, lz) || s.open_air(lx + 1, yp, lz)
