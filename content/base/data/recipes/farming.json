@@ -61,6 +61,23 @@
 			"station": "workbench",
 			"output": "grow_mix",
 			"count": 4
+		},
+		{
+			"name": "Scarecrow",
+			"inputs": {
+				"wood": 12,
+				"wheat": 6
+			},
+			"station": "workbench",
+			"output": "scarecrow"
+		},
+		{
+			"name": "Mulch",
+			"inputs": {
+				"leaves": 12
+			},
+			"output": "mulch",
+			"count": 6
 		}
 	]
 }

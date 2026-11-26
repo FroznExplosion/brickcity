@@ -216,7 +216,15 @@ static func _model(d: Dictionary) -> Node3D:
 			_part(inner, _cyl(0.16, 0.16, 0.16), _mat(Color(0.75, 0.75, 0.78), 0.3), Vector3(0, 0.7, 0))
 			_part(inner, _box(Vector3(0.08, 0.45, 0.12)), _mat(Color(0.75, 0.75, 0.78), 0.3), Vector3(0.24, 0.55, 0))
 		"station":
-			if str(d.get("model", "")) == "bin":
+			if str(d.get("model", "")) == "scarecrow":
+				# A pole, a cross bar with a shirt on it, a straw head and hat.
+				var wood := _mat(Color(0.45, 0.3, 0.16), 0.7)
+				_part(inner, _box(Vector3(0.1, 1.4, 0.1)), wood, Vector3(0, 0.7, 0))
+				_part(inner, _box(Vector3(1.0, 0.1, 0.1)), wood, Vector3(0, 1.05, 0))
+				_part(inner, _box(Vector3(0.5, 0.45, 0.22)), _mat(Color(0.55, 0.25, 0.2), 0.8), Vector3(0, 0.9, 0))
+				_part(inner, _box(Vector3(0.3, 0.3, 0.3)), _mat(col, 0.8), Vector3(0, 1.32, 0))
+				_part(inner, _cyl(0.3, 0.3, 0.05), _mat(col.darkened(0.3), 0.8), Vector3(0, 1.49, 0))
+			elif str(d.get("model", "")) == "bin":
 				# A slatted wooden box, open at the top, dark compost in it.
 				var m := _mat(col, 0.8)
 				for i in 4:
