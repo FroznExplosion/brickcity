@@ -39,6 +39,13 @@ extends SceneTree
 ##   observer  an edit or a cable in the stud it watches gives 15 out of its
 ##             back for exactly 2 ticks, nothing at its side, nothing for an
 ##             edit elsewhere; a load is not a change.
+## Stage 3b (Docs/MineWiring.md 16):
+##   gate tile a stack and a row of gate tiles is one group: a lever at one
+##             opens all (passable), off shuts all; not in mid-air, but beside
+##             another; one apart is its own group.
+##   sequencer program [5, 5, 5]: 5 on, 5 off, 5 on, then off though its back
+##             stays on; RMB picks the next program; it is saved.
+##   display   shows the level beside it: 15 with the lever on, 0 off.
 
 var _pass := 0
 var _fail := 0
@@ -86,6 +93,7 @@ func _init() -> void:
 	_gates(w)
 	_wrench(w)
 	_stage3(w)
+	_stage3b(w)
 	_save(w)
 	_save2(w)
 	_items()
@@ -533,6 +541,76 @@ func _stage3(w: MineWiring) -> void:
 	_ok("loaded again: the observer faces +x and does not fire for the load", int(w2.devices[ob].facing) == 0
 			and not w2.is_lit(Vector3i(19, 0, 50)))
 	w2.queue_free()
+
+
+func _stage3b(w: MineWiring) -> void:
+	print("gate tiles, sequencer, number display")
+	w.clear()
+	var lever := Vector3i(-1, 0, 60)
+	w.place_device(lever, &"lever")
+	var tiles: Array[Vector3i] = [Vector3i(0, 0, 60), Vector3i(0, 3, 60), Vector3i(1, 0, 60), Vector3i(1, 3, 60), Vector3i(2, 3, 60)]
+	var all_in := true
+	for t in tiles:
+		all_in = all_in and w.place_device(t, &"gate_tile")
+	_ok("gate tiles: on ground, stacked, and one held only beside another", all_in)
+	_ok("not in mid-air", not w.place_device(Vector3i(6, 4, 60), &"gate_tile"))
+	w.place_device(Vector3i(4, 0, 60), &"gate_tile")
+	w.tick()
+	var shut := true
+	for t in tiles:
+		shut = shut and not w.is_open(t)
+	_ok("unpowered: all solid", shut)
+	w.use_device(lever)
+	w.tick()
+	var open := true
+	for t in tiles:
+		open = open and w.is_open(t)
+	_ok("a lever at one: the whole group open", open)
+	_ok("a tile one stud apart is its own group: still solid", not w.is_open(Vector3i(4, 0, 60)))
+	w.use_device(lever)
+	w.tick()
+	_ok("the lever off: all solid again", not w.is_open(Vector3i(2, 3, 60)))
+	# Sequencer [5, 5, 5].
+	w.clear()
+	var sq := Vector3i(10, 0, 60)
+	w.place_device(Vector3i(9, 0, 60), &"lever")
+	w.place_device(sq, &"sequencer", false, false, 0, 0)
+	_ticks(w, 2)
+	w.use_device(Vector3i(9, 0, 60))
+	var pattern := ""
+	for i in 20:
+		w.tick()
+		pattern += "1" if w.output_of(sq) > 0 else "0"
+	_ok("program 5 on, 5 off, 5 on, then off with its back still on (%s)" % pattern,
+			pattern == "11111000001111100000")
+	w.use_device(sq)
+	_ok("RMB picks the next program", int(w.devices[sq].setting) == 1)
+	var saved: Variant = JSON.parse_string(JSON.stringify(w.to_save()))
+	var w2 := MineWiring.new()
+	w2.solid_fn = _solid
+	root.add_child(w2)
+	w2.restore(saved)
+	_ok("its program comes back", int(w2.devices[sq].setting) == 1)
+	w2.queue_free()
+	# Number display.
+	w.clear()
+	var disp := Vector3i(20, 0, 60)
+	w.place_device(Vector3i(19, 0, 60), &"lever")
+	w.place_device(disp, &"number_display", false, false, 0)
+	w.tick()
+	_ok("display: 0 with the lever off", w.output_of(disp) == 0)
+	w.use_device(Vector3i(19, 0, 60))
+	w.tick()
+	_ok("15 with it on", w.output_of(disp) == 15)
+	var lab := (w.devices[disp].node as Node3D).get_node("Turn/Number") as Label3D
+	_ok("printed on its front: \"%s\"" % lab.text, lab.text == "15")
+	_ok("and it drives nothing (a lamp beside it stays dark)", w.place_device(Vector3i(20, 0, 62), &"lamp")
+			and _tick_lit(w, Vector3i(20, 0, 62)) == false)
+
+
+func _tick_lit(w: MineWiring, c: Vector3i) -> bool:
+	w.tick()
+	return w.is_lit(c)
 
 
 func _save2(w: MineWiring) -> void:

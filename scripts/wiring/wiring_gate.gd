@@ -35,6 +35,12 @@ extends RefCounted
 ##   observer  a real ground edit in the stud it watches flashes the lamp at
 ##             its back.
 ##   trapdoor  over a dug pit, held by the ground beside it; a lever opens it.
+## Stage 3b (Docs/MineWiring.md 16):
+##   gate tile a wall of gate tiles 2 high: a lever opens the whole wall (its
+##             colliders off), off makes it solid again.
+##   display   a number display laid with the builder reads 15 beside a lever.
+##   sequencer a sequencer's program runs out of its front in the real tick:
+##             its lamp is lit, then dark, then lit.
 ## Preloaded by mine_world.gd (`--gate=wiring`).
 
 var w: Node = null
@@ -290,6 +296,56 @@ func run(host: Node) -> void:
 	await w._frames(14)
 	check("the lever on: the trapdoor swung down open", wr.is_open(trap))
 
+	# --- stage 3b: gate tiles, number display, sequencer (Docs/MineWiring.md 16)
+	var zg := z0 + 11
+	var glever := Vector3i(x0, y, zg)
+	wr.place_device(glever, &"lever")
+	var wall: Array[Vector3i] = []
+	for x in range(x0 + 1, x0 + 4):
+		for k in 2:
+			var t := Vector3i(x, y + k * 3, zg)
+			wr.place_device(t, &"gate_tile")
+			wall.append(t)
+	await w._frames(14)
+	var body := (wr.devices[wall[0]].node as Node3D).get_node("Body") as StaticBody3D
+	check("a wall of 6 gate tiles, solid (collider on)", wr.devices.size() > 0 and wall.all(func(t): return wr.devices.has(t))
+			and not wr.is_open(wall[5]) and body.collision_layer != 0)
+	wr.use_device(glever)
+	await w._frames(14)
+	check("the lever on: the whole wall open, colliders off", wall.all(func(t): return wr.is_open(t)) and body.collision_layer == 0)
+	wr.use_device(glever)
+	await w._frames(14)
+	check("off: solid again", not wr.is_open(wall[3]) and body.collision_layer != 0)
+	# Number display laid with the builder, beside a lever that is on.
+	var dlev := Vector3i(x0 + 6, y, zg)
+	wr.place_device(dlev, &"lever", true)
+	w._fly_to(Vector3((x0 + 4) * stud, y * plate, (zg + 0.5) * stud), Vector3(1, 0, 0))
+	w.walker.pitch = -0.3
+	await w._frames(4)
+	_hold(&"number_display")
+	var disp := Vector3i(x0 + 7, y, zg - 1)
+	w.builder.target = {"cell": Vector3i(disp.x, top, disp.z), "normal": Vector3i.UP}
+	check("RMB with a number display lays one", w.builder.place_target() and wr.devices.has(disp))
+	await w._frames(14)
+	var lab := (wr.devices[disp].node as Node3D).get_node("Turn/Number") as Label3D
+	check("it reads the lever beside it: \"%s\"" % lab.text, lab.text == "15")
+	# Sequencer [5, 5, 5] from a button, a lamp at its front.
+	var sq := Vector3i(x0 + 11, y, zg)
+	var sbtn := Vector3i(x0 + 10, y, zg)
+	var slamp := Vector3i(x0 + 12, y, zg)
+	wr.place_device(sbtn, &"button")
+	wr.place_device(sq, &"sequencer", false, false, 0, 0)
+	wr.place_device(slamp, &"lamp")
+	await w._frames(14)
+	wr.use_device(sbtn)
+	var seq := ""
+	for i in 40:
+		await w._frames(3)
+		var ch := "1" if wr.is_lit(slamp) else "0"
+		if seq.is_empty() or seq[seq.length() - 1] != ch:
+			seq += ch
+	check("the sequencer's lamp: lit, dark, lit, dark (%s)" % seq, seq.begins_with("01010") or seq.begins_with("1010"))
+
 	# --- save: generated again
 	var n_cables: int = wr.cables.size()
 	var n_dev: int = wr.devices.size()
@@ -303,6 +359,8 @@ func run(host: Node) -> void:
 			and int(wr.devices[gate].facing) == 0 and wr.is_lit(lamp3) and wr.pairs.get(ha, Vector3i.ZERO) == hb)
 	check("the door is back, shut; the trapdoor back, open", wr.devices.has(door) and not wr.is_open(door)
 			and wr.devices.has(trap) and wr.is_open(trap))
+	check("the gate tile wall is back, solid; the display reads 15", wall.all(func(t): return wr.devices.has(t) and not wr.is_open(t))
+			and wr.output_of(disp) == 15)
 
 	print("[wiring-gate] %s" % ("WIRING-GATE PASS" if fails.is_empty() else "WIRING-GATE FAIL: " + "; ".join(fails)))
 	w.get_tree().quit(0 if fails.is_empty() else 1)
