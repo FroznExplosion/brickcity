@@ -641,3 +641,88 @@ book's Iron ingot fills the input, the coal clicked below, the world's time
 moved on (half a smelt shown on the arrow, then 2 ingots), the ingots
 clicked out, then shut: a minute on gives 3 gold ingots; saved with its
 fire. Pictures: user://dev/inv_furnace, inv_furnace_done.
+
+## 16. Shaped crafting, the recipe editor, armour and the figure (plan, 2026-11-26)
+
+The user: do all of what section 14 left out (3x3 shapes, the result onto the
+cursor, armour, the player figure); use zylanntest's recipe builder
+(`tools/recipe_builder/crafting/`) so recipes can be made and edited in game;
+crafting grids of **2x2, 3x3 and 4x4**; a grid cell may need **several of an
+item** (e.g. 2 sticks + 1 coal in the same shape as 1 + 1); and when a cell
+needs more than the grid holds, **the rest is taken from what the player
+carries** (needs 2 coal, 1 in the grid: the other comes from the inventory).
+
+### 16.1 Recipes with shapes (zylanntest's model, in our JSON tables)
+
+A recipe in `content/<pack>/data/recipes/*.json` may have a pattern (else it
+stays a list, `inputs`, matched in any arrangement -- Minecraft's shapeless):
+
+```json
+{ "name": "Chest", "station": "workbench", "output": "chest", "count": 1,
+  "pattern": ["WWW", "W W", "WWW"],
+  "key": { "W": { "item": "wood", "count": 12 } } }
+```
+
+- `pattern` rows, trimmed (no empty outer rows/columns, zylanntest's), a
+  space for an empty cell; `key` letter -> `{item | tag, count}`: a cell
+  needs that many of that item (or any item with the tag). One cell of a
+  material is normally 12 plate cells (one 2x2 brick), so today's numbers
+  map onto Minecraft's shapes: workbench 2x2 of wood x12 (48), chest and
+  furnace the 3x3 ring (96).
+- The grid a recipe needs is the smallest that holds it: up to 2x2 by hand
+  (the inventory screen), up to 3x3 at a crafting table, up to 4x4 at a
+  4x4 station (open question 1).
+- Matching (zylanntest `match_grid`): trim the grid, compare the shape; each
+  cell's ITEM decides the shape (it must be there, at least one); mirrored
+  left-right also matches (Minecraft's). A recipe's signature
+  (`3x3:wood*12,...`) keeps two recipes from having the same shape.
+- **Counts: grid first, then the player.** A cell that needs 12 and holds 5
+  takes the 5 and 7 more of the same item (or tag) from what is carried
+  (hotbars, storage; never an open chest, never the off-hand/quick slots
+  unless asked). The cell turns red when grid + carried is not enough.
+- Crafting takes from the grid cells, then the carried rest; the result
+  shows as soon as the grid's shape matches and the counts are there.
+
+### 16.2 The crafting grid in the screen (Minecraft's, with Bedrock's book)
+
+- A real grid of slots: 2x2 in the inventory, 3x3 at a crafting table, 4x4
+  at its station; items are clicked/dragged in like any slot. Closing the
+  screen puts what is left in the grid back (`clear_craft`, already there).
+- The book (left) still lists the recipes; clicking one **fills the grid**
+  in its shape from what is carried (each cell up to its count; a cell
+  short stays red), Bedrock's auto-fill.
+- **The result onto the cursor** (Minecraft): click the result -> onto the
+  held stack (same kind and room, else nothing); Shift-click -> as many as
+  can be made, into the inventory.
+- Shapeless (`inputs`) recipes keep working: any arrangement of their items
+  in the grid, or the book's fill.
+
+### 16.3 The recipe editor (zylanntest's builder, ported)
+
+In game, creative only (and the dev menu): a grid with a 2x2 / 3x3 / 4x4
+switch; items from the creative palette placed in cells; a cell's count set
+by clicks (left +1, right -1, shift x10) as zylanntest's CraftingSlot does;
+the output and its count, the name, the station, the book tab; Save (trims,
+checks the signature is not taken), Load an existing recipe to edit, Delete.
+Saved as our JSON (16.1): in the editor build into the base pack's
+`data/recipes/`, in a player build into `user://mods/<id>/data/recipes/`
+(open question 2), so ContentPacks picks it up.
+
+### 16.4 Armour and the player figure (Minecraft's left column)
+
+- Four armour slots (head, chest, legs, feet) left of a figure of the
+  player that turns its head toward the mouse, the backpack slot under them.
+- Needs decisions with the user (open question 3): what armour does in this
+  game (damage taken by the pawn -- the Weapons area's PlayerHealth/pawn,
+  not this area's), which materials (iron, gold, diamond?), whether it shows
+  on the pawn in play, and which model the figure uses.
+
+### 16.5 Open questions
+
+1. Which station gives the 4x4 grid (a new "workshop table"? the workbench
+   upgraded?), and which recipes need it.
+2. Where player-made recipes are saved in a player build (a mod pack
+   `user://mods/my_recipes/`?), and whether they are shared in multiplayer.
+3. Armour: effect, materials, look in play, the figure's model.
+4. Converting today's recipes: every one gets a pattern (proposed: the
+   Minecraft shape of the same thing, cells of 12), or some stay shapeless.
