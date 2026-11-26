@@ -126,6 +126,15 @@ not move its middle yet (the weights are the stamp's).
   furniture is building bricks too: mined, shot, falling with it. Not yet:
   doors as moving parts, lamps that light (a lamp brick is a coloured brick:
   block light comes from lava only), room streaming.
+- **6b, fittings (2026-11-25, later).** A stamped tower is fitted with the
+  mine world's wiring devices (Docs/MineWiring.md), not new ones
+  (MineBuildings.fit_out): every interior doorway (TowerRecipe.doorways, 4
+  studs) gets a double door -- two 2-stud doors hinged at its ends, opened
+  by RMB or power -- and every room (RoomManifest.rooms_for) a lamp near its
+  middle with a lever beside it. Lamps start dark (each lit lamp is an
+  OmniLight: fine for tens, not a town's hundreds); the lever lights it. 6
+  floors: 22 doors, 24 lamps. Saved, broken and dropped by the wiring as
+  its own devices. Not the outer entrances yet.
 - **7, far view.** Partly: windows are glass cells now, not air, so the
   coarse tier keeps them as sky-blue cells on the block. The far view from
   bricks (Docs/Structures.md) is still the city's alone.
