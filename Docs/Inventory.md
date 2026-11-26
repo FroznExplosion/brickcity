@@ -4,7 +4,12 @@ Ported from zylanntest's `game/inventory/` (its README is the design this
 follows), shaped to brickcity: content packs, MenuScreen, no renderer
 read-backs, and the arsenal left alone.
 
-Status: stages 1-12 built (round three, 2026-11-24: guns as items, materials and shapes, Terraria crafting).
+Status: stages 1-12 built (round three, 2026-11-24: guns as items, materials and shapes, Terraria crafting);
+round four (2026-11-25: off-hand up/down, quick slot, two-handed guns, off-hand pistol) -- see its section.
+
+**Sections 1 and 2 below are the first round's.** There is no B mode switch any
+more (stage 10): the selected slot is in the hands, a gun or anything else;
+B is now the quick slot and C the off-hand (round four).
 
 ## 1. Two systems, one pair of hands
 
@@ -343,6 +348,56 @@ and runs its own hands. Nothing here changes how a gun fires
   back, broken.
 
 Later: multiplayer authority.
+
+### Round four: both hands and the quick slot (2026-11-25, decided with the user)
+
+The question was how guns, the off-hand and aiming fit together. Rejected
+on the way: "a two-handed item hides the off-hand" alone (a pistol could
+never aim with anything in the off-hand, since RMB would be the off-hand's);
+everything two-handed (the off-hand would be pointless); a combat/building
+mode switch (B, the old way: guns not in the inventory again). The two
+hotbars stay the "modes" the player wants: bar 1 combat, bar 2 building is
+a layout, not a rule.
+
+**What was built:**
+
+- **Off-hand up or down** (`Inventory.offhand_up`, saved). C toggles it
+  (pad: hold LB). Down: RMB is the main hand's (aim a gun, place a block) --
+  plain Minecraft minus its off-hand. Up, with something in the active
+  off-hand slot: RMB uses the off-hand item instead -- places its block,
+  device or chest, fires its pistol. Nothing is ever hidden by a rule the
+  player did not choose. X held still picks which of the two off-hand
+  slots (pad: hold Y).
+- **Two-handed items lower the off-hand by themselves**: a gun of any class
+  but pistol and revolver (`hand: "two"`) in the main hand. The flag is
+  kept, so going back to a one-handed item brings the off-hand back up.
+  `Inventory.offhand()` is the off-hand in use: null while down, empty or
+  lowered.
+- **What may go in the off-hand** (`hand`): `any` = blocks, pistols,
+  revolvers, levers, lamps, cables, chests; `off` = shields (none yet);
+  `right` = everything else (tools, buckets, grenades, farm tools,
+  backpacks, stations); `two` = the other guns.
+- **The quick slot** (`Inventory.quick`, one slot, saved; area `quick`):
+  B pulls it out (pad: hold RB) -- it is the main hand until B again, a
+  tap of X, 1-9, the wheel (pad: RB/LB tap, Y tap) puts it away and the
+  toolbar slot comes back. X tap only puts it away (it does not also swap
+  the bar); 1-9 and the wheel put it away and choose. Empty: B does
+  nothing. Meant for a grenade, a special gun or tool.
+- **Pad** (no pad support exists elsewhere yet: moving, looking and the
+  triggers are for later): LB/RB tap step the slot, hold (350 ms) = off-hand
+  up/down / quick slot; Y tap = other bar (or put the quick slot away),
+  hold = the other off-hand slot. A tap acts on release, so a hold never
+  also steps.
+- **The off-hand pistol**: its own GunController (`MineHands.off_gun`),
+  RMB its trigger, its rounds kept in its stack like the main gun's; it
+  reloads by itself when empty, and with R. It is drawn low on the left
+  of the view (no left arm pose yet: later, with ViewArms). Dual pistols
+  are a main pistol + an off-hand pistol, up: LMB right, RMB left, no
+  sights.
+- **HUD**: the off-hand slots dim while down (or lowered by a two-handed
+  item), the quick slot under them, outlined while out; the caption names
+  both hands ("Pickaxe  |  off: Stone").
+- Shields: an `off` item needs blocking, which does not exist yet -- later.
 
 ## 5. Tests
 

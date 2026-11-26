@@ -137,13 +137,15 @@ func _build_content() -> void:
 	off.add_theme_constant_override("separation", GAP)
 	for i in Inventory.OFFHAND_SIZE:
 		_add_slot(off, InvSlot.make(inv, Inventory.addr(&"offhand", i)))
+	# The quick slot under the off-hand (round four: B pulls it out).
+	_add_slot(off, InvSlot.make(inv, Inventory.addr(&"quick", 0)))
 	hands.add_child(off)
 	var bars := VBoxContainer.new()
 	bars.add_theme_constant_override("separation", GAP)
 	bars.add_child(_grid(&"hotbar_1", Inventory.HOTBAR_SIZE))
 	bars.add_child(_grid(&"hotbar_0", Inventory.HOTBAR_SIZE))
 	hands.add_child(bars)
-	content.add_child(_section("Backpack  |  off-hand  |  hotbar 2 / hotbar 1", hands))
+	content.add_child(_section("Backpack  |  off-hand (C up/down), quick (B)  |  hotbar 2 / hotbar 1", hands))
 
 	_info = Label.new()
 	MenuFit.fit_label(_info, true)
@@ -322,8 +324,9 @@ func _refresh() -> void:
 			s.visible = int(s.addr.index) < inv.area_size(&"chest")
 		if not s.addr.is_empty():
 			var a: Dictionary = s.addr
-			s.selected = (a.area == inv.hotbar_area() and a.index == inv.active_slot) \
-					or (a.area == &"offhand" and a.index == inv.active_offhand)
+			s.selected = (a.area == inv.hotbar_area() and a.index == inv.active_slot and not inv.quick_out) \
+					or (a.area == &"offhand" and a.index == inv.active_offhand) \
+					or (a.area == &"quick" and inv.quick_out)
 		s.queue_redraw()
 	_cursor.visible = inv.cursor != null
 	_cursor.queue_redraw()

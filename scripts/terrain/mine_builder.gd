@@ -18,6 +18,13 @@ extends Node3D
 ##            LMB with a watering can on water fills it.
 ##   1-9, wheel   a slot of the active hotbar
 ##   X        tap: the other hotbar; held: the other off-hand slot
+##   C        the off-hand up or down: up, RMB uses the off-hand item (lays
+##            its block, fires its pistol) instead of the main hand's
+##   B        the quick slot out as the main hand; B, X, the wheel: away
+##   pad      LB/RB tap: the slot before/after (or the quick slot away);
+##            LB held: off-hand up/down; RB held: the quick slot; Y tap:
+##            the other hotbar; Y held: the other off-hand slot
+##            (Docs/Inventory.md round four)
 ##   Z        block size: 2x2, 1x1 or 4x4 studs, one brick tall
 ##   E, Tab   the inventory screen (host.toggle_inventory; InventoryScreen)
 ##
@@ -96,6 +103,11 @@ var rmb_repeat := false
 ## X: when it went down (ms), or -1; and whether this hold already swapped the off-hand.
 var _x_down := -1
 var _x_held_used := false
+## The pad's tap-or-hold buttons (LB, RB, Y): button -> [down ms, hold done].
+var _pad_down := {}
+const PAD_TAP_HOLD := [JOY_BUTTON_LEFT_SHOULDER, JOY_BUTTON_RIGHT_SHOULDER, JOY_BUTTON_Y]
+## RMB held with a block in the off-hand, up: repeating like the main hand's.
+var _hold_off := 0.0
 ## A gate that tests the keys the player's way (--gate=inventory) turns this on.
 var gate_keys := false
 ## A farm tool's RMB drag (Docs/MineFarming.md stage 3): the plate cell it
@@ -208,6 +220,71 @@ func on_mode_changed() -> void:
 
 
 # ---------------------------------------------------------------------------
+# Both hands and the quick slot (Docs/Inventory.md round four)
+
+## The off-hand is up with a block, device or chest in it (not a gun: that
+## one is MineHands').
+func offhand_builds() -> bool:
+	var o := inv.offhand()
+	return o != null and ItemCatalog.kind(o.id) != "gun"
+
+
+## Run `f` with the off-hand as the hand (`Inventory.using_off`): place_target
+## and the rest take from, and use up, the off-hand's stack. What f returned.
+func with_offhand(f: Callable) -> Variant:
+	inv.using_off = true
+	var r = f.call()
+	inv.using_off = false
+	_refresh_bar()
+	return r
+
+
+## The bar key's tap (X, pad Y): the quick slot away if it is out, else the
+## other hotbar.
+func bar_tap() -> void:
+	if not inv.put_away_quick():
+		inv.toggle_hotbar()
+
+
+## The wheel or a bumper's tap: the quick slot away if it is out (the
+## toolbar slot it left comes back), else the slot before/after.
+func step_slot(step: int) -> void:
+	if not inv.put_away_quick():
+		inv.scroll(step)
+
+
+## The pad's LB, RB and Y: a tap on release, a hold (Inventory.HOLD_MS) in
+## _pad_holds -- never both.
+func _pad_button(e: InputEventJoypadButton) -> void:
+	if not PAD_TAP_HOLD.has(e.button_index):
+		return
+	if e.pressed:
+		_pad_down[e.button_index] = [Time.get_ticks_msec(), false]
+	else:
+		var d = _pad_down.get(e.button_index)
+		_pad_down.erase(e.button_index)
+		if d != null and not d[1]:
+			match e.button_index:
+				JOY_BUTTON_LEFT_SHOULDER: step_slot(-1)
+				JOY_BUTTON_RIGHT_SHOULDER: step_slot(1)
+				JOY_BUTTON_Y: bar_tap()
+	get_viewport().set_input_as_handled()
+
+
+func _pad_holds() -> void:
+	var now := Time.get_ticks_msec()
+	for b in _pad_down:
+		var d: Array = _pad_down[b]
+		if d[1] or now - int(d[0]) < Inventory.HOLD_MS:
+			continue
+		d[1] = true
+		match b:
+			JOY_BUTTON_LEFT_SHOULDER: inv.toggle_offhand_up()
+			JOY_BUTTON_RIGHT_SHOULDER: inv.toggle_quick()
+			JOY_BUTTON_Y: inv.toggle_offhand()
+
+
+# ---------------------------------------------------------------------------
 # Input: first, before the arsenal, the camera and the walker see it.
 
 func _input(event: InputEvent) -> void:
@@ -226,8 +303,14 @@ func _input(event: InputEvent) -> void:
 				_x_held_used = false
 			else:
 				if _x_down >= 0 and not _x_held_used:
-					inv.toggle_hotbar()
+					bar_tap()
 				_x_down = -1
+			get_viewport().set_input_as_handled()
+		elif event.pressed and k == KEY_C:
+			inv.toggle_offhand_up()
+			get_viewport().set_input_as_handled()
+		elif event.pressed and k == KEY_B:
+			inv.toggle_quick()
 			get_viewport().set_input_as_handled()
 		elif event.pressed and k == KEY_G:
 			host.throw_grenade()          # whatever is in the hand (Docs/Inventory.md 10)
@@ -252,6 +335,9 @@ func _input(event: InputEvent) -> void:
 			inv.select_slot(BAR_KEYS.find(k))
 			get_viewport().set_input_as_handled()
 		return
+	if event is InputEventJoypadButton:
+		_pad_button(event as InputEventJoypadButton)
+		return
 	if not (event is InputEventMouseButton):
 		return
 	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED and not PlayerCamera.hands_off:
@@ -265,8 +351,19 @@ func _input(event: InputEvent) -> void:
 	# The wheel walks the hotbar whatever is in the hand (Shift + wheel: left
 	# to the flight's speed).
 	if mb.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN] and not mb.shift_pressed:
-		inv.scroll(-1 if mb.button_index == MOUSE_BUTTON_WHEEL_UP else 1)
+		step_slot(-1 if mb.button_index == MOUSE_BUTTON_WHEEL_UP else 1)
 		get_viewport().set_input_as_handled()
+		return
+	# The off-hand up with something in it: RMB is its (round four). A gun
+	# there fires from MineHands (it reads the button); anything else is laid
+	# from the off-hand here.
+	if mb.button_index == MOUSE_BUTTON_RIGHT and inv.offhand() != null:
+		if offhand_builds():
+			with_offhand(func() -> void:
+				update_target()
+				place_target())
+			_hold_off = REPEAT * 1.5
+			get_viewport().set_input_as_handled()
 		return
 	if not active:
 		return            # a gun: the clicks are the gun's
@@ -298,6 +395,18 @@ func _process(delta: float) -> void:
 	if _x_down >= 0 and not _x_held_used and Time.get_ticks_msec() - _x_down >= Inventory.HOLD_MS:
 		_x_held_used = true
 		inv.toggle_offhand()
+	_pad_holds()
+	var captured0 := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED or PlayerCamera.hands_off
+	if offhand_builds():
+		if not active:
+			update_target()
+		if captured0 and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) and not host.inventory_open():
+			_hold_off -= delta
+			if _hold_off <= 0.0:
+				with_offhand(place_target)
+				_hold_off = REPEAT
+	elif not active:
+		_outline.visible = false
 	if not active:
 		if host.wiring != null:
 			host.wiring.show_wrench(false, {})
@@ -309,7 +418,8 @@ func _process(delta: float) -> void:
 		if _hold_break <= 0.0:
 			break_target()
 			_hold_break = _break_repeat()
-	if captured and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) and farm_from.is_empty():
+	if captured and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) and farm_from.is_empty() \
+			and inv.offhand() == null:
 		_hold_place -= delta
 		if _hold_place <= 0.0:
 			place_target()
@@ -1031,10 +1141,16 @@ func _box_hits_player(box: AABB) -> bool:
 # The HUD
 
 func _refresh_bar() -> void:
-	if _hud == null:
+	if _hud == null or inv.using_off:
 		return
 	var what := ItemCatalog.label(inv.hand())
-	var keys := "1-9 / wheel hand  X bar  E items"
+	if inv.quick_out:
+		what = "[quick] " + what
+	var off := inv.offhands[inv.active_offhand] as ItemStack
+	if off != null:
+		what += "   |   off: %s%s" % [ItemCatalog.label(off),
+				" (lowered)" if inv.offhand_lowered() else ("" if inv.offhand_up else " (down)")]
+	var keys := "1-9 / wheel hand  X bar  C off-hand  B quick  E items"
 	if hand_kind() == "block":
 		var d := hand_def()
 		var dd := dims()
