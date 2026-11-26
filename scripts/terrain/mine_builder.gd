@@ -727,7 +727,8 @@ func place_target() -> bool:
 	# Farming (MineFarming): a ripe crop is picked whatever is in the hand;
 	# a hoe tills, a seed plants.
 	if host.farming != null:
-		if host.farming.harvest_target(target):
+		# (A scythe takes the ripe crops round it too: its own branch below.)
+		if k != "scythe" and host.farming.harvest_target(target):
 			log_blocks.append("harvest %s" % target.cell)
 			target = {}
 			return true

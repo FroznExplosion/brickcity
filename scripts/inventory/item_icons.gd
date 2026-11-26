@@ -234,6 +234,20 @@ static func _model(d: Dictionary) -> Node3D:
 			var tilt := Basis(Vector3.BACK, deg_to_rad(-35.0))
 			_part(inner, _box(Vector3(0.1, 1.2, 0.1)), wood, Vector3.ZERO, tilt)
 			_part(inner, _box(Vector3(0.42, 0.08, 0.3)), _mat(col, 0.25), tilt * Vector3(-0.17, 0.58, 0), tilt)
+		"scythe":
+			# A long handle, a grip, and a long blade off its top.
+			var wood := _mat(Color(0.45, 0.3, 0.16), 0.7)
+			var tilt := Basis(Vector3.BACK, deg_to_rad(-20.0))
+			_part(inner, _box(Vector3(0.08, 1.3, 0.08)), wood, Vector3.ZERO, tilt)
+			_part(inner, _box(Vector3(0.22, 0.06, 0.06)), wood, tilt * Vector3(0.08, 0.05, 0), tilt)
+			_part(inner, _box(Vector3(0.75, 0.06, 0.12)), _mat(col, 0.2),
+					tilt * Vector3(-0.36, 0.62, 0), tilt * Basis(Vector3.BACK, deg_to_rad(-12.0)))
+		"can":
+			# A can, a spout up and out of its side, a handle over it.
+			var m := _mat(col, 0.35)
+			_part(inner, _cyl(0.32, 0.36, 0.6), m, Vector3(0, 0.3, 0))
+			_part(inner, _cyl(0.05, 0.07, 0.6), m, Vector3(0.42, 0.42, 0), Basis(Vector3.BACK, deg_to_rad(-55.0)))
+			_part(inner, _box(Vector3(0.08, 0.08, 0.5)), m, Vector3(-0.1, 0.72, 0), Basis(Vector3.UP, PI * 0.5))
 		"seed":
 			# A little heap of seeds.
 			var m := _mat(col, 0.5)

@@ -333,11 +333,17 @@ func break_target(target: Dictionary) -> bool:
 func _give(id: StringName, n: int, at: Vector3) -> void:
 	if n <= 0 or id == &"" or not ItemCatalog.has(id):
 		return
-	var left: ItemStack = host.builder.inv.add_item(ItemStack.make(id, n))
-	if left != null:
-		left = _into_chest(left, at)
-	if left != null:
-		host.drops.spawn(left, at)
+	# In stacks no bigger than the item's own (an empty slot takes a whole
+	# stack, whatever its size).
+	var cap := ItemCatalog.max_stack(id)
+	while n > 0:
+		var k := mini(n, cap)
+		n -= k
+		var left: ItemStack = host.builder.inv.add_item(ItemStack.make(id, k))
+		if left != null:
+			left = _into_chest(left, at)
+		if left != null:
+			host.drops.spawn(left, at)
 
 
 ## What the inventory could not hold, into the nearest chest within

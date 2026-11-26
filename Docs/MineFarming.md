@@ -1,6 +1,7 @@
 # Farming in the mine world -- plan
 
-Planned 2026-11-25; stages 1 and 2 BUILT the same day (section 15). The
+Planned 2026-11-25; stages 1 and 2 BUILT the same day (section 15), stage 3
+on 2026-11-26 (section 16). The
 scene is `scenes/terrain_test.tscn` (Docs/MineWorld.md). The user's answers
 to the questions are in section 14.
 
@@ -380,8 +381,7 @@ written from the crop table and the growth rules), `farm_gate.gd`.
 Crops: wheat, carrot, potato, beans (give fertility back), pumpkin (thirsty,
 slow), berry bush (regrows); items in content/base/data/items/farming.json.
 
-**Not yet** (later stages): area tools, watering can, compost and
-fertilisers, more crops, animals and enclosure, birds, weeds, blight,
+**Not yet** (later stages): compost and fertilisers, more crops, animals and enclosure, birds, weeds, blight,
 breeding, giant crops, automation, death.
 
 **Tests.** `farm_probe` (headless, 55 checks): the materials and shader
@@ -395,3 +395,42 @@ plot out of reach untouched while the clock runs and caught up exactly on
 return, a real fall trampling (a hop not), the world generated again with
 the farm and the clock intact; pictures `user://dev/farm_field.png`,
 `farm_guide.png`.
+
+## 16. Built (2026-11-26): stage 3, no more chores
+
+**Whole fields.** Hold RMB with a hoe, seeds, a scythe or a watering can,
+move, let go: the rectangle between (MineFarming.area, up to AREA_MAX = 9
+plots a side, from where the drag began) is tilled, planted, harvested and
+replanted, or watered. An outline shows the rectangle while held
+(MineBuilder.farm_drag_begin / farm_drag_end; a release on the plot it began
+on is the tool's plain click). Seeds stop when the stack does, the can when it
+is empty. Each column's top is found near the plate the drag began on
+(`_top_near`), so a field on a slope or in a cave works, never the surface far
+over a cave.
+
+**Scythe.** RMB: every ripe crop 3 x 3 round the plot, each replanted from
+the seeds carried; a drag: the rectangle.
+
+**Watering can.** LMB on water fills it (16 plots; a sip takes no water
+away). RMB on tilled soil: wet for a day (FarmPlant.CAN_LASTS), the soil dark
+at once. A plot's `wet_until` is a time like a stage's end: `settle` cuts the
+interval there (wet before, the plot's own water after), so the catch-up is
+still exact; saved as a plot row's 18th field (old 17-field rows load as
+never watered).
+
+**Chests.** What a harvest gives that will not fit the inventory goes into
+the nearest chest or put-down backpack within 8 m (merged into its stacks,
+then empty slots), then the ground.
+
+**Recipes** (data/recipes/farming.json): hoe 12 wood + 12 stone at a
+workbench, scythe 12 wood + 18 iron ore at a workbench, watering can 18 iron
+ore at a furnace. Creative kits get all three. Icons for the scythe and can.
+The guide's how-to says all of it.
+
+**Tests.** farm_probe +8 (63): exact across a can's water running out
+(once == often == saved across it, wheat and pumpkin), watered beats dry,
+old rows load, the recipes, the area cap. --gate=farm +7: a hoe drag tills
+4 x 2, a carrot drag plants them, LMB fills the can from the channel, a can
+drag waters exactly the dry ones (all dark after), four days on (the can's water lasts one) a scythe drag
+harvests and replants all 8, a scythe click takes the ripe 3 x 3, a harvest
+too big for the inventory lands in a chest by the field.
