@@ -173,6 +173,14 @@ func setup(p_host: Node) -> void:
 
 ## A new world: everything the last one had goes. Returns the sea level the
 ## water uses (snapped to a brick course, 7.2).
+## The detail radius changed in play (World view's Apply): the water
+## simulates and draws as far as the ground does.
+func set_near_tiles(near_tiles: int) -> void:
+	_near_tiles = near_tiles
+	_base_sim_m = float(near_tiles + 2) * TILE_STUDS * BrickWorld.get_stud_metres()
+	sim_radius_m = _base_sim_m
+
+
 func reset_world(sea_m: float, near_tiles: int, p_sea_on: bool, p_wave_scale := 1.0,
 		centre := Vector2i.ZERO) -> float:
 	_finish_field()

@@ -7,7 +7,8 @@ extends RefCounted
 ##     {"name": "Default", "seed": 1234,
 ##      "gen": {<BrickTerrain.get_gen_params keys, any subset>},
 ##      "trees": {"<biome name>": 0.0..1.0, ...},
-##      "detail_tiles": 4, "far_tiles": 64, "cave_tiles": 4, "chamfer": true,
+##      (how it is drawn -- detail, cave and far distances, brick edges -- is
+##      WorldView's, not a preset's; old files' keys for it are ignored),
 ##      "bricks": {<the ground's brick fill, DEFAULT_BRICKS' keys, any subset>}}
 ##
 ## Shipped ones are content (`worldgen/` in every pack, ContentPacks); the
@@ -148,10 +149,6 @@ static func complete(d: Dictionary) -> Dictionary:
 		"seed": int(d.get("seed", 20261116)),
 		"gen": gen,
 		"trees": trees,
-		"detail_tiles": int(d.get("detail_tiles", 4)),
-		"far_tiles": int(d.get("far_tiles", 64)),
-		"cave_tiles": int(d.get("cave_tiles", d.get("detail_tiles", 4))),
-		"chamfer": bool(d.get("chamfer", true)),
 		# The city's towers laid in some regions (Docs/TerrainBuildings.md 8):
 		# off for a world from before.
 		"towns": bool(d.get("towns", false)),
