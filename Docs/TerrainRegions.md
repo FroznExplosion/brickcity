@@ -808,3 +808,27 @@ read that. Fit off, all probes pass; the old bake is 14-18 ms as before.
 `fit_top` (preset `bricks.fit_top`, off): with the fit on, the ground is
 fitted and the surface's top course is the old pattern until performance
 is good.
+
+### 12.6 Where it stands (2026-11-26, measured)
+
+Windowed, one run at a time, editor closed, nothing else running:
+
+| gate | fit off | fit on (ground; tops deferred) |
+|---|---|---|
+| `--gate=bricks` | PASS | PASS |
+| `--gate=breaklag --burst` (trigger to hole) | mean 34, worst 40 ms | mean 33, worst 36 ms (46 before the prefetch fix) |
+| `--gate=flight` | worst 38 ms, 1 over 33; 192 tiles in after 120 frames | worst 27 ms, 0 over 33; 102 tiles in |
+| `--gate=deep` (into a cave) | loaded in 200 frames, worst 24 ms | 383 frames, worst 23 ms |
+| headless probes (bricks, audit, collapse, mine_world, fluid) | all PASS | all PASS but mine_world's cold bake (134-144 ms, 120 allowed) |
+
+Frames are smooth with the fit on; what it costs is the workers' time: new
+ground fills in about half as fast (the fit reads ~1.5 tiles round each
+region). That, and the cold-bake check, keep the switch off.
+
+`--gate=gpu` (fit off; 1280x720 at render scale 0.75, flat out): on foot,
+frame 8.3 ms, GPU 7.6: water 3.0 (the sea 2.0), near tiles 1.2, near trees
+1.1, far tier 1.0, sun shadows 0.6, behind faces 0.5. Up high: GPU 5.6, water
+2.0, far tier 1.3. Standing in a deep cave the readout gave the world's
+scripts 3.9 ms of a 17.5 ms frame: the rest is drawing at the window's real
+size and the vsync. The game is GPU-bound at full resolution, the water the
+largest single part.
