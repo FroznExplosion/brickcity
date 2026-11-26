@@ -374,12 +374,13 @@ a layout, not a rule.
   kept, so going back to a one-handed item brings the off-hand back up.
   `Inventory.offhand()` is the off-hand in use: null while down, empty or
   lowered.
-- **What may go in the off-hand** (`hand`): `any` (the default for a pack
-  item with none) = blocks, pistols, revolvers, every wiring device and
-  cable, chests, buckets and fluids, pickaxes, seeds and crops; `off` =
-  shields (none yet); `right` = the wrench, grenades, hoe, scythe, watering
-  can, backpacks, stations; `two` = the other guns. RMB with a non-gun in
-  the off-hand, up, is its place/pour (`place_target` on the off-hand).
+- **What may go where** (the user, 2026-11-26): the hotbars and the
+  quick slot (an extra hotbar slot) take anything. The off-hand takes
+  anything but a two-handed item (`hand: "two"`: every gun but pistol and
+  revolver) -- placeables (blocks, devices, chests), food, one-handed guns,
+  shields (`off`, none yet), tools. `right` and `off` no longer limit a
+  slot; they say how an item is meant to be held. RMB with a non-gun in the
+  off-hand, up, is its place/pour (`place_target` on the off-hand).
 - **The quick slot** (`Inventory.quick`, one slot, saved; area `quick`):
   B pulls it out (pad: hold RB) -- it is the main hand until put away:
   B again, a tap of X or a turn of the wheel (pad: an RB/LB tap, a Y tap)

@@ -271,9 +271,17 @@ func _hands() -> void:
 	inv.seed_default()
 	_ok("the kit: materials on bar 1, the bucket on bar 2", inv.hand() != null and inv.hand().id == &"soil"
 			and inv.hotbars[1][0] != null and inv.hotbars[1][0].id == &"bucket")
+	inv.cursor = ItemStack.make(ItemCatalog.gun_id(&"rifle"), 1)
+	inv.left_click(A(&"offhand", 0))
+	_ok("a two-handed gun (a rifle) does not go in the off-hand", inv.offhands[0] == null and inv.cursor != null)
+	_ok("... it goes in the quick slot, an extra hotbar slot", inv.slot_accepts(A(&"quick", 0), inv.cursor))
 	inv.cursor = ItemStack.make(&"grenade", 1)
 	inv.left_click(A(&"offhand", 0))
-	_ok("a right-hand-only item (a grenade) does not go in the off-hand", inv.offhands[0] == null and inv.cursor != null)
+	_ok("a grenade does (anything but two-handed, 2026-11-26)", inv.offhands[0] != null and inv.cursor == null)
+	inv.offhands[0] = null
+	_ok("a pistol may go in the off-hand", inv.slot_accepts(A(&"offhand", 0),
+			ItemStack.make(ItemCatalog.gun_id(&"pistol"), 1)))
+	_ok("every two-handed gun is refused there, every other item taken", _offhand_rule_holds(inv))
 	inv.cursor = ItemStack.make(&"stone", 1)
 	inv.left_click(A(&"offhand", 0))
 	_ok("a block does (round four)", inv.offhands[0] != null and inv.cursor == null)
@@ -749,3 +757,18 @@ func _placed_backpacks() -> void:
 	drops.free()
 	chests.free()
 	back.free()
+
+
+## Every item in the catalog: the off-hand refuses it exactly when it is
+## two-handed (the user's rule, 2026-11-26); the quick slot takes them all.
+func _offhand_rule_holds(inv: Inventory) -> bool:
+	for id in ItemCatalog.ids():
+		var st := ItemStack.make(id, 1)
+		var two: bool = ItemCatalog.get_def(id).hand == "two"
+		if inv.slot_accepts(A(&"offhand", 0), st) == two:
+			print("  off-hand rule broken by ", id)
+			return false
+		if not inv.slot_accepts(A(&"quick", 0), st):
+			print("  quick slot refuses ", id)
+			return false
+	return true

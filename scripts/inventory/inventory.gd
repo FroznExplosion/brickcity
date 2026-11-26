@@ -198,9 +198,9 @@ static func _fit_backpack(s: ItemStack) -> void:
 		s.contents.resize(n)
 
 
-## May `s` go in slot `a`? Storage takes anything; the hands go by the item's
-## `hand`: the off-hand takes one-handed ("any") and off-hand-only items, the
-## hotbars everything but off-hand-only.
+## May `s` go in slot `a`? Storage, the hotbars and the quick slot take
+## anything; the off-hand anything but a two-handed item (`hand: "two"`);
+## the backpack slot backpacks; a furnace its own rules.
 func slot_accepts(a: Dictionary, s: ItemStack) -> bool:
 	if s == null:
 		return true
@@ -216,11 +216,12 @@ func slot_accepts(a: Dictionary, s: ItemStack) -> bool:
 			Smelting.FUEL:
 				return not Smelting.fuel_of(s.id).is_empty()
 		return true
-	match a.area:
-		&"offhand":
-			return d.hand == "any" or d.hand == "off"
-		&"hotbar_0", &"hotbar_1", &"quick":
-			return d.hand != "off"
+	# The hands (the user, 2026-11-26): the hotbars and the quick slot (an
+	# extra hotbar slot) take anything; the off-hand anything but a
+	# two-handed item -- blocks and other placeables, food, one-handed guns,
+	# shields, tools.
+	if a.area == &"offhand":
+		return d.hand != "two"
 	return true
 
 
