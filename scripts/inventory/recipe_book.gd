@@ -12,8 +12,13 @@ extends RefCounted
 ## (materials count plate cells: a 2x2 brick is 12). `station`: the station
 ## item that must stand within reach ("" or none: by hand). `keep_contents`:
 ## the output (a backpack) keeps the contents of the input backpack.
+## `category`: the recipe book's tab (Docs/Inventory.md 14), else the
+## output item's (`category_of_item`).
 ## A recipe is a Dictionary: {name, inputs: [{id, tag, count}], station,
-## output, count, keep_contents}.
+## output, count, keep_contents, category}.
+
+## The recipe book's tabs, Bedrock's.
+const CATEGORIES := ["construction", "equipment", "items", "nature"]
 
 static var _recipes: Array = []
 static var _loaded := false
@@ -68,7 +73,27 @@ static func parse(raw) -> Dictionary:
 		return {}
 	return {"name": str(raw.get("name", ItemCatalog.get_def(out).get("name", out))), "inputs": inputs,
 			"station": station, "output": out, "count": maxi(int(raw.get("count", 1)), 1),
-			"keep_contents": bool(raw.get("keep_contents", false))}
+			"keep_contents": bool(raw.get("keep_contents", false)),
+			"category": str(raw.get("category", category_of_item(out)))}
+
+
+## The recipe book tab an item's recipes go under: the item's `category`, or
+## by its kind -- blocks are construction; tools, weapons, buckets and
+## backpacks equipment; seeds, crops and fluids nature; the rest items.
+static func category_of_item(id: StringName) -> String:
+	var d := ItemCatalog.get_def(id)
+	if CATEGORIES.has(str(d.get("category", ""))):
+		return str(d.category)
+	match str(d.get("kind", "")):
+		"block":
+			return "construction"
+		"tool", "hoe", "scythe", "can", "bucket", "source_bucket", "grenade", "gun", "backpack":
+			return "equipment"
+		"seed", "fluid":
+			return "nature"
+		"misc":
+			return "nature" if str(d.get("model", "")) == "produce" else "items"
+	return "items"
 
 
 ## Does stack `s` count for input `inp`?

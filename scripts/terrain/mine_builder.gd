@@ -17,7 +17,7 @@ extends Node3D
 ##            rectangle between (MineFarming.area). A scythe's click: 3 x 3.
 ##            LMB with a watering can on water fills it.
 ##   1-9, wheel   a slot of the active hotbar
-##   X        tap: the other hotbar; held: the other off-hand slot
+##   X        the other hotbar (no off-hand any more, Docs/Inventory.md 14)
 ##   Z        block size: 2x2, 1x1 or 4x4 studs, one brick tall
 ##   E, Tab   the inventory screen (host.toggle_inventory; InventoryScreen)
 ##
@@ -91,9 +91,6 @@ var _hold_break := 0.0
 var _pick_jobs: Array = []
 const MAX_PICK_JOBS := 2
 var _hold_place := 0.0
-## X: when it went down (ms), or -1; and whether this hold already swapped the off-hand.
-var _x_down := -1
-var _x_held_used := false
 ## A gate that tests the keys the player's way (--gate=inventory) turns this on.
 var gate_keys := false
 ## A farm tool's RMB drag (Docs/MineFarming.md stage 3): the plate cell it
@@ -187,7 +184,6 @@ func set_active(on: bool) -> void:
 	if not on:
 		_outline.visible = false
 		target = {}
-		_x_down = -1
 	var player: PlayerController = host.player
 	if player != null:
 		player.hold_fire = on
@@ -220,12 +216,7 @@ func _input(event: InputEvent) -> void:
 		# or anything else (MineHands). The hotbar keys work either way.
 		if k == KEY_X:
 			if event.pressed:
-				_x_down = Time.get_ticks_msec()
-				_x_held_used = false
-			else:
-				if _x_down >= 0 and not _x_held_used:
-					inv.toggle_hotbar()
-				_x_down = -1
+				inv.toggle_hotbar()
 			get_viewport().set_input_as_handled()
 		elif event.pressed and k == KEY_G:
 			host.throw_grenade()          # whatever is in the hand (Docs/Inventory.md 10)
@@ -293,9 +284,6 @@ func _process(delta: float) -> void:
 	_land_picks()
 	if host == null:
 		return
-	if _x_down >= 0 and not _x_held_used and Time.get_ticks_msec() - _x_down >= Inventory.HOLD_MS:
-		_x_held_used = true
-		inv.toggle_offhand()
 	if not active:
 		return
 	update_target()
