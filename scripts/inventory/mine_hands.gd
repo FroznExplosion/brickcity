@@ -15,7 +15,8 @@ extends Node3D
 ## The OFF-HAND (Docs/Inventory.md round four): a one-handed gun in the
 ## active off-hand slot, with the off-hand up (Inventory.offhand), is made the
 ## same way into its own GunController (`off_gun`) and drawn low on the left
-## of the view (`_off_view`; no left arm yet). RMB is its trigger; it reloads
+## of the view (`_off_view`), the left arm's C round its grip
+## (PlayerView.off_held). RMB is its trigger; it reloads
 ## by itself when empty, and with R. While anything is in the off-hand, up,
 ## the main gun's sights rest (PlayerController.hold_aim): RMB is that hand's.
 ##
@@ -38,7 +39,7 @@ var _off_kick := 0.0
 ## RMB down, from its events (Input's polled state may lag a synthesised one).
 var _rmb_down := false
 ## Where the off-hand gun is drawn, in the camera's frame, and how long.
-const OFF_POS := Vector3(-0.15, -0.12, -0.34)
+const OFF_POS := Vector3(-0.13, -0.065, -0.3)
 const OFF_LENGTH := 0.26
 ## ItemStack -> GunInstance, the guns made for stacks still carried.
 var _made := {}
@@ -129,6 +130,8 @@ func _release_off() -> void:
 		if old.get_parent() == _off_view:
 			old.reparent(_holster, false)
 	off_held = null
+	if view != null:
+		view.off_held = null
 
 
 func _refresh_main() -> void:
@@ -184,12 +187,15 @@ func _refresh_off() -> void:
 			_fit_off(g)
 			g.visible = true
 			off_held = want
+			# The left arm holds it (PlayerView.off_held).
+			if view != null:
+				view.off_held = g
 	_prune()
 
 
 ## The off-hand gun sized and placed in its corner: OFF_LENGTH long, its
-## back end at the view node.
-static func _fit_off(gi: GunInstance) -> void:
+## back end at the view node; where the left hand takes it (`view_holds`).
+func _fit_off(gi: GunInstance) -> void:
 	gi.transform = Transform3D.IDENTITY
 	var inv_xf := gi.global_transform.affine_inverse()
 	var box := AABB()
@@ -202,6 +208,8 @@ static func _fit_off(gi: GunInstance) -> void:
 	if first or box.size.z < 0.01:
 		return
 	var sc := OFF_LENGTH / box.size.z
+	if view != null:
+		gi.set_meta(&"view_holds", view.holds_for(gi, inv_xf, box))
 	gi.scale = Vector3.ONE * sc
 	gi.position = -Vector3(box.get_center().x, box.end.y, box.end.z) * sc
 

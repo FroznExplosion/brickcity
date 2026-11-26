@@ -205,6 +205,11 @@ var _outgoing_home: Node3D
 var swaps_done := 0
 ## The left hand off the gun (0 on it, 1 free), and its stride.
 var _left_free := 0.0
+## A gun held in the LEFT hand, apart from the rig (the mine world's off-hand
+## pistol, MineHands; Docs/Inventory.md round four), or null. Set, the left
+## hand's C goes round its grip (`view_holds`, from holds_for) instead of
+## steadying the gun in the right -- with or without one there.
+var off_held: GunInstance = null
 ## A grenade throw under way, 0..1 (-1 none), what to call when the grenade
 ## leaves the hand, and the grenade shown in it.
 var _throw := -1.0
@@ -716,10 +721,18 @@ func _hands(delta: float, on_floor: bool, hv: float) -> void:
 	var moving := clampf(hv / Pawn.RUN_SPEED, 0.0, 1.0) * (1.0 if on_floor else 0.3)
 	var stride := _bob * 0.5
 	var reloading := gun.is_reloading() and held != null and held == gun.gun
+	var off_pose = _off_pose()
+	if off_pose != null:
+		arms.visible = true
 	if held == null or not held.has_meta(&"view_holds"):
-		# Nothing in hand: both open, swinging with the stride.
+		# Nothing in hand: both open, swinging with the stride -- or the left
+		# round the off-hand gun.
 		var bare := _swing(ViewArms.LEFT, stride, moving)
-		var lp := _left_action(delta, bare, bare, ViewArms.Hand.OPEN)
+		var bare_hand := ViewArms.Hand.OPEN
+		if off_pose != null:
+			bare = off_pose
+			bare_hand = ViewArms.Hand.C
+		var lp := _left_action(delta, bare, bare, bare_hand)
 		arms.set_hand(ViewArms.RIGHT, ViewArms.Hand.OPEN)
 		arms.set_hand(ViewArms.LEFT, int(lp[1]))
 		arms.swivel = [0.0, 0.0]
@@ -758,7 +771,13 @@ func _hands(delta: float, on_floor: bool, hv: float) -> void:
 	# back, it is still out of it.
 	var left_hand := ViewArms.Hand.OPEN if off else ViewArms.Hand.C
 
-	if reloading:
+	if off_pose != null:
+		# The left hand has its own gun: it stays on it (a sprint, a reload of
+		# the right one, a bash all leave it there).
+		on_gun = off_pose
+		left = off_pose
+		left_hand = ViewArms.Hand.C
+	elif reloading:
 		var path := _reload_left(gun.reload_progress(), on_gun, g, gx, gy, holds)
 		left = path[0]
 		left_hand = path[1]
@@ -769,7 +788,7 @@ func _hands(delta: float, on_floor: bool, hv: float) -> void:
 		left = left.interpolate_with(fist, _smooth(_melee))
 		if _melee > 0.3:
 			left_hand = ViewArms.Hand.FIST
-	_carry_magazine(held, gun.reload_progress() if reloading else -1.0, left, g, gy, holds)
+	_carry_magazine(held, gun.reload_progress() if reloading and off_pose == null else -1.0, left, g, gy, holds)
 	var act := _left_action(delta, left, on_gun, left_hand)
 	left = act[0]
 	left_hand = act[1]
@@ -780,6 +799,27 @@ func _hands(delta: float, on_floor: bool, hv: float) -> void:
 	arms.swivel = [trail + 0.25 * _sprint, -trail + 0.15 * _sprint]
 	arms.pose(right, left, delta)
 	_rope_to(delta)
+
+
+## The left hand round the off-hand gun's grip (`off_held`), camera-local, as
+## the right hand holds its own; null when there is none to hold. The C's
+## hole along the grip, the fingers ahead.
+func _off_pose() -> Variant:
+	if off_held == null or not is_instance_valid(off_held) or not off_held.is_visible_in_tree() \
+			or not off_held.has_meta(&"view_holds"):
+		return null
+	var holds: Dictionary = off_held.get_meta(&"view_holds")
+	var g := camera.global_transform.affine_inverse() * off_held.global_transform
+	var gb := g.basis.orthonormalized()
+	var grip_axis := (-gb.y + gb.z * 0.3).normalized()
+	return Transform3D(ViewArms.hand_basis(grip_axis, -gb.z), g * (holds.grip as Vector3) + grip_axis * 0.02)
+
+
+## Where the hands take gun `gi` (its grip, handguard, magazine), measured from
+## its box `box` in its own frame (`inv` = its global transform's inverse): for
+## a gun held apart from the rig (off_held), which sets it as `view_holds`.
+func holds_for(gi: GunInstance, inv: Transform3D, box: AABB) -> Dictionary:
+	return _holds(gi, inv, box)
 
 
 ## What the left hand does over everything else: a grenade throw, else a grapple.
