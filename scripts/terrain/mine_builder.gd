@@ -12,7 +12,10 @@ extends Node3D
 ##   MMB      pick the block looked at into the hand
 ##   farming (Docs/MineFarming.md, MineFarming): a hoe's RMB tills soil, a
 ##            seed's RMB plants on tilled soil, RMB on a ripe crop harvests,
-##            LMB on a crop harvests or pulls it
+##            LMB on a crop harvests or pulls it. Hold RMB with a hoe, seeds,
+##            a scythe or a watering can and let go elsewhere: the whole
+##            rectangle between (MineFarming.area). A scythe's click: 3 x 3.
+##            LMB with a watering can on water fills it.
 ##   1-9, wheel   a slot of the active hotbar
 ##   X        tap: the other hotbar; held: the other off-hand slot
 ##   Z        block size: 2x2, 1x1 or 4x4 studs, one brick tall
@@ -93,6 +96,10 @@ var _x_down := -1
 var _x_held_used := false
 ## A gate that tests the keys the player's way (--gate=inventory) turns this on.
 var gate_keys := false
+## A farm tool's RMB drag (Docs/MineFarming.md stage 3): the plate cell it
+## began on, or empty when none is held.
+var farm_from := {}
+const FARM_DRAG := ["hoe", "seed", "scythe", "can"]
 ## Trees are looked at (Docs/Inventory.md 13); a gate aiming at the ground
 ## beside one turns it off.
 var aim_trees := true
@@ -249,6 +256,9 @@ func _input(event: InputEvent) -> void:
 		return            # a click that captures the mouse is the camera's
 	var mb := event as InputEventMouseButton
 	if not mb.pressed:
+		if mb.button_index == MOUSE_BUTTON_RIGHT and not farm_from.is_empty():
+			farm_drag_end()
+			get_viewport().set_input_as_handled()
 		return
 	# The wheel walks the hotbar whatever is in the hand (Shift + wheel: left
 	# to the flight's speed).
@@ -267,8 +277,11 @@ func _input(event: InputEvent) -> void:
 			break_target()
 			_hold_break = _break_repeat() * 1.5
 		MOUSE_BUTTON_RIGHT:
-			place_target()
-			_hold_place = REPEAT * 1.5
+			if FARM_DRAG.has(hand_kind()) and host.farming != null:
+				farm_drag_begin()
+			else:
+				place_target()
+				_hold_place = REPEAT * 1.5
 		MOUSE_BUTTON_MIDDLE:
 			pick_target()
 		_:
@@ -292,7 +305,7 @@ func _process(delta: float) -> void:
 		if _hold_break <= 0.0:
 			break_target()
 			_hold_break = _break_repeat()
-	if captured and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
+	if captured and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) and farm_from.is_empty():
 		_hold_place -= delta
 		if _hold_place <= 0.0:
 			place_target()
@@ -361,6 +374,9 @@ func update_target() -> void:
 	if target.is_empty():
 		_outline.visible = false
 		return
+	if not farm_from.is_empty():
+		_outline_area(farm_from.cell, target.cell)
+		return
 	# A cable tile on the top looked at: it is what LMB breaks (the ground's
 	# target stays, so a block is still laid there).
 	if host.wiring != null and Vector3i(target.normal) == Vector3i.UP \
@@ -378,6 +394,64 @@ func update_target() -> void:
 	_outline.visible = true
 	_outline.global_transform = Transform3D(Basis.from_scale(size * 1.004),
 			host.to_global(lo - size * 0.002))
+
+
+## The outline round a farm drag's rectangle (2x2-stud plots, a brick tall).
+func _outline_area(a: Vector3i, b: Vector3i) -> void:
+	var cols: Array[Vector2i] = MineFarming.area_blocks(a, b)
+	var lo := Vector2i(cols[0])
+	var hi := Vector2i(cols[0])
+	for c in cols:
+		lo = Vector2i(mini(lo.x, c.x), mini(lo.y, c.y))
+		hi = Vector2i(maxi(hi.x, c.x), maxi(hi.y, c.y))
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var at := Vector3(lo.x * 2 * stud, (a.y - 2) * plate, lo.y * 2 * stud)
+	var size := Vector3((hi.x - lo.x + 1) * 2 * stud, 4 * plate, (hi.y - lo.y + 1) * 2 * stud)
+	_outline.visible = true
+	_outline.global_transform = Transform3D(Basis.from_scale(size * 1.004), host.to_global(at - size * 0.002))
+
+
+## RMB down with a farm tool: the drag starts on the cell looked at.
+func farm_drag_begin() -> void:
+	if target.is_empty():
+		update_target()
+	farm_from = target.duplicate() if target.has("cell") else {}
+
+
+## RMB up: on the cell it began on, the tool's click (place_target); else
+## the rectangle between (MineFarming.area).
+func farm_drag_end() -> bool:
+	var from := farm_from
+	farm_from = {}
+	if from.is_empty():
+		return false
+	if target.is_empty() or not target.has("cell"):
+		update_target()
+	if target.is_empty() or not target.has("cell"):
+		return false
+	var a: Vector3i = from.cell
+	var b: Vector3i = target.cell
+	if floori(a.x / 2.0) == floori(b.x / 2.0) and floori(a.z / 2.0) == floori(b.z / 2.0):
+		return place_target()
+	var d := hand_def()
+	var k := str(d.get("kind", ""))
+	var h := inv.hand()
+	var budget := 1 << 30
+	if k == "seed" and not inv.creative:
+		budget = h.count if h != null else 0
+	elif k == "can":
+		budget = int(h.data.get("water", 0)) if h != null else 0
+	var n: int = host.farming.area(k, a, b, d.id, budget)
+	if n > 0:
+		if k == "seed":
+			inv.consume_hand(n)
+		elif k == "can" and h != null:
+			_set_data(h, "water", int(h.data.get("water", 0)) - n)
+		placed += n
+		log_blocks.append("%s area %d" % [k, n])
+	target = {}
+	return n > 0
 
 
 ## The block (on this size's lattice) holding plate cell `cell`.
@@ -464,6 +538,8 @@ func _break_cells() -> Array[Vector3i]:
 func break_target() -> bool:
 	if _is_fluid_item(hand_kind()):
 		return take_fluid()
+	if hand_kind() == "can":
+		return fill_can()
 	if target.is_empty() and piece_target.is_empty():
 		update_target()
 	if not piece_target.is_empty():
@@ -651,7 +727,8 @@ func place_target() -> bool:
 	# Farming (MineFarming): a ripe crop is picked whatever is in the hand;
 	# a hoe tills, a seed plants.
 	if host.farming != null:
-		if host.farming.harvest_target(target):
+		# (A scythe takes the ripe crops round it too: its own branch below.)
+		if k != "scythe" and host.farming.harvest_target(target):
 			log_blocks.append("harvest %s" % target.cell)
 			target = {}
 			return true
@@ -662,6 +739,21 @@ func place_target() -> bool:
 				log_blocks.append("till %s" % target.cell)
 			target = {}
 			return ok
+		if k == "scythe":
+			var c: Vector3i = target.get("cell", Vector3i.ZERO)
+			var n3: int = host.farming.area("scythe", c, c)
+			target = {}
+			return n3 > 0
+		if k == "can":
+			var h := inv.hand()
+			var left := int(h.data.get("water", 0)) if h != null else 0
+			var c2: Vector3i = target.get("cell", Vector3i.ZERO)
+			var n4: int = host.farming.area("can", c2, c2, &"", left)
+			if n4 > 0:
+				_set_data(h, "water", left - n4)
+				log_blocks.append("water %s" % c2)
+			target = {}
+			return n4 > 0
 		if k == "seed":
 			var ok2: bool = host.farming.plant(target, d.id)
 			if ok2:
@@ -790,6 +882,20 @@ func take_fluid() -> bool:
 	BrickFluid.remove(hit.cell, -1)
 	broken += 1
 	log_blocks.append("take %s" % hit.cell)
+	return true
+
+
+## LMB with a watering can: filled from the water looked at (any water; a
+## can's sip takes none away).
+func fill_can() -> bool:
+	var cam: Camera3D = host._eye_camera()
+	var hit: Dictionary = BrickFluid.ray_cell(host.to_local(cam.global_position),
+			-cam.global_transform.basis.z, REACH)
+	var h := inv.hand()
+	if hit.is_empty() or int(hit.fluid) != 1 or h == null:
+		return false
+	_set_data(h, "water", MineFarming.CAN_WATER)
+	log_blocks.append("can filled %s" % hit.cell)
 	return true
 
 

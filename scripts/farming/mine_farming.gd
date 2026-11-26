@@ -13,6 +13,13 @@ extends Node3D
 ##   landing from 3 bricks or more   tramples the plot under you: the crop is
 ##                                   lost (its seed pops out), the soil is dirt
 ##
+## No more chores (stage 3, `area`): hold RMB with a hoe, seeds, a scythe or
+## a watering can and let go somewhere else -- the whole rectangle between is
+## tilled, planted, harvested (and replanted) or watered, up to AREA_MAX
+## plots a side. A scythe's click takes the ripe crops 3 x 3 round it. What a
+## harvest gives goes into the inventory, then the nearest chest within
+## CHEST_REACH, then the ground.
+##
 ## Growth is FarmPlant.settle on the world clock (host.world_time): a plot in
 ## reach is settled a few dozen a frame, and its water and light looked at
 ## again one or two a frame; a plot out of reach is not touched at all and
@@ -35,6 +42,12 @@ const SETTLE_PER_FRAME := 48
 const COND_PER_FRAME := 1
 ## Water this many studs round a plot (on its course or the one above) wets it.
 const WET_STUDS := 4
+## The most plots a side an area action reaches (MineBuilder's RMB drag).
+const AREA_MAX := 9
+## A harvest that does not fit the inventory goes into a chest this near.
+const CHEST_REACH := 8.0
+## A watering can's water: plots it waters before it is filled again.
+const CAN_WATER := 16
 ## Soil a hoe tills, and the fertility each starts with.
 const SOIL_FERTILITY := {"grass": 60.0, "dirt": 55.0, "podzol": 80.0, "dry grass": 40.0,
 		"lush grass": 75.0, "cold grass": 50.0, "dark grass": 70.0}
@@ -320,9 +333,156 @@ func break_target(target: Dictionary) -> bool:
 func _give(id: StringName, n: int, at: Vector3) -> void:
 	if n <= 0 or id == &"" or not ItemCatalog.has(id):
 		return
-	var left: ItemStack = host.builder.inv.add_item(ItemStack.make(id, n))
-	if left != null:
-		host.drops.spawn(left, at)
+	# In stacks no bigger than the item's own (an empty slot takes a whole
+	# stack, whatever its size).
+	var cap := ItemCatalog.max_stack(id)
+	while n > 0:
+		var k := mini(n, cap)
+		n -= k
+		var left: ItemStack = host.builder.inv.add_item(ItemStack.make(id, k))
+		if left != null:
+			left = _into_chest(left, at)
+		if left != null:
+			host.drops.spawn(left, at)
+
+
+## What the inventory could not hold, into the nearest chest within
+## CHEST_REACH of `at` that has room (merged into its stacks first, then its
+## empty slots). What still does not fit, back.
+func _into_chest(s: ItemStack, at: Vector3) -> ItemStack:
+	var chests: MineChests = host.chests
+	var keys: Array = []
+	for key in chests.chests:
+		if MineChests.is_container(chests.item_of(key)) \
+				and chests.box_of(chests.chests[key].block).get_center().distance_to(at) <= CHEST_REACH:
+			keys.append(key)
+	keys.sort_custom(func(a, b) -> bool:
+			return chests.box_of(chests.chests[a].block).get_center().distance_to(at) \
+					< chests.box_of(chests.chests[b].block).get_center().distance_to(at))
+	var cap := ItemCatalog.max_stack(s.id)
+	for key in keys:
+		var slots: Array = chests.slots_of(key)
+		for i in slots.size():
+			var o = slots[i]
+			if o is ItemStack and (o as ItemStack).id == s.id and (o as ItemStack).data == s.data:
+				var mv := mini(cap - (o as ItemStack).count, s.count)
+				if mv > 0:
+					(o as ItemStack).count += mv
+					s.count -= mv
+			if s.count <= 0:
+				break
+		for i in slots.size():
+			if s.count <= 0:
+				break
+			if slots[i] == null:
+				var mv := mini(cap, s.count)
+				slots[i] = ItemStack.make(s.id, mv, s.data)
+				s.count -= mv
+		if s.count <= 0:
+			break
+	if not keys.is_empty() and host.has_method("world_items_changed"):
+		host.world_items_changed()
+	if s.count <= 0:
+		return null
+	return s
+
+
+# ---------------------------------------------------------------------------
+# Areas (stage 3): the rectangle between two looked-at cells
+
+## The top solid plate of column (x, z) with air over it, nearest under
+## `y_ref + 4` and no lower than `y_ref - 6` (a field on a slope, or in a
+## cave: never the surface far over it). -1 if none.
+static func _top_near(x: int, z: int, y_ref: int) -> int:
+	for yy in range(y_ref + 4, y_ref - 7, -1):
+		if BrickTerrain.solid_at(x, yy, z) != 0 and BrickTerrain.solid_at(x, yy + 1, z) == 0:
+			return yy
+	return -1
+
+
+## The block columns of the rectangle between plate cells a and b, at most
+## AREA_MAX a side, from a's corner.
+static func area_blocks(a: Vector3i, b: Vector3i, grow := 0) -> Array[Vector2i]:
+	var ax := floori(a.x / 2.0)
+	var az := floori(a.z / 2.0)
+	var bx := floori(b.x / 2.0)
+	var bz := floori(b.z / 2.0)
+	bx = clampi(bx, ax - AREA_MAX + 1, ax + AREA_MAX - 1)
+	bz = clampi(bz, az - AREA_MAX + 1, az + AREA_MAX - 1)
+	var out: Array[Vector2i] = []
+	for x in range(mini(ax, bx) - grow, maxi(ax, bx) + 1 + grow):
+		for z in range(mini(az, bz) - grow, maxi(az, bz) + 1 + grow):
+			out.append(Vector2i(x, z))
+	return out
+
+
+## The plot on block column `c` nearest plate `y_ref` (within 6), or {}.
+func plot_near(c: Vector2i, y_ref: int) -> Dictionary:
+	for dy in [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6]:
+		var p := store.get_plot(Vector3i(c.x, y_ref + dy, c.y))
+		if not p.is_empty():
+			return p
+	return {}
+
+
+## An area action from cell a to cell b: "hoe" tills, "seed" plants `item`
+## (at most `budget`), "scythe" harvests the ripe crops (a click: 3 x 3),
+## "can" waters (at most `budget`). How many plots it acted on.
+func area(kind: String, a: Vector3i, b: Vector3i, item: StringName = &"", budget := 1 << 30) -> int:
+	var n := 0
+	var y_ref := a.y
+	var grow := 1 if kind == "scythe" and floori(a.x / 2.0) == floori(b.x / 2.0) \
+			and floori(a.z / 2.0) == floori(b.z / 2.0) else 0
+	for c in area_blocks(a, b, grow):
+		if n >= budget:
+			break
+		match kind:
+			"hoe":
+				var top := _top_near(c.x * 2, c.y * 2, y_ref)
+				if top >= 0 and plot_near(c, top).is_empty() \
+						and till({"cell": Vector3i(c.x * 2, top, c.y * 2), "normal": Vector3i.UP}):
+					n += 1
+			"seed":
+				var p := plot_near(c, y_ref)
+				if not p.is_empty() and p.crop == &"" \
+						and plant({"cell": Vector3i(c.x * 2, p.b.y, c.y * 2)}, item):
+					n += 1
+			"scythe":
+				var p := plot_near(c, y_ref)
+				if not p.is_empty() and FarmPlant.is_ripe(p) and harvest(p):
+					n += 1
+			"can":
+				var p := plot_near(c, y_ref)
+				if not p.is_empty() and water(p):
+					n += 1
+	if n > 0:
+		log_lines.append("%s over %d plots" % [kind, n])
+	return n
+
+
+## A watering can on a plot: wet for a day (FarmPlant.CAN_LASTS), the soil
+## dark at once. False if it is wet with its own water already.
+func water(plot: Dictionary) -> bool:
+	if bool(plot.wet):
+		return false
+	var t := now()
+	FarmPlant.settle(plot, t)
+	plot.wet_until = t + FarmPlant.CAN_LASTS
+	store.touch(plot.b)
+	_set_soil(plot, t)
+	return true
+
+
+## The tilled brick's material for its wetness at `t`.
+func _set_soil(plot: Dictionary, t: float) -> void:
+	var b: Vector3i = plot.b
+	var lo := _course_lo(b)
+	var m := BrickTerrain.solid_at(lo.x, b.y, lo.z)
+	var want := BrickTerrain.MAT_WET_FARMLAND if FarmPlant.wet_at(plot, t) else BrickTerrain.MAT_FARMLAND
+	if is_farmland(m) and m != want:
+		var res: Dictionary = BrickTerrain.fill_box(_course_lo(b), _course_hi(b), want, false)
+		BrickTerrain.mark_placed(_course_lo(b), _course_hi(b), want)
+		host.terrain_edited(res)
 
 
 # ---------------------------------------------------------------------------
@@ -387,11 +547,7 @@ func refresh(b: Vector3i) -> void:
 	plot.lamp = lamp
 	if changed:
 		store.touch(b)
-	var want := BrickTerrain.MAT_WET_FARMLAND if wet else BrickTerrain.MAT_FARMLAND
-	if m != want:
-		var res: Dictionary = BrickTerrain.fill_box(_course_lo(b), _course_hi(b), want, false)
-		BrickTerrain.mark_placed(_course_lo(b), _course_hi(b), want)
-		host.terrain_edited(res)
+	_set_soil(plot, t)
 
 
 func _lost(plot: Dictionary, why: String) -> void:
@@ -435,8 +591,11 @@ func look_text(target: Dictionary) -> String:
 	var plot := plot_at_target(target)
 	if plot.is_empty():
 		return ""
-	FarmPlant.settle(plot, now())
-	var soil := "Tilled soil, %s, fertility %d" % ["wet" if plot.wet else "dry", roundi(float(plot.fert))]
+	var t := now()
+	FarmPlant.settle(plot, t)
+	var wet_words := "wet" if plot.wet else ("watered, %s left" % FarmPlant.span_words(float(plot.wet_until) - t)
+			if FarmPlant.wet_at(plot, t) else "dry")
+	var soil := "Tilled soil, %s, fertility %d" % [wet_words, roundi(float(plot.fert))]
 	if plot.fam != "":
 		soil += " (last: %s)" % plot.fam
 	var crop := FarmPlant.crop_of(plot)
@@ -449,8 +608,8 @@ func look_text(target: Dictionary) -> String:
 		state = "RIPE: RMB or LMB to harvest"
 	else:
 		state = "stage %d/%d, %d%%, ripe in ~%s" % [int(plot.stage) + 1, last, roundi(float(plot.p) * 100.0),
-				FarmPlant.span_words(FarmPlant.eta(plot))]
-	var held := FarmPlant.limits(plot)
+				FarmPlant.span_words(FarmPlant.eta(plot, t))]
+	var held := FarmPlant.limits(plot, t)
 	var line := "%s  ·  %s" % [head, state]
 	if not held.is_empty():
 		line += "  ·  held back: " + ", ".join(held)

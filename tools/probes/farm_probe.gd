@@ -25,6 +25,10 @@ extends SceneTree
 ##             fallow.
 ##   save      FarmStore writes changed regions and reads them back the same.
 ##   guide     the guide has a line for every crop.
+##   can       stage 3: a watering can's water runs out at a set time and the
+##             catch-up is still exact across it (once == often == saved half
+##             way); watered grows faster than dry and slows again after; the
+##             tools are items with recipes.
 
 var _pass := 0
 var _fail := 0
@@ -49,6 +53,7 @@ func _init() -> void:
 	_harvest()
 	_save()
 	_guide()
+	_can()
 	print("farm probe: %d ok, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -134,7 +139,7 @@ func _light() -> void:
 	var dark := _plot(&"wheat", true, 70.0, 0.0)
 	FarmPlant.settle(dark, float(dark.t) + d * 4.0)
 	_ok("no sky, no lamp: no growth", int(dark.stage) == 0 and float(dark.p) == 0.0)
-	_ok("its time to ripe is never", FarmPlant.eta(dark) == INF)
+	_ok("its time to ripe is never", FarmPlant.eta(dark, float(dark.t)) == INF)
 	var lamp := _plot(&"wheat", true, 70.0, 0.0)
 	lamp.lamp = 1.0
 	FarmPlant.settle(lamp, float(lamp.t) + d * 4.0)
@@ -284,3 +289,45 @@ func _guide() -> void:
 	var w := FarmCrops.get_crop(&"wheat")
 	_ok("the guide's times: wet sooner than dry", FarmGuide.ripe_seconds(w, true) < FarmGuide.ripe_seconds(w, false))
 	print(FarmGuide.crop_text(w))
+
+
+func _can() -> void:
+	print("can")
+	var d := FarmPlant.DAY
+	for id in [&"wheat", &"pumpkin"]:
+		var once := _plot(id, false)
+		once.wet_until = float(once.t) + d * 0.6
+		var often := once.duplicate()
+		var half := once.duplicate()
+		var t_end := float(once.t) + d * 2.3
+		FarmPlant.settle(once, t_end)
+		var t := float(often.t)
+		while t < t_end:
+			t = minf(t_end, t + 7.3)
+			FarmPlant.settle(often, t)
+		FarmPlant.settle(half, float(half.t) + d * 0.6 + 3.0)
+		var back := FarmPlant.from_row(FarmPlant.to_row(half))
+		FarmPlant.settle(back, t_end)
+		_ok("%s watered for 0.6 days: once == often == saved across the water running out (stage %d)" % [id, once.stage],
+				int(once.stage) == int(often.stage) and absf(float(once.p) - float(often.p)) < 1e-6
+				and int(once.stage) == int(back.stage) and absf(float(once.p) - float(back.p)) < 1e-6
+				and is_equal_approx(float(back.wet_until), float(once.wet_until)),
+				"often %d %.6f, saved %d %.6f" % [often.stage, often.p, back.stage, back.p])
+	var dry := _plot(&"wheat", false)
+	var watered := _plot(&"wheat", false)
+	watered.wet_until = float(watered.t) + d
+	var t1 := float(dry.t) + d
+	FarmPlant.settle(dry, t1)
+	FarmPlant.settle(watered, t1)
+	_ok("a watered day grows more than a dry one", int(watered.stage) * 10.0 + float(watered.p) > int(dry.stage) * 10.0 + float(dry.p))
+	_ok("the water runs out: wet before, dry after", FarmPlant.wet_at(watered, t1 - 1.0) and not FarmPlant.wet_at(watered, t1 + 1.0))
+	var row := FarmPlant.to_row(_plot(&"wheat"))
+	row.resize(17)
+	_ok("an old 17-field row loads, never watered", float(FarmPlant.from_row(row).wet_until) == 0.0)
+	var names := []
+	for r in RecipeBook.all():
+		names.append(str(r.output))
+	_ok("hoe, scythe and watering can have recipes", names.has("hoe") and names.has("scythe") and names.has("watering_can"))
+	_ok("the scythe and can are items of their kinds", ItemCatalog.kind(&"scythe") == "scythe" and ItemCatalog.kind(&"watering_can") == "can")
+	var area: Array[Vector2i] = MineFarming.area_blocks(Vector3i(0, 40, 0), Vector3i(100, 40, -100))
+	_ok("an area is at most 9 x 9 plots (%d)" % area.size(), area.size() == MineFarming.AREA_MAX * MineFarming.AREA_MAX)
