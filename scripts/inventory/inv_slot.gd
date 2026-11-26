@@ -33,6 +33,14 @@ var number := ""
 ## A slot that only shows an item (the Recipes list): this many, counted
 ## even for blocks. 0: a creative slot (a full stack, no count on blocks).
 var show_count := 0
+## Minecraft's look (McStyle): a sunken grey slot instead of the HUD's dark one.
+var mc := false
+## Bedrock's red cell: a recipe that cannot be made, an ingredient lacking.
+var bad := false
+## Framed white: the recipe picked in the recipe book.
+var picked := false
+## The size of one Minecraft pixel for the bevel (the screen sets it).
+var unit := 2.0
 var _hot := false
 var _angle := 0.0
 var _grow := 1.0
@@ -99,9 +107,19 @@ func _gui_input(event: InputEvent) -> void:
 
 func _draw() -> void:
 	var r := Rect2(Vector2.ZERO, size)
-	draw_rect(r, Color(0.07, 0.075, 0.09, 0.92) if not _hot else Color(0.16, 0.17, 0.2, 0.95))
-	var border := Color(1, 1, 1) if selected else Color(0.32, 0.34, 0.4)
-	draw_rect(r.grow(-1.0), border, false, 3.0 if selected else 1.0)
+	if mc:
+		var fill := McStyle.SLOT
+		if bad:
+			fill = McStyle.BAD_HOVER if _hot else McStyle.BAD
+		elif _hot and mouse_filter != Control.MOUSE_FILTER_IGNORE:
+			fill = McStyle.SLOT_HOVER
+		McStyle.draw_slot(self, r, unit, fill)
+		if selected or picked:
+			draw_rect(r.grow(-maxf(1.0, unit)), McStyle.LIGHT, false, maxf(2.0, roundf(unit * 1.5)))
+	else:
+		draw_rect(r, Color(0.07, 0.075, 0.09, 0.92) if not _hot else Color(0.16, 0.17, 0.2, 0.95))
+		var border := Color(1, 1, 1) if selected else Color(0.32, 0.34, 0.4)
+		draw_rect(r.grow(-1.0), border, false, 3.0 if selected else 1.0)
 	var s := stack()
 	var extra := 0
 	if not addr.is_empty() and inv != null and inv.is_dragging():

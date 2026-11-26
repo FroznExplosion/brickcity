@@ -13,8 +13,9 @@ extends SceneTree
 ##             of its kind) and never past the max.
 ##   clicks    left/right/shift/double click and the drags do what
 ##             Minecraft's do (zylanntest's rules, Docs/Inventory.md 3.2).
-##   hands     the off-hand takes only one-handed items; 1-9/wheel/X choose
-##             the hand; pick finds a block or (creative) makes one;
+##   hands     the off-hand takes one-handed items (blocks, pistols), in use
+##             only while up (round four); pickups never fill it; 1-9/wheel/X
+##             choose the hand; pick finds a block or (creative) makes one;
 ##             survival uses stacks up, creative never does.
 ##   chest     a borrowed chest array is changed in place by the clicks and
 ##             shift-click moves between it and the player.

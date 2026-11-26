@@ -124,7 +124,7 @@ var _queued_meshes := {}               ## Vector2i -> a take()'s mesh entry
 ## waves: these of the near tier's shader parameters are copied to the fluid
 ## water's material (sea_wave.gdshaderinc), wave_time every frame.
 const SEA_WAVE_PARAMS := ["waves", "wave_count", "groups", "group_count", "shore_band", "swell_blend",
-		"shore_calm", "sea_level", "pool_calm", "pool_mask_origin", "pool_mask_size", "seabed_tex",
+		"shore_calm", "river_calm", "sea_level", "pool_calm", "pool_mask_origin", "pool_mask_size", "seabed_tex",
 		"seabed_origin", "seabed_extent", "open_sea_depth", "water_outside_field", "swash_delay",
 		"swash_loss", "trough_colour", "crest_colour", "deep_tint", "absorption_depth", "water_roughness",
 		"grid_lines", "grid_line_width", "grid_line_darken", "print_lines_enabled", "layer_height",
@@ -173,6 +173,14 @@ func setup(p_host: Node) -> void:
 
 ## A new world: everything the last one had goes. Returns the sea level the
 ## water uses (snapped to a brick course, 7.2).
+## The detail radius changed in play (World view's Apply): the water
+## simulates and draws as far as the ground does.
+func set_near_tiles(near_tiles: int) -> void:
+	_near_tiles = near_tiles
+	_base_sim_m = float(near_tiles + 2) * TILE_STUDS * BrickWorld.get_stud_metres()
+	sim_radius_m = _base_sim_m
+
+
 func reset_world(sea_m: float, near_tiles: int, p_sea_on: bool, p_wave_scale := 1.0,
 		centre := Vector2i.ZERO) -> float:
 	_finish_field()
@@ -202,6 +210,13 @@ func reset_world(sea_m: float, near_tiles: int, p_sea_on: bool, p_wave_scale := 
 		remove_child(sea)
 		sea.queue_free()
 		sea = null
+	# The mine world's sea (Docs/MineWaterNext.md 11): waves fade more
+	# gradually toward a beach (a twelfth of the swell at the waterline, full
+	# 200 m out; was a quarter, full at 150 m), and rivers -- narrow sea --
+	# lose the swell and ripple downstream. Before the tiers are built: they
+	# read both when they are made (push_waves).
+	BrickWave.set_shore_calm(0.08, 200.0)
+	BrickWave.set_river_calm(true)
 	if sea_on:
 		# The first field round the spawn, now: generating is a load.
 		var c := centre
@@ -230,6 +245,9 @@ func _exit_tree() -> void:
 	Pawn.water_drag = Callable()
 	# Joins a running tick and frees the sections.
 	BrickFluid.reset(20.0, false)
+	# Every other scene's sea as it was.
+	BrickWave.set_shore_calm(0.25, 150.0)
+	BrickWave.set_river_calm(false)
 
 
 func _eye_studs() -> Vector2i:

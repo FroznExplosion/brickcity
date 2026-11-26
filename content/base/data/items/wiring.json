@@ -33,6 +33,12 @@
 		"trapdoor": { "name": "Trapdoor", "kind": "device", "model": "trapdoor", "max_stack": 16, "hand": "any", "colour": "#8c5e33", "glyph": "T",
 			"description": "A 2x2 floor a plate thick, held by ground beside or under it. Powered (or right-clicked), it swings down open: whoever stood on it falls." },
 		"observer": { "name": "Observer", "kind": "device", "model": "observer", "max_stack": 64, "hand": "any", "colour": "#5a5c66", "glyph": "O",
-			"description": "Watches the stud in front of it (its face): when the ground, a cable or a device there changes, it powers what is at its back for 2 ticks. Placed facing away from you." }
+			"description": "Watches the stud in front of it (its face): when the ground, a cable or a device there changes, it powers what is at its back for 2 ticks. Placed facing away from you." },
+		"gate_tile": { "name": "Gate tile", "kind": "device", "model": "gatetile", "max_stack": 64, "hand": "any", "colour": "#386b7a", "glyph": "G",
+			"description": "A solid brick that turns passable (see-through, nothing to stand on) while powered. Gate tiles touching side by side or stacked open together: a wall that opens, a bridge that drops. Stands on ground or on/beside another gate tile." },
+		"sequencer": { "name": "Sequencer", "kind": "device", "model": "gate", "max_stack": 64, "hand": "any", "colour": "#d97333", "glyph": "S",
+			"description": "When its back turns on, it runs a program of on and off steps out of its front (the arrow). Right-click to pick the program; the wrench shows it. Placed facing away from you." },
+		"number_display": { "name": "Number display", "kind": "device", "model": "display", "max_stack": 64, "hand": "any", "colour": "#66ff73", "glyph": "#",
+			"description": "A 2-stud brick that shows the level (0-15) of what touches it, on its front." }
 	}
 }

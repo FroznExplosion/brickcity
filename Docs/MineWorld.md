@@ -1287,3 +1287,40 @@ passed `--gate=deep` and `--gate=handover`), and fire into falling sand.
   Low 0.12 and 0.22 -- the frame's GPU 7.04 -> 5.79 and 4.80 -> 3.67 ms.
   `--gate=gpu --header-only --far-detail=N` prints the tier's counts and
   saves mine_far_detail_N.png (over the trees, across the hand-over).
+## 22. World view: how the world is drawn, applied in play
+
+The user (2026-11-25): the options that change how the world is drawn -- LOD
+ranges, cave darkness, cave view distance -- in a menu of their own with a
+button that applies them, not in the world generator's settings, which only
+take effect on the next world generated.
+
+**The menu.** World view (`scripts/terrain/world_view_menu.gd`), opened from
+the World generation menu's World tab ("World view (distances, brick edges,
+caves)..."). It edits a copy; **Apply** puts it in at once, **Close** without
+Apply leaves the world as it was, **Defaults** fills the defaults in.
+
+| Setting | Key | Default | Applied in play |
+|---|---|---|---|
+| Full detail radius (tiles) | `detail_tiles` | 4 | streamer `near_radius`/`keep_radius`, the water's sim radius |
+| Cave view distance (tiles) | `cave_tiles` | 4 | the deep tier's radius, up, down |
+| Far view distance (tiles) | `far_tiles` | 64 | the far tier laid out again on the workers and swapped in; the cameras' far plane |
+| Distant ground detail | `far_detail` | High | `TerrainCoarse.detail` (21, item 6): the tier laid out again |
+| Real brick edges near you | `chamfer` | on | the brick overlay and its behind faces on or off |
+| Darkest cave light | `cave_light` | 0.015 | `sky_light_floor` on the ground and its studs, and the exposure's floor |
+| Fade caves to black at the view's end | `cave_fade` | on | `_cave_fog` |
+
+**Where it is kept.** `WorldView` (`scripts/terrain/world_view.gd`):
+`user://profile/world_view.cfg`, across worlds. A gate uses the defaults and
+never writes it (as the Options menu's settings). The first run seeds it from
+the world settings' old keys. None of it is part of a world's save key (that
+is the generator settings and the seed: `save_path`), so moving it out
+orphans no saved world. Presets no longer carry those keys (old files' are
+ignored), the World tab no longer shows them, and Distant Ground Detail left
+the Options menu's Video tab for here.
+
+**Gate.** `-- --gate=view`: the world menu has none of the view settings
+left and a World view button; the button opens the menu; every value
+changed and Apply clicked; the radii, the overlay, the cave light, the far
+ground's level (its tier swapped in at Low, ~42k triangles) and the cave
+fade follow; more tiles stream in at radius 6; no player file written; the
+overlay comes back on. Saves `mine_view_menu.png`.

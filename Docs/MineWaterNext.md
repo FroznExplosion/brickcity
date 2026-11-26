@@ -342,3 +342,34 @@ touched. Windowed gates one at a time, heat check after each (CLAUDE.md);
 timing only with the editor closed. Boats (`scripts/hulls/`, HullFloat rides
 BrickWave) are not in the mine world yet; when they come, they ride the same
 wave query as R1.
+
+## 11. The sea at beaches and in rivers (2026-11-25)
+
+The user: the real band and the tiers do not line up, the band's bricks
+show a strip of texture at their bottom; waves meet the beach abruptly;
+rivers' waves run side to side, choppy, with no sense of downstream.
+
+- **The seam**: the band's tops sat TOP_SINK (1.5 cm) under the tiers' --
+  each tier piece's side showed along the seam as a bright line -- and every
+  band piece hung a brick-deep side (0.42 m), seen through the see-through
+  water as a band. Now the band's tops are at the sea level, and each side's
+  foot is cut in the shader to the neighbour it faces, a plate at least,
+  as the tiers' are (`sea_quad` drop in CUSTOM0.z, `sea_side_min`).
+- **Beaches**: the swell at the waterline a twelfth of the open sea's, full
+  200 m out (`BrickWave.set_shore_calm(0.08, 200)`; was 0.25, 150 m). Mine
+  world only; every other scene's sea as it was.
+- **Rivers** are narrow sea (the sea line's water between banks, whatever
+  the biome). Near land the swell is steered -- its crests phased on the
+  distance to the shore -- so across a river they rolled toward each bank:
+  the side-to-side chop. `river_calm` (BrickWave and sea_wave.gdshaderinc,
+  the same samples): within 12 m of land, the distance field looked up 12 m
+  out four ways; no open water there (under 3.5 m) is a river: the swell
+  goes (full again at 9 m), and a 3 cm ripple, 4 m crests at 0.8 m/s, runs
+  along the banks toward the wider water (looked 30 m each way): downstream.
+- Checks (`--gate=sea`, now finding narrow water, not a River biome): a
+  river's surface over 4 s swings 0.06 m where open sea swings 2.7 m
+  (seed 1709350603); `sea_river.png`, `sea_river_low.png`; the seam in
+  `sea_band_out(_tint).png`.
+- Left: the tiers' risers catch the light as thin white lines where the
+  swell is steep (the tiers' own look, not the seam).
+

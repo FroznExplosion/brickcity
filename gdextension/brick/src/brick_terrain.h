@@ -1185,6 +1185,13 @@ public:
     static void set_shore_calm(double strength, double fade_m);
     /// (strength, fade) for the shader.
     static Vector2 shore_calm_uniform();
+    /// RIVERS CALM (the mine world; Docs/MineWaterNext.md 11): narrow water
+    /// -- no open water within RIVER_OPEN_R metres -- loses the swell (its
+    /// crests ran ACROSS a river, phased on the distance to the banks) and
+    /// carries a small ripple along its banks toward the wider water. Off:
+    /// every other scene's sea as it was. The shader's `river_calm`.
+    static void set_river_calm(bool on);
+    static bool get_river_calm();
     /// Build the field the band reads: the ground and the distance to the
     /// nearest dry ground, one sample every `step` studs over +/-`half_studs`,
     /// on the SAME lattice as the water's seabed texture. Returns the samples

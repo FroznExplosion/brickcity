@@ -39,6 +39,14 @@ extends Node3D
 ##   observer       a brick facing a way: when the ground, a cable or a device
 ##                  in the column in front of it changes, it gives 15 out of
 ##                  its BACK for 2 ticks.
+##   gate tile      a solid brick (a collider) that turns passable while
+##                  powered -- Terraria's actuator. Gate tiles touching (side
+##                  by side, stacked) are one group and open together; one
+##                  stands on ground or on/beside another (stage 3b, 16).
+##   sequencer      faces a way: its back turning on runs a program of
+##                  on/off steps out of its front (RMB picks the program) --
+##                  Create's sequenced gearshift.
+##   number display a 2-stud brick showing the level beside it, 0-15.
 ##
 ## The TICK (10 Hz, with the water): sensors, then drivers' outputs, then net
 ## levels, then lamps, then every gate works out its next output from what it
@@ -71,6 +79,8 @@ const BUTTON_TICKS := 10
 const SENSOR_HOLD := 5
 const TRIP_REACH := 12
 const PULSE_LENGTHS := [2, 5, 10, 20]
+## The sequencer's programs: ticks on, off, on, ... (RMB steps through them).
+const PROGRAMS := [[5, 5, 5], [10], [2, 2, 2, 2, 2], [20, 10, 20], [3, 3, 3, 3, 3, 3, 3], [10, 30, 10]]
 ## What each device is. plates: its height; omni: drives every side; facing:
 ## has a front; reads: lit by its sides.
 const DEVICES := {
@@ -91,6 +101,10 @@ const DEVICES := {
 	&"door": {"kind": "door", "plates": 14, "w": 2, "facing": true},
 	&"trapdoor": {"kind": "trapdoor", "plates": 1, "w": 2, "d": 2, "facing": true},
 	&"observer": {"kind": "observer", "plates": 3, "facing": true},
+	# Stage 3b (section 16).
+	&"gate_tile": {"kind": "gatetile", "plates": 3},
+	&"sequencer": {"kind": "gate", "op": "sequence", "plates": 3, "facing": true, "colour": Color(0.85, 0.45, 0.2)},
+	&"number_display": {"kind": "display", "plates": 3, "w": 2, "facing": true},
 }
 const SIDES: Array[Vector3i] = [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
 const SIDE_NAMES := ["+x", "-x", "+z", "-z"]
@@ -309,6 +323,14 @@ func _device_at(c: Vector3i):
 ## it at its plate; any other by ground under every cell of its footprint.
 func _supported(c: Vector3i, item: StringName, facing: int) -> bool:
 	var fp := footprint(c, item, facing)
+	if str(DEVICES.get(item, {}).get("kind", "")) == "gatetile":
+		# Ground under it, or another gate tile under or beside it.
+		if _solid(c + Vector3i.DOWN) or _is_gatetile(c + Vector3i.DOWN):
+			return true
+		for s in SIDES:
+			if _is_gatetile(c + s):
+				return true
+		return false
 	if str(DEVICES.get(item, {}).get("kind", "")) == "trapdoor":
 		for b in fp:
 			if _solid(b + Vector3i.DOWN):
@@ -321,6 +343,12 @@ func _supported(c: Vector3i, item: StringName, facing: int) -> bool:
 		if not _solid(b + Vector3i.DOWN):
 			return false
 	return true
+
+
+## Is plate cell `c` part of a gate tile?
+func _is_gatetile(c: Vector3i) -> bool:
+	var b = _occupied.get(c, null)
+	return b != null and devices.has(b) and str(DEVICES[devices[b].item].kind) == "gatetile"
 
 
 ## The column an observer watches: the stud in front of it, its height.
@@ -390,7 +418,7 @@ func place_device(c: Vector3i, item: StringName, on := false, force := false, fa
 	var node := _device_node(c, item, f)
 	add_child(node)
 	devices[c] = {"item": item, "on": on, "facing": f, "setting": st, "timer": 0,
-			"out": 0, "lit": false, "prev": 0, "queue": [], "node": node}
+			"out": 0, "lit": false, "prev": 0, "queue": [], "step": 0, "node": node}
 	for k in cells_of(c, item, f):
 		_occupied[k] = c
 	_show_device(c)
@@ -431,6 +459,10 @@ func use_device(c: Vector3i, how := "use") -> bool:
 					"pulse":
 						var i := PULSE_LENGTHS.find(int(d.setting))
 						d.setting = PULSE_LENGTHS[(i + 1) % PULSE_LENGTHS.size()]
+					"sequence":
+						d.setting = (int(d.setting) + 1) % PROGRAMS.size()
+						d.timer = 0
+						d.step = 0
 					_:
 						return false
 			_:
@@ -794,6 +826,38 @@ func _evaluate() -> void:
 			if bool(d.on) != p:
 				d.on = p
 				_show_device(c)
+	# 3c. Gate tiles open as groups (touching side by side or stacked): a
+	# group is open while any of it is powered. Number displays show the
+	# level beside them.
+	var seen := {}
+	for c in devices:
+		var d: Dictionary = devices[c]
+		var k := str(DEVICES[d.item].kind)
+		if k == "display":
+			var lvl := power_in(c)
+			if lvl != int(d.out):
+				d.out = lvl
+				_show_device(c)
+			continue
+		if k != "gatetile" or seen.has(c):
+			continue
+		var group: Array[Vector3i] = [c]
+		seen[c] = true
+		var i := 0
+		var open := false
+		while i < group.size():
+			var g: Vector3i = group[i]
+			open = open or power_in(g) > 0
+			for s in [SIDES[0], SIDES[1], SIDES[2], SIDES[3], Vector3i(0, 3, 0), Vector3i(0, -3, 0)]:
+				var n: Vector3i = g + s
+				if devices.has(n) and not seen.has(n) and str(DEVICES[devices[n].item].kind) == "gatetile":
+					seen[n] = true
+					group.append(n)
+			i += 1
+		for g in group:
+			if bool(devices[g].on) != open:
+				devices[g].on = open
+				_show_device(g)
 	# 4. Gates: the next output from what they read now, applied together.
 	var nexts := {}
 	for c in devices:
@@ -859,6 +923,23 @@ func _gate_next(c: Vector3i, d: Dictionary) -> int:
 			var out := LEVEL_MAX if int(d.timer) > 0 else 0
 			d.timer = maxi(int(d.timer) - 1, 0)
 			return out
+		"sequence":
+			# Its back turning on starts the program (not while it runs).
+			var prog: Array = PROGRAMS[clampi(int(d.setting), 0, PROGRAMS.size() - 1)]
+			var now := int(b[0]) > 0
+			if now and int(d.prev) == 0 and int(d.timer) == 0:
+				d.step = 0
+				d.timer = int(prog[0])
+			d.prev = 1 if now else 0
+			var out := 0
+			if int(d.timer) > 0:
+				out = LEVEL_MAX if int(d.step) % 2 == 0 else 0
+				d.timer = int(d.timer) - 1
+				if int(d.timer) == 0:
+					d.step = int(d.step) + 1
+					if int(d.step) < prog.size():
+						d.timer = int(prog[d.step])
+			return out
 	return 0
 
 
@@ -876,7 +957,7 @@ func power_in(c: Vector3i) -> int:
 
 
 func is_open(c: Vector3i) -> bool:
-	return devices.has(c) and bool(devices[c].on) and str(DEVICES[devices[c].item].kind) in ["door", "trapdoor"]
+	return devices.has(c) and bool(devices[c].on) and str(DEVICES[devices[c].item].kind) in ["door", "trapdoor", "gatetile"]
 
 
 ## Is someone standing on a pressure tile?
@@ -975,6 +1056,16 @@ func readout(target: Dictionary) -> String:
 				parts.append("delay %d ticks (RMB)" % int(d.setting))
 			"pulse":
 				parts.append("pulse %d ticks (RMB)" % int(d.setting))
+			"sequence":
+				var prog: Array = PROGRAMS[clampi(int(d.setting), 0, PROGRAMS.size() - 1)]
+				var steps: Array[String] = []
+				for i in prog.size():
+					steps.append("%d %s" % [int(prog[i]), "on" if i % 2 == 0 else "off"])
+				parts.append("program: %s (RMB)" % ", ".join(steps))
+		if str(def.kind) == "gatetile":
+			parts.append("open" if bool(d.on) else "solid")
+		if str(def.kind) == "display":
+			parts.append("shows %d" % int(d.out))
 		if str(def.kind) == "trip":
 			parts.append("string to %s" % key_of(pairs[c]) if pairs.has(c) else "no string")
 		if str(def.kind) == "lamp":
@@ -1062,6 +1153,9 @@ func _multi(n: String, mesh: Mesh, mat: Material, share: MultiMesh = null) -> Mu
 	mi.multimesh = mm
 	mi.material_override = mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# Cables never move: no physics interpolation (it warns when a MultiMesh
+	# is changed outside the physics tick, as the wiring's tick does).
+	mi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(mi)
 	return mi
 
@@ -1245,6 +1339,51 @@ func _device_node(c: Vector3i, item: StringName, facing := 0) -> Node3D:
 			shape.position = mid
 			body.add_child(shape)
 			hinge.add_child(body)
+		"gatetile":
+			# A brick with a stud, a collider; open, see-through and no collider.
+			var body := StaticBody3D.new()
+			body.name = "Body"
+			body.collision_layer = Layers.WORLD
+			body.collision_mask = 0
+			var shape := CollisionShape3D.new()
+			var bs := BoxShape3D.new()
+			bs.size = box.size
+			shape.shape = bs
+			shape.position = Vector3(0, box.size.y * 0.5, 0)
+			body.add_child(shape)
+			root.add_child(body)
+			var m := _mat(Color(0.22, 0.42, 0.48), 0.5)
+			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			var bm := _add_box(root, box.size * Vector3(0.98, 0.99, 0.98), Vector3(0, box.size.y * 0.495, 0), m)
+			bm.name = "Brick"
+			var cyl := CylinderMesh.new()
+			cyl.top_radius = _stud * 0.3
+			cyl.bottom_radius = _stud * 0.3
+			cyl.height = _plate * 0.6
+			var stud := MeshInstance3D.new()
+			stud.name = "Stud"
+			stud.mesh = cyl
+			stud.material_override = m
+			stud.position = Vector3(0, box.size.y + _plate * 0.3, 0)
+			root.add_child(stud)
+		"display":
+			# A 2-stud brick, the level printed on its front.
+			var turn := Node3D.new()
+			turn.name = "Turn"
+			turn.rotation.y = _yaw(facing)
+			root.add_child(turn)
+			_add_box(turn, Vector3(_stud * 0.96, _plate * 2.9, _stud * 1.96), Vector3(0, _plate * 1.45, 0),
+					_mat(Color(0.12, 0.13, 0.15), 0.5))
+			var lab := Label3D.new()
+			lab.name = "Number"
+			lab.text = "0"
+			lab.pixel_size = 0.004
+			lab.font_size = 64
+			lab.outline_size = 0
+			lab.modulate = Color(0.4, 1.0, 0.45)
+			lab.position = Vector3(_stud * 0.49, _plate * 1.45, 0)
+			lab.rotation.y = PI * 0.5
+			turn.add_child(lab)
 		"observer":
 			var turn := Node3D.new()
 			turn.name = "Turn"
@@ -1342,6 +1481,18 @@ func _show_device(c: Vector3i) -> void:
 			var h2 := node.get_node_or_null("Turn/Hinge") as Node3D
 			if h2 != null:
 				h2.rotation.z = -PI * 0.5 if bool(d.on) else 0.0
+		"gatetile":
+			var body := node.get_node_or_null("Body") as StaticBody3D
+			if body != null:
+				body.collision_layer = 0 if bool(d.on) else Layers.WORLD
+			var bm := node.get_node_or_null("Brick") as MeshInstance3D
+			if bm != null:
+				var m := bm.material_override as StandardMaterial3D
+				m.albedo_color.a = 0.22 if bool(d.on) else 1.0
+		"display":
+			var lab := node.get_node_or_null("Turn/Number") as Label3D
+			if lab != null:
+				lab.text = str(int(d.out))
 		"observer":
 			var turn2 := node.get_node_or_null("Turn") as Node3D
 			if turn2 != null:

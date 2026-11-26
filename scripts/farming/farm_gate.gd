@@ -393,8 +393,10 @@ func run(host: Node) -> void:
 	f.settle_all()
 	check("animals' trample: the plot is gone, the soil dirt", f.store.get_plot(pk).is_empty()
 			and BrickTerrain.solid_at(pk.x * 2, top, pk.z * 2) == BrickTerrain.MAT_DIRT)
-	# Trouble on, three days: the open field gets visits.
-	FarmPlant.trouble = true
+	# Trouble on (the world menu's switch, MineWorld.set_farm_trouble), three
+	# days: the open field gets visits.
+	w.set_farm_trouble(true)
+	check("the Farm trouble switch turns it on", FarmPlant.trouble)
 	var ev0 := 0
 	for b in f.store.plots:
 		ev0 += int(f.store.plots[b].get("events", 0))
@@ -409,7 +411,20 @@ func run(host: Node) -> void:
 		if str(pl.get("last_event", "")) != "":
 			kinds[pl.last_event] = true
 	check("with trouble on, three days bring events (%d: %s)" % [ev1 - ev0, ", ".join(kinds.keys())], ev1 > ev0)
-	FarmPlant.trouble = false
+	w.set_farm_trouble(false)
+	var ev2 := 0
+	for b in f.store.plots:
+		ev2 += int(f.store.plots[b].get("events", 0))
+	w.world_time += FarmPlant.DAY * 3.0
+	f.settle_all()
+	var ev3 := 0
+	for b in f.store.plots:
+		ev3 += int(f.store.plots[b].get("events", 0))
+	check("switched off: three more days bring none (%d)" % (ev3 - ev2), not FarmPlant.trouble and ev3 == ev2)
+	w.save_edits(true)
+	var wf = JSON.parse_string(FileAccess.get_file_as_string(w.save_path().get_basename() + ".inv"))
+	check("the switch is saved with the world (farm_trouble: %s)" % str(wf.get("farm_trouble", "?") if wf is Dictionary else "?"),
+			wf is Dictionary and wf.get("farm_trouble", true) == false)
 
 	# --- away: out of reach, the clock runs, the plot is not touched; back, it
 	# is where one settle puts it
@@ -471,6 +486,7 @@ func run(host: Node) -> void:
 	check("the tilled soil is still farmland", MineFarming.is_farmland(BrickTerrain.solid_at(field[1].x * 2, top, field[1].z * 2)))
 
 	print("[farm-gate] slowest plot refresh (water, light, soil): %d us" % f.worst_refresh_us)
+	print("[farm-gate] refresh parts: %s" % f.prof_line())
 	print("[farm-gate] %s" % ("FARM-GATE PASS" if fails.is_empty() else "FARM-GATE FAIL: " + "; ".join(fails)))
 	w.get_tree().quit(0 if fails.is_empty() else 1)
 

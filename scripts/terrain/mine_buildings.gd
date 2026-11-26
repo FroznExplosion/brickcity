@@ -130,6 +130,60 @@ static func tower_cells(p: Dictionary) -> Array:
 	if bool(p.get("windows", true)):
 		out.append_array(_glaze(world, c, d, ymap))
 	world.release_chunk(c)
+	if bool(p.get("entrance", true)):
+		var e := entrance(p)
+		out = _cut(out, e[0], e[1])
+	return out
+
+
+## Plates of an entrance's opening: five bricks, as the city's doorways
+## (TowerRecipe: "five bricks clear through a door"), a course of wall over it.
+const ENTRANCE_PLATES := 15
+## Most steps laid down from an entrance to the ground outside.
+const ENTRANCE_STEPS := 4
+
+
+## The ground storey's way in (the city's towers have none: its people come
+## and go by the street's rules, not through a wall): DOOR_WIDE studs in the
+## middle of the front (-z) wall, through its thickness, from the ground
+## floor up ENTRANCE_PLATES. [lo, hi] in the stamped (ground) plates.
+static func entrance(p: Dictionary) -> Array:
+	var y := int(course_map(int(p.courses))[TowerRecipe.SLAB_PLATES][0])
+	var x0 := (int(p.x) >> 1) - (TowerRecipe.DOOR_WIDE >> 1)
+	return [Vector3i(x0, y, 0), Vector3i(x0 + TowerRecipe.DOOR_WIDE - 1, y + ENTRANCE_PLATES - 1,
+			TowerRecipe.WALL_THICK - 1)]
+
+
+## Bricks (tower_cells' form) with box [c0, c1] cut out: a brick across it is
+## split into the boxes round it, laid as bond cells (not placed: no longer
+## the brick it was).
+static func _cut(cells: Array, c0: Vector3i, c1: Vector3i) -> Array:
+	var out := []
+	for cb: Array in cells:
+		var a: Vector3i = cb[0]
+		var b: Vector3i = cb[1]
+		if b.x < c0.x or a.x > c1.x or b.y < c0.y or a.y > c1.y or b.z < c0.z or a.z > c1.z:
+			out.append(cb)
+			continue
+		var m := int(cb[2])
+		# Left and right of it in x, whole; then in front and behind in z,
+		# within its x; then under and over in y, within both.
+		var ix0 := maxi(a.x, c0.x)
+		var ix1 := mini(b.x, c1.x)
+		var iz0 := maxi(a.z, c0.z)
+		var iz1 := mini(b.z, c1.z)
+		if a.x < c0.x:
+			out.append([a, Vector3i(c0.x - 1, b.y, b.z), m, false])
+		if b.x > c1.x:
+			out.append([Vector3i(c1.x + 1, a.y, a.z), b, m, false])
+		if a.z < c0.z:
+			out.append([Vector3i(ix0, a.y, a.z), Vector3i(ix1, b.y, c0.z - 1), m, false])
+		if b.z > c1.z:
+			out.append([Vector3i(ix0, a.y, c1.z + 1), Vector3i(ix1, b.y, b.z), m, false])
+		if a.y < c0.y:
+			out.append([Vector3i(ix0, a.y, iz0), Vector3i(ix1, c0.y - 1, iz1), m, false])
+		if b.y > c1.y:
+			out.append([Vector3i(ix0, c1.y + 1, iz0), Vector3i(ix1, b.y, iz1), m, false])
 	return out
 
 
@@ -221,7 +275,108 @@ static func _read_chunk(world: BrickWorld, c: int, ymap: Array) -> Array:
 ## the ground there. `host`: the mine world (terrain_edited). Returns
 ## {base (plate of its ground floor), lo, hi (its plate box), bricks, cells}.
 static func stamp(host: Node, corner: Vector2i, p: Dictionary) -> Dictionary:
-	return stamp_cells(host, corner, tower_cells(p))
+	var info := stamp_cells(host, corner, tower_cells(p))
+	if not info.is_empty():
+		info.merge(fit_out(host, corner, int(info.base), p))
+	return info
+
+
+# ---------------------------------------------------------------------------
+# Fittings (stage 6): the wiring's devices (Docs/MineWiring.md), not bricks.
+
+## Doors in every interior doorway and a lamp with its lever in every room,
+## as the mine world's wiring devices (MineWiring): a door opens with RMB (or
+## power), a lever lights its lamp. Lamps start dark: a lit lamp is a light
+## of its own (MineWiring: fine for tens, not a town's hundreds). Returns
+## {"doors", "lamps"}. Nothing when the world has no wiring.
+static func fit_out(host: Node, corner: Vector2i, base: int, p: Dictionary) -> Dictionary:
+	var wiring = host.get("wiring")
+	if wiring == null:
+		return {"doors": 0, "lamps": 0}
+	var ymap := course_map(int(p.courses))
+	var at := func(x: int, y: int, z: int) -> Vector3i:
+		return Vector3i(corner.x + x, base + int(ymap[clampi(y, 0, ymap.size() - 1)][0]), corner.y + z)
+	var keep: Array = []
+	var stair := TowerBlockout.stair_rect(p)
+	if stair.size != Vector2i.ZERO:
+		keep.append(stair)
+	var doors := 0
+	if bool(p.get("rooms", true)):
+		for dw: Dictionary in TowerRecipe.doorways(int(p.x), int(p.z), int(p.courses), keep, true):
+			doors += _hang_doors(wiring, dw, at)
+	# The way in: a double door in the entrance (in the wall's outer layer).
+	if bool(p.get("entrance", true)):
+		var e := entrance(p)
+		var e0: Vector3i = e[0]
+		var e1: Vector3i = e[1]
+		var to_ground := func(x: int, y: int, z: int) -> Vector3i:
+			return Vector3i(corner.x + x, base + y, corner.y + z)
+		doors += _hang_doors(wiring, {"span": Vector2i(e0.x, e1.x + 1), "line": e0.z, "floor_y": e0.y,
+				"along_z": false}, to_ground)
+		# Steps up to it, a brick each, two studs deep, down to the ground
+		# outside (stone, filling only air, so ground already high stays).
+		var sill := base + e0.y
+		var stone := int(_terrain_ids().get("MAT_STONE", 4))
+		for k in ENTRANCE_STEPS:
+			var top := sill - 1 - 3 * k
+			var z1 := corner.y - 1 - 2 * k
+			var low := 1 << 30
+			for x in range(corner.x + e0.x, corner.x + e1.x + 1):
+				low = mini(low, BrickTerrain.surface_plate(x, z1))
+			if low >= top:
+				break
+			host.terrain_edited(BrickTerrain.fill_box(Vector3i(corner.x + e0.x, low, z1 - 1),
+					Vector3i(corner.x + e1.x, top, z1), stone, true))
+	var lamps := 0
+	if bool(p.get("rooms", true)):
+		for room: Room in RoomManifest.rooms_for(int(p.x), int(p.z), int(p.courses), int(p.get("seed", 1)),
+				p.get("program", {})):
+			lamps += _lamp_in(wiring, room, at)
+	return {"doors": doors, "lamps": lamps}
+
+
+## A doorway (TowerRecipe.doorways) is DOOR_WIDE studs: two 2-stud doors,
+## hinged at its two ends, meeting in the middle (a double door), in the
+## wall's near layer. How many it hung.
+static func _hang_doors(wiring, dw: Dictionary, at: Callable) -> int:
+	var span: Vector2i = dw.span
+	var line := int(dw.line)
+	var y := int(dw.floor_y)
+	var n := 0
+	var hung := []
+	if bool(dw.along_z):
+		# A wall along z: doors face +x / -x; +x's right is +z.
+		hung = [[at.call(line, y, span.x), 0], [at.call(line, y, span.y - 1), 1]]
+	else:
+		# A wall along x: -z's right is +x, +z's is -x.
+		hung = [[at.call(span.x, y, line), 3], [at.call(span.y - 1, y, line), 2]]
+	if span.y - span.x < 4:
+		hung = [hung[0]]
+	for h: Array in hung:
+		if wiring.place_device(h[0], &"door", false, false, int(h[1])):
+			n += 1
+	return n
+
+
+## A lamp on the floor of `room`, near its middle, a lever beside it (the
+## lever touching it lights it). 1 when laid.
+static func _lamp_in(wiring, room: Room, at: Callable) -> int:
+	var mid := Vector2(room.lo.x + room.size.x * 0.5, room.lo.z + room.size.z * 0.5)
+	var spots := []
+	for x in range(room.lo.x, room.lo.x + room.size.x):
+		for z in range(room.lo.z, room.lo.z + room.size.z):
+			spots.append([Vector2(x + 0.5, z + 0.5).distance_squared_to(mid), x, z])
+	spots.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
+	for sp: Array in spots:
+		var c: Vector3i = at.call(int(sp[1]), room.lo.y, int(sp[2]))
+		if not wiring.can_place_device(c, &"lamp"):
+			continue
+		for side: Vector3i in MineWiring.SIDES:
+			if wiring.can_place_device(c + side, &"lever"):
+				wiring.place_device(c, &"lamp")
+				wiring.place_device(c + side, &"lever")
+				return 1
+	return 0
 
 
 ## A workshop build (a BuildRecipe file) written into the field, as `stamp`.

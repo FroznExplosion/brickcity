@@ -115,8 +115,8 @@ var hands: MineHands = null
 ## null with --no-sky-light.
 var sky_lit: MineSkyLit = null
 ## THE BRICK OVERLAY (Docs/BrickOverlay.md): real bevelled bricks over the
-## flat ground near the eye. On with the world setting Chamfered brick edges
-## (off: the flat ground alone).
+## flat ground near the eye. On with World view's Real brick edges near you
+## (WorldView "chamfer"; off: the flat ground alone).
 var bricks: TerrainBricks = null
 var _overlay_on := false
 
@@ -302,6 +302,9 @@ func _ready() -> void:
 			for p in Presets.list():
 				if str(p.name).to_lower() == arg.split("=")[1].to_lower():
 					start = Presets.load_settings(p.path)
+	# How the world is drawn (Docs/MineWorld.md 22): the player's, or the
+	# defaults for a gate; the old world settings seed it the first time.
+	WorldView.load_for(_gate, start)
 	generate(start)
 	if _gate:
 		if _water_gate:
@@ -356,6 +359,8 @@ func _ready() -> void:
 			_run_skylit_gate()
 		elif "--gate=seams" in OS.get_cmdline_user_args():
 			_run_seams_gate()
+		elif "--gate=view" in OS.get_cmdline_user_args():
+			_run_view_gate()
 		elif "--gate=slits" in OS.get_cmdline_user_args():
 			_run_slits_gate()
 		elif "--gate=bricks" in OS.get_cmdline_user_args():
@@ -439,7 +444,7 @@ func generate(s: Dictionary) -> void:
 	var cell := _find_spawn(want)
 	# The sea is water unless the settings say not (Docs/MineWater.md 9); its
 	# first shore field round the spawn.
-	water.reset_world(sea, clampi(int(settings.get("detail_tiles", 4)), 2, 8),
+	water.reset_world(sea, int(WorldView.get_value("detail_tiles")),
 			bool(settings.gen.get("water", true)), float(settings.gen.get("wave_scale", 1.0)), cell)
 	# The water's meshes carry each vertex's sky light (COLOR.b): a cave pool
 	# as dark as its cave (MineWorld.md 19).
@@ -453,9 +458,11 @@ func generate(s: Dictionary) -> void:
 	spawn_xz = Vector2((cell.x + 0.5) * stud, (cell.y + 0.5) * stud)
 	var feet := Vector3(spawn_xz.x, _ground_m(cell.x, cell.y) + 0.05, spawn_xz.y)
 
-	var near := clampi(int(settings.get("detail_tiles", 4)), 2, 8)
+	var near := int(WorldView.get_value("detail_tiles"))
 	# Real bevels near the camera (Chamfered brick edges): the brick overlay.
-	_overlay_on = bool(settings.get("chamfer", true))
+	_overlay_on = bool(WorldView.get_value("chamfer"))
+	TerrainCoarse.detail = int(WorldView.get_value("far_detail"))
+	_apply_cave_light()
 	# The solid behind the overlay's bricks, baked inside the ground, so a
 	# shot brick's hole shows real bricks the frame it is hit
 	# (Docs/BrickOverlay.md 6b); `-- --no-behind` = the stand-in box instead.
@@ -485,11 +492,11 @@ func generate(s: Dictionary) -> void:
 
 	_deep = TerrainDeep.new()
 	_deep.name = "Deep"
-	# How far caves are drawn (the settings' Cave view distance, default the
-	# surface's detail; it was 2, ~25 m: a long cave ended in nothing while
+	# How far caves are drawn (World view's Cave view distance; it was 2,
+	# ~25 m: a long cave ended in nothing while
 	# its water, drawn further, hung in the air). Past it, a black fade
 	# (_cave_fog).
-	_deep.radius = clampi(int(settings.get("cave_tiles", near)), 2, 8)
+	_deep.radius = int(WorldView.get_value("cave_tiles"))
 	# Up and down too: one section each way (~11 m) left a deep hole empty
 	# below while the fade only reached across. Half the radius in sections
 	# (a section is ~11 m, a tile 11.2 m), so 4 tiles -> 2, 8 -> 4.
@@ -599,7 +606,7 @@ func _new_far(tile: Vector2i) -> TerrainCoarse:
 
 
 func _far_tiles() -> int:
-	return clampi(int(settings.get("far_tiles", 64)), 16, 192)
+	return int(WorldView.get_value("far_tiles"))
 
 
 func _tile_of(p: Vector3) -> Vector2i:
@@ -1241,8 +1248,8 @@ var _sky_light_on := not ("--no-sky-light" in OS.get_cmdline_user_args())
 ## the ambient, the sun and the sky.
 var _cave_light := 1.0
 ## The light left deep underground (x the open-air light): the shader's
-## `sky_light_floor` too.
-const CAVE_DEEP_LIGHT := 0.015
+## `sky_light_floor` too. World view's Darkest cave light (WorldView).
+static var CAVE_DEEP_LIGHT := 0.015
 ## The shader's `sky_light_curve`: Minecraft's 0.8 a level.
 const SKY_LIGHT_CURVE := 0.8
 ## The eye's sky light level (0..15, BrickTerrain.sky_light_at), asked again
@@ -1358,7 +1365,8 @@ func _follow_far(eye: Vector3) -> void:
 	if _far_next == null:
 		var d := t - _far.anchor
 		# Re-laid as well when Distant Ground Detail changed (TerrainCoarse.detail).
-		if maxi(absi(d.x), absi(d.y)) >= REANCHOR_TILES or _far.built_detail != TerrainCoarse.detail:
+		if maxi(absi(d.x), absi(d.y)) >= REANCHOR_TILES or _far.built_detail != TerrainCoarse.detail \
+				or _far._reach_tiles != _far_tiles():
 			_far_next = _new_far(t)
 			_far_next.hold = fast_hold
 			_far_next.visible = false
@@ -1562,7 +1570,8 @@ func _cave_fog() -> void:
 	if water != null and int(water.get("_under_mode")) != 0:
 		_cave_fog_on = false
 		return
-	var k := clampf((1.0 - _cave_light) * 1.25 - 0.1, 0.0, 1.0) if _deep.active else 0.0
+	var k := clampf((1.0 - _cave_light) * 1.25 - 0.1, 0.0, 1.0) \
+			if _deep.active and bool(WorldView.get_value("cave_fade")) else 0.0
 	if k <= 0.01:
 		if _cave_fog_on:
 			env.fog_enabled = false
@@ -1655,6 +1664,59 @@ func toggle_menu() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
+## THE WORLD VIEW MENU (world_view_menu.gd; Docs/MineWorld.md 22): its own
+## layer, over the world menu when opened from it.
+func open_view_menu(over: CanvasLayer = null) -> void:
+	var layer := CanvasLayer.new()
+	layer.name = "WorldViewLayer"
+	layer.layer = (over.layer + 1) if over != null else 80
+	layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(layer)
+	var m: Control = load("res://scripts/terrain/world_view_menu.gd").new()
+	m.name = "WorldViewMenu"
+	m.setup(self, layer)
+	layer.add_child(m)
+
+
+## Put WorldView's values in, now, in play: the radii follow at once (the
+## streamer and deep tier fill out or drop), the far tier is laid out again on
+## the workers and swapped in, the overlay goes on or off, the cave light and
+## fade change.
+func apply_view() -> void:
+	var near := int(WorldView.get_value("detail_tiles"))
+	if water != null:
+		water.set_near_tiles(near)
+	if _streamer != null:
+		_streamer.near_radius = near
+		_streamer.keep_radius = near + 2
+	if _deep != null:
+		_deep.radius = int(WorldView.get_value("cave_tiles"))
+		_deep.up = clampi(ceili(_deep.radius / 2.0), 1, 4)
+		_deep.down = _deep.up
+	var on := bool(WorldView.get_value("chamfer"))
+	if on != _overlay_on:
+		_overlay_on = on
+		BrickTerrain.set_behind_faces(on and not ("--no-behind" in OS.get_cmdline_user_args()))
+		if bricks != null:
+			bricks.set_enabled(on)
+	TerrainCoarse.detail = int(WorldView.get_value("far_detail"))
+	var far := _far_tiles() * BrickTerrain.get_tile_studs() * BrickWorld.get_stud_metres() + 300.0
+	if walker != null:
+		walker.camera.far = far
+	if cam != null:
+		cam.far = far
+	_apply_cave_light()
+
+
+## Darkest cave light: the ground's (and its studs') floor, and the exposure's.
+func _apply_cave_light() -> void:
+	var f := float(WorldView.get_value("cave_light"))
+	CAVE_DEEP_LIGHT = maxf(f, 0.001)
+	for m in [_mat, TerrainTile.sky_stud_material()]:
+		if m != null:
+			(m as ShaderMaterial).set_shader_parameter(&"sky_light_floor", f)
+
+
 func menu_closed() -> void:
 	_menu = null
 	if _menu_layer != null:
@@ -1735,10 +1797,11 @@ func open_chest(key: String) -> void:
 	if _inv_screen != null:
 		_inv_screen.close_screen()
 	if not MineChests.is_container(chests.item_of(key)):
-		# A station: the screen opens on what can be made (Docs/Inventory.md 12).
+		# A station: the screen opens on what it makes, Minecraft's crafting
+		# table / furnace screen (Docs/Inventory.md 12, 14).
 		toggle_inventory()
 		if _inv_screen != null:
-			_inv_screen.show_page("craft")
+			_inv_screen.open_station(chests.item_of(key))
 		return
 	builder.inv.open_chest(key, chests.slots_of(key),
 			str(ItemCatalog.get_def(chests.item_of(key)).get("name", "Chest")))
@@ -1799,6 +1862,18 @@ func drop_from_player(s: ItemStack) -> void:
 
 ## The world menu's Survival box (Docs/Inventory.md 7): this world's game
 ## mode, at once, saved with its changes.
+## Farm trouble on or off for this world (Docs/MineFarming.md 18): every plot
+## is brought up to now first, so the time already passed keeps the old rule.
+func set_farm_trouble(on: bool) -> void:
+	if on == FarmPlant.trouble:
+		return
+	if farming != null:
+		farming.settle_all()
+	FarmPlant.trouble = on
+	_world_dirty = true
+	print("[mine] farm trouble: %s" % ("on" if on else "off"))
+
+
 func set_survival(on: bool) -> void:
 	survival = on
 	builder.inv.creative = not on
@@ -2052,6 +2127,10 @@ func _load_inventory() -> void:
 	survival = bool(world.get("survival", not bool(world.get("creative", true))))
 	var fl = world.get("felled", [])
 	_felled_load = fl if fl is Array else []
+	# Farm trouble, this world's (on unless it was turned off). A gate keeps
+	# its own (farm_gate.gd turns it off for its certain checks).
+	if not _gate:
+		FarmPlant.trouble = bool(world.get("farm_trouble", true))
 	var pl = world.get("planted", [])
 	_planted_load = pl if pl is Array else []
 	# Buildings stamped into the ground (Docs/TerrainBuildings.md): their
@@ -2169,6 +2248,7 @@ func save_edits(wait := false) -> void:
 	var inv_save := {"format": 3, "survival": survival,
 			"felled": _trees.felled_list() if _trees != null else _felled_load, "time": world_time,
 			"planted": _trees.planted_list() if _trees != null else _planted_load,
+			"farm_trouble": FarmPlant.trouble,
 			"buildings": MineBuildings.to_save(), "towns": MineBuildings.towns_to_save()}
 	_time_saved = world_time
 	var farm_regions: Array = farming.store.take_dirty() if farming != null else []
@@ -2621,6 +2701,11 @@ func _run_inventory_gate() -> void:
 	check.call("the kit has guns as items (%d)" % kit_guns.size(), kit_guns.size() >= 2)
 	for i in kit_guns.size():
 		inv.main[26 - i] = kit_guns[i]
+	# The farming tools and seeds topped up into the first free slots (hotbar 2
+	# slot 9, storage from slot 1) out again: the checks below want those empty.
+	inv.hotbars[1][8] = null
+	for i in 21:
+		inv.main[i] = null
 	inv.changed.emit()
 	await _frames(2)
 	# The sheet, for a look (a read-back: a gate's).
@@ -2631,7 +2716,7 @@ func _run_inventory_gate() -> void:
 	check.call("E: the inventory screen opens", inventory_open())
 	await _frames(5)
 	var scr := _inv_screen
-	var tab: Button = scr.get("_tab_creative")
+	var tab: Control = scr.get("_tabs")["creative"]
 	await _click(tab.get_global_rect().get_center())
 	check.call("the Creative tab shows the catalog", scr.page == "creative")
 	await _click(_inv_slot(scr, {}, &"coal_ore").get_global_rect().get_center())
@@ -2656,9 +2741,10 @@ func _run_inventory_gate() -> void:
 	# (storage starts empty; the hotbars are the kit's).
 	await _click(_inv_slot(scr, {}, &"chest").get_global_rect().get_center())
 	await _shot(UserPaths.DEV + "inv_held.png")
-	var tab_s: Button = scr.get("_tab_storage")
+	# The inventory is always on the right; the left goes back to the recipe book.
+	var tab_s: Control = scr.get("_tabs")["all"]
 	await _click(tab_s.get_global_rect().get_center())
-	check.call("the Storage tab, the stack still held", scr.page == "storage" and inv.cursor != null)
+	check.call("the recipe book's All tab, the stack still held", scr.page == "recipes" and inv.cursor != null)
 	var pts: Array[Vector2] = []
 	for i in [0, 1, 2]:
 		pts.append(_inv_slot(scr, Inventory.addr(&"main", i)).get_global_rect().get_center())
@@ -2718,33 +2804,63 @@ func _run_inventory_gate() -> void:
 			inv.backpack != null and inv.backpack.id == &"large_backpack" and int(scr.get("_storage_n")) == 27
 			and inv.main[5] != null and inv.main[5].id == &"obsidian"
 			and inv.hotbars[1][8] != null and inv.hotbars[1][8].id == &"small_backpack" and inv.cursor == null)
-	# Stage 12: crafting, Terraria's. The Craft tab; gravel made by hand with
-	# a real click on Make; sandstone greyed out until a workbench is near.
-	var tab_c: Button = scr.get("_tab_craft")
+	# Crafting, Bedrock's recipe book (Docs/Inventory.md 12, 14): gravel
+	# picked in the book and made by a real click on the result; sandstone
+	# red until a workbench is near.
+	var tab_c: Control = scr.get("_tabs")["all"]
 	await _click(tab_c.get_global_rect().get_center())
 	await _frames(3)
-	check.call("the Craft tab", scr.page == "craft")
+	check.call("the recipe book shows (All tab)", scr.page == "recipes" and scr.book_tab == "all"
+			and (scr.get("_left_col") as Control).is_visible_in_tree())
+	# The name beside the mouse (Minecraft's tooltip): over hotbar 1 slot 1.
+	var hover_slot := _inv_slot(scr, Inventory.addr(&"hotbar_0", 0))
+	var hm := InputEventMouseMotion.new()
+	hm.position = hover_slot.get_global_rect().get_center()
+	hm.global_position = hm.position
+	Input.parse_input_event(hm)
+	await _frames(4)
+	var tip: Control = scr.get("_tip")
+	var tip_lines: Array = tip.get("lines")
+	var want_name := ItemCatalog.label(inv.hotbars[0][0])
+	check.call("hovering a slot pops its name up beside the mouse (%s)" % (
+			str(tip_lines[0][0]) if not tip_lines.is_empty() else "none"),
+			tip.visible and not tip_lines.is_empty() and str(tip_lines[0][0]) == want_name
+			and tip.get_global_rect().position.distance_to(hm.position) < 120.0)
+	await _shot(UserPaths.DEV + "inv_tooltip.png")
 	var gravel0 := _carried_count(inv, &"gravel")
 	var stone0 := _carried_count(inv, &"stone")
-	var mk := _craft_button(scr, "Gravel", false)
-	check.call("Gravel can be made by hand: its Make is live", mk != null and not mk.disabled)
+	var mk := scr.recipe_cell("Gravel")
+	check.call("Gravel can be made by hand: its book cell is grey (not red)", mk != null and not mk.bad)
 	if mk != null:
-		scr.body.ensure_control_visible(mk)
+		(scr.get("_book_scroll") as ScrollContainer).ensure_control_visible(mk)
 		await _frames(3)
 		await _click(mk.get_global_rect().get_center())
 		await _frames(3)
-	check.call("Make: 12 stone -> 12 gravel (gravel %d -> %d, stone %d -> %d)" % [gravel0,
+	check.call("picked: the crafting area shows the gravel result",
+			not scr.picked.is_empty() and scr.picked.name == "Gravel" and scr.result_slot().item_id == &"gravel")
+	await _click(scr.result_slot().get_global_rect().get_center())
+	await _frames(3)
+	check.call("a click on the result: 12 stone -> 12 gravel (gravel %d -> %d, stone %d -> %d)" % [gravel0,
 			_carried_count(inv, &"gravel"), stone0, _carried_count(inv, &"stone")],
 			_carried_count(inv, &"gravel") == gravel0 + 12 and _carried_count(inv, &"stone") == stone0 - 12)
-	var sb := _craft_button(scr, "Sandstone", false)
-	check.call("Sandstone needs a workbench: greyed out", sb != null and sb.disabled)
+	var sb := scr.recipe_cell("Sandstone")
+	check.call("Sandstone needs a workbench: red in the book", sb != null and sb.bad)
 	await _shot(UserPaths.DEV + "inv_craft.png")
+	var only: Control = scr.get("_toggle")
+	await _click(only.get_global_rect().get_center())
+	await _frames(3)
+	check.call("the craftable-only switch: Sandstone hidden, Gravel still there",
+			scr.recipe_cell("Sandstone") == null and scr.recipe_cell("Gravel") != null)
+	await _shot(UserPaths.DEV + "inv_craftable_only.png")
+	await _click(only.get_global_rect().get_center())
+	await _frames(3)
+	check.call("... off again: Sandstone back", scr.recipe_cell("Sandstone") != null)
 	var winr := get_window()
 	var sizer := winr.size
 	winr.size = Vector2i(640, 400)
 	await _frames(10)
 	var cutr: Array = MenuFit.audit(scr, get_viewport().get_visible_rect())
-	check.call("the Craft tab at 640x400: nothing cut off (%d)%s" % [cutr.size(),
+	check.call("the recipe book at 640x400: nothing cut off (%d)%s" % [cutr.size(),
 			"" if cutr.is_empty() else "\n" + MenuFit.describe(cutr)], cutr.is_empty())
 	winr.size = sizer
 	await _frames(10)
@@ -2757,7 +2873,7 @@ func _run_inventory_gate() -> void:
 		await _frames(10)
 		var vp := get_viewport().get_visible_rect()
 		var cut: Array = MenuFit.audit(scr, vp)
-		var close: Button = scr.find_child("Close", true, false)
+		var close: Control = scr.find_child("Close", true, false)
 		check.call("window %s: nothing cut off (%d)%s, Close inside" % [small, cut.size(),
 				"" if cut.is_empty() else "\n" + MenuFit.describe(cut)],
 				cut.is_empty() and vp.encloses(close.get_global_rect()))
@@ -2915,19 +3031,32 @@ func _run_inventory_gate() -> void:
 		builder.update_target()
 		builder.place_target()
 		await _frames(5)
-		check.call("RMB on the workbench opens the Craft tab", inventory_open() and _inv_screen.page == "craft")
+		check.call("RMB on the workbench opens the crafting table screen", inventory_open()
+				and _inv_screen.station == &"workbench" and _inv_screen.page == "recipes")
 		if inventory_open():
 			var sand0 := _carried_count(inv, &"sandstone")
-			var sb2 := _craft_button(_inv_screen, "Sandstone", false)
-			check.call("at the workbench Sandstone can be made", sb2 != null and not sb2.disabled)
+			var sb2 := _inv_screen.recipe_cell("Sandstone")
+			check.call("at the workbench Sandstone can be made (grey)", sb2 != null and not sb2.bad)
 			if sb2 != null:
-				_inv_screen.body.ensure_control_visible(sb2)
+				(_inv_screen.get("_book_scroll") as ScrollContainer).ensure_control_visible(sb2)
 				await _frames(3)
 				await _click(sb2.get_global_rect().get_center())
 				await _frames(3)
-			check.call("Make: 12 sand -> 12 sandstone (%d -> %d)" % [sand0, _carried_count(inv, &"sandstone")],
-					_carried_count(inv, &"sandstone") == sand0 + 12)
+				await _click(_inv_screen.result_slot().get_global_rect().get_center())
+				await _frames(3)
+			check.call("a click on the result: 12 sand -> 12 sandstone (%d -> %d)" % [sand0,
+					_carried_count(inv, &"sandstone")], _carried_count(inv, &"sandstone") == sand0 + 12)
 			await _shot(UserPaths.DEV + "inv_workbench.png")
+			# The furnace's screen, for a look (its flame, its own recipes).
+			_inv_screen.open_station(&"furnace")
+			await _frames(3)
+			var bk := _inv_screen.recipe_cell("Bucket")
+			if bk != null:
+				await _click(bk.get_global_rect().get_center())
+				await _frames(3)
+			check.call("the furnace screen lists only furnace recipes", bk != null
+					and _inv_screen.recipe_cell("Sandstone") == null)
+			await _shot(UserPaths.DEV + "inv_furnace.png")
 			await _key(KEY_E)
 		# The workbench back into storage (the checks after count the chests).
 		for key in chests.chests.keys():
@@ -3266,16 +3395,6 @@ func _inv_slot(scr: InventoryScreen, a: Dictionary, item := &"") -> InvSlot:
 ## How many of item `id` the inventory carries (the gate's crafting checks).
 func _carried_count(inv: Inventory, id: StringName) -> int:
 	return inv.count_of({"id": id, "tag": "", "count": 1})
-
-
-## The Craft page's Make (or All) button of recipe `name`, or null.
-func _craft_button(scr: InventoryScreen, name: String, all: bool) -> Button:
-	for b in scr.find_children("*", "Button", true, false):
-		var btn := b as Button
-		if btn.has_meta("recipe") and str(btn.get_meta("recipe")) == name and bool(btn.get_meta("all")) == all \
-				and not btn.is_queued_for_deletion():
-			return btn
-	return null
 
 
 ## A click with `button`, real events (the gates' `_click` is the left one).
@@ -5984,11 +6103,30 @@ func _run_sea_gate() -> void:
 	water.sea.push_waves()
 	# A river mouth: a river column under the sea line near the coast.
 	var river := Vector2i(1 << 30, 0)
-	for r in range(16, 900, 16):
+	for r in range(16, 6000, 16):
 		for a in 24:
 			var p := coast + Vector2i(Vector2(cos(a * TAU / 24.0), sin(a * TAU / 24.0)) * r)
-			var bn: String = _biome_names[BrickTerrain.biome_at(p.x, p.y)]
-			if bn.contains("River") and BrickTerrain.surface_plate(p.x, p.y) < sea_b * 3:
+			# Narrow sea (what plays as a river, whatever its biome): a
+			# brick under the sea line, dry ground within 24 studs both ways
+			# along x or along z (water 5-17 m wide).
+			if BrickTerrain.surface_plate(p.x, p.y) >= (sea_b - 1) * 3:
+				continue
+			var dry := func(q: Vector2i) -> bool: return BrickTerrain.surface_plate(q.x, q.y) >= sea_b * 3
+			var narrow_x := false
+			var narrow_z := false
+			for ax in 2:
+				var stepv := Vector2i(1, 0) if ax == 0 else Vector2i(0, 1)
+				var lo_dry := false
+				var hi_dry := false
+				for k in range(7, 25):
+					lo_dry = lo_dry or dry.call(p - stepv * k)
+					hi_dry = hi_dry or dry.call(p + stepv * k)
+				if lo_dry and hi_dry:
+					if ax == 0:
+						narrow_x = true
+					else:
+						narrow_z = true
+			if narrow_x != narrow_z:
 				river = p
 				break
 		if river.x != 1 << 30:
@@ -6000,8 +6138,33 @@ func _run_sea_gate() -> void:
 		await _frames(150)
 		print("[sea-gate] river mouth at %s, water there %d" % [river, water.fluid_at(rm - Vector3(0, 0.2, 0))])
 		await _shot(dev + "sea_river.png")
+		# Rivers calm (MineWaterNext.md 11): the river's surface over 4 s
+		# moves a few cm (the ripple), where open sea a coast away swings
+		# much more. The CPU's height, the one swimmers and floaters ride.
+		var rlo := INF
+		var rhi := -INF
+		var slo := INF
+		var shi := -INF
+		var sea_p := Vector2((coast.x + dir.x * 120.0) * stud, (coast.y + dir.y * 120.0) * stud)
+		for i in 40:
+			var tt := float(i) * 0.1
+			var hr := BrickWave.height_at(rm.x, rm.z, tt)
+			var hs := BrickWave.height_at(sea_p.x, sea_p.y, tt)
+			rlo = minf(rlo, hr)
+			rhi = maxf(rhi, hr)
+			slo = minf(slo, hs)
+			shi = maxf(shi, hs)
+		print("[sea-gate] river calm: river swings %.3f m (want < 0.08), open sea %.3f m, shore distance %.1f m" % [
+				rhi - rlo, shi - slo, BrickWave.shore_distance(rm.x, rm.z)])
+		_fly_to(rm + Vector3(-6, 2.5, -6), Vector3(1, 0, 1).normalized())
+		walker.pitch = -0.25
+		await _frames(90)
+		await _shot(dev + "sea_river_low.png")
+		# Back to the coast: the channel below digs there.
+		_fly_to(Vector3((coast.x + 0.5) * stud, level + 6.0, (coast.y + 0.5) * stud), Vector3(dir.x, 0, dir.y))
+		await _frames(200)
 	else:
-		print("[sea-gate] no river under the sea line within 900 studs of the coast")
+		print("[sea-gate] no river under the sea line within 6000 studs of the coast")
 	# A channel dug off the sea, 3 studs wide, 14 long, two bricks under the
 	# sea line: from just off the shore into the dry land, and the sea runs in.
 	var back := -dir
@@ -6826,6 +6989,42 @@ func _run_buildings_gate() -> void:
 	ok = int(info.glass) > 0 and MineBuildings.glass_material() == 41
 	check.call(ok, "its windows are glass (%d cells; material %d, the shader's 41)" % [int(info.glass), MineBuildings.glass_material()])
 	fails += 0 if ok else 1
+	# Stage 6: its fittings are the wiring's devices -- doors in its
+	# doorways, a lamp and lever in each room. A lever lights its lamp; a
+	# door opens by hand.
+	var in_box := func(c: Vector3i) -> bool:
+		return c.x >= lo.x and c.x <= hi.x and c.z >= lo.z and c.z <= hi.z and c.y >= base and c.y <= hi.y
+	var a_door := Vector3i.MAX
+	var lit_lamps := 0
+	for c: Vector3i in wiring.devices.keys():
+		if not in_box.call(c):
+			continue
+		var item: StringName = wiring.devices[c].item
+		if item == &"door" and a_door == Vector3i.MAX:
+			a_door = c
+		# The first storey's levers on: its rooms lit for the inside picture.
+		if item == &"lever" and c.y < base + 24:
+			wiring.use_device(c)
+	wiring.tick()
+	for c: Vector3i in wiring.devices.keys():
+		if in_box.call(c) and wiring.devices[c].item == &"lamp" and wiring.is_lit(c):
+			lit_lamps += 1
+	ok = int(info.get("doors", 0)) > 0 and int(info.get("lamps", 0)) > 0 and lit_lamps > 0
+	check.call(ok, "fitted out: %d doors, %d lamps with levers; the first storey's levers light %d" % [
+			int(info.get("doors", 0)), int(info.get("lamps", 0)), lit_lamps])
+	fails += 0 if ok else 1
+	ok = a_door != Vector3i.MAX and wiring.use_device(a_door) and wiring.is_open(a_door)
+	check.call(ok, "a door opens by hand")
+	fails += 0 if ok else 1
+	# Its way in: an opening in the front wall's ground storey, a door in it.
+	var ent := MineBuildings.entrance(p)
+	var e0: Vector3i = ent[0]
+	var e1: Vector3i = ent[1]
+	var e_mid := Vector3i(corner.x + ((e0.x + e1.x) >> 1), base + e0.y + 6, corner.y)
+	var e_door := Vector3i(corner.x + e0.x, base + e0.y, corner.y + e0.z)
+	ok = BrickTerrain.solid_at(e_mid.x, e_mid.y, e_mid.z) == 0 and wiring.devices.has(e_door) 			and wiring.devices[e_door].item == &"door"
+	check.call(ok, "a way in: the front wall open on the ground storey, a door hung in it")
+	fails += 0 if ok else 1
 	# Stage 4c: a building brick, mined, is an item -- plastic bricks of its
 	# colour; glass is its own block.
 	var bmat := MineBuildings.BUILDING_MATERIAL_BASE + 8
@@ -6883,6 +7082,11 @@ func _run_buildings_gate() -> void:
 	var floor1 := (base + 3) * plate + 1.2
 	await shoot_pic.call("inside", Vector3((lo.x + 3.5) * stud, floor1, (lo.z + 3.5) * stud),
 			Vector3((lo.x + 16) * stud, floor1 - 0.4, (lo.z + 12) * stud))
+	# The entrance from outside, its door opened.
+	if wiring.devices.has(e_door):
+		wiring.use_device(e_door)
+	await shoot_pic.call("entrance", Vector3((corner.x + 10) * stud, (base + 9) * plate, (corner.y - 14) * stud),
+			Vector3((corner.x + 10) * stud, (base + 8) * plate, (corner.y + 4) * stud))
 	await shoot_pic.call("cottage", centre + Vector3(-40.0 * stud - 10.0, 4.0, -12.0),
 			centre + Vector3(-40.0 * stud + 3.0, 1.5, 0.0))
 	# A shot at its west wall, 3 m up, from outside.
@@ -7380,6 +7584,89 @@ func _behind_follow(eye: Vector3) -> void:
 		elif sec.behind_baked and (maxi(absi(k.x - c.x), absi(k.z - c.z)) > 3
 				or k.y * sp > c.y + 192 or (k.y + 1) * sp < c.y - 192):
 			sec.drop_behind()
+
+
+## -- --gate=view (Docs/MineWorld.md 22): the World view menu. Opened from the
+## world menu's button (whose World tab no longer has the view settings),
+## every value changed, Apply clicked: the world takes each at once -- the
+## detail and cave radii, the overlay off, the cave light, the far ground's
+## detail (its tier laid out again and swapped in) -- and a gate writes no
+## player file.
+func _run_view_gate() -> void:
+	await _frames(90)
+	var fails := [0]
+	var check := func(passed: bool, what: String) -> void:
+		print("[mine-view] %s  %s" % ["ok  " if passed else "FAIL", what])
+		if not passed:
+			fails[0] += 1
+	var had_file := FileAccess.file_exists(WorldView.PATH)
+	var file_time := FileAccess.get_modified_time(WorldView.PATH) if had_file else 0
+	toggle_menu()
+	await _frames(10)
+	var labels := []
+	for l: Label in _menu.find_children("*", "Label", true, false):
+		labels.append(l.text)
+	check.call(not labels.has("Full detail radius (tiles)") and not labels.has("Chamfered brick edges")
+			and not labels.has("Cave view distance (tiles)"),
+			"the world menu has no view settings left (they apply only on Generate there)")
+	var open_b: Button = null
+	for b: Button in _menu.find_children("*", "Button", true, false):
+		if b.text.begins_with("World view"):
+			open_b = b
+	check.call(open_b != null, "the world menu has a World view button")
+	if open_b != null:
+		await _click(open_b.get_global_rect().get_center())
+		await _frames(10)
+	var vm := find_child("WorldViewMenu", true, false)
+	check.call(vm != null, "it opens the World view menu")
+	if vm == null:
+		get_tree().quit()
+		return
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png(UserPaths.DEV + "mine_view_menu.png")
+	var before_tiles: int = _streamer._tiles.size()
+	vm.v["detail_tiles"] = 6
+	vm.v["cave_tiles"] = 6
+	vm.v["far_detail"] = 2
+	vm.v["chamfer"] = false
+	vm.v["cave_light"] = 0.05
+	vm.v["cave_fade"] = false
+	var apply_b: Button = null
+	for b: Button in vm.find_children("*", "Button", true, false):
+		if b.text == "Apply":
+			apply_b = b
+	await _click(apply_b.get_global_rect().get_center())
+	await _frames(5)
+	check.call(_streamer.near_radius == 6 and _deep.radius == 6,
+			"Apply: detail and cave radii 6 (streamer %d, caves %d)" % [_streamer.near_radius, _deep.radius])
+	check.call(not _overlay_on and bricks != null and not bricks.enabled and not BrickTerrain.get_behind_faces(),
+			"Apply: real brick edges off (overlay %s, behind faces %s)" % [_overlay_on, BrickTerrain.get_behind_faces()])
+	check.call(is_equal_approx(float(_mat.get_shader_parameter(&"sky_light_floor")), 0.05)
+			and is_equal_approx(CAVE_DEEP_LIGHT, 0.05), "Apply: darkest cave light 0.05 on the ground and the exposure")
+	check.call(TerrainCoarse.detail == 2 and not bool(WorldView.get_value("cave_fade")),
+			"Apply: distant ground Low, cave fade off")
+	vm.call("_close")
+	_menu.call("_close")
+	await _frames(5)
+	for w in 900:
+		if _far.built_detail == 2 and _far_next == null:
+			break
+		await get_tree().process_frame
+	check.call(_far.built_detail == 2 and _far.triangle_count() < 100000,
+			"the far ground laid out again at Low and swapped in (%d tris)" % _far.triangle_count())
+	await _frames(240)
+	check.call(_streamer._tiles.size() > before_tiles,
+			"more detail tiles round the eye after a radius of 6 (%d -> %d)" % [before_tiles, _streamer._tiles.size()])
+	var now_time := FileAccess.get_modified_time(WorldView.PATH) if FileAccess.file_exists(WorldView.PATH) else 0
+	check.call(FileAccess.file_exists(WorldView.PATH) == had_file and now_time == file_time,
+			"a gate writes no player view file")
+	# Back on: the overlay returns.
+	WorldView.values["chamfer"] = true
+	apply_view()
+	await _frames(30)
+	check.call(_overlay_on and bricks.enabled, "real brick edges back on")
+	print("[mine-view] %s (%d failures)" % ["PASS" if fails[0] == 0 else "FAIL", fails[0]])
+	get_tree().quit()
 
 
 ## -- --gate=slits: see-through slits in the OPEN ground near the eye (the

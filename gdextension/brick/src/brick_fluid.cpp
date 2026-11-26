@@ -1489,17 +1489,21 @@ struct MeshBuf {
     /// A real sea piece's face: CUSTOM0 y = 1 (sea); x, w the way from the
     /// vertex to its stud's middle in half studs (+-1) -- the shader rides
     /// the whole piece on the wave at that middle, as the tiers' pieces do.
+    /// `drop`: c and d are a side's foot, this far under the top -- CUSTOM0.z
+    /// (the shader cuts it to the neighbour the side faces, as the tiers do).
     void sea_quad(const Vector3 &a, const Vector3 &b, const Vector3 &c, const Vector3 &d,
-            const Vector3 &nrm, const Color &cc, const Vector2 &mid) {
+            const Vector3 &nrm, const Color &cc, const Vector2 &mid, float drop = 0.0f) {
         const int base = (int)v.size();
+        int k = 0;
         for (const Vector3 &p : { a, b, c, d }) {
             v.push_back(p);
             n.push_back(nrm);
             col.push_back(cc);
             cus.push_back(mid.x > p.x ? 1.0f : -1.0f);
             cus.push_back(1.0f);
-            cus.push_back(0.0f);
+            cus.push_back(k >= 2 ? drop : 0.0f);
             cus.push_back(mid.y > p.z ? 1.0f : -1.0f);
+            ++k;
         }
         idx.push_back(base); idx.push_back(base + 1); idx.push_back(base + 2);
         idx.push_back(base); idx.push_back(base + 2); idx.push_back(base + 3);
@@ -1808,9 +1812,11 @@ bool mesh_sea_tops(int tx, int tz, const bool *top, const bool *ocean, MeshBuf &
         }
     }
     // A piece a stud, as the tiers draw the sea: a flat top that rides the
-    // wave at its middle (the shader), and four sides SKIRT_M deep -- the
-    // risers between pieces at different heights.
-    const float y = (float)(g_sea_b * 3) * PLATE_M - TOP_SINK;
+    // wave at its middle (the shader), and four sides cut to the neighbour
+    // each faces (the shader, from SKIRT_M) -- the risers between pieces.
+    // AT the sea level, as the tiers' tops: 1.5 cm under it (TOP_SINK) their
+    // sides showed along the seam as a bright line (the user, 2026-11-25).
+    const float y = (float)(g_sea_b * 3) * PLATE_M;
     const Color cc(1.0f, 0.0f, 1.0f, 0.5f);   // b: sky level, open (sky_levels_into)
     const Vector3 dn(0.0f, SKIRT_M, 0.0f);
     for (int lz = 0; lz < SX; ++lz) {
@@ -1821,10 +1827,10 @@ bool mesh_sea_tops(int tx, int tz, const bool *top, const bool *ocean, MeshBuf &
             const Vector2 mid((x0 + x1) * 0.5f, (z0 + z1) * 0.5f);
             const Vector3 a(x0, y, z0), b(x0, y, z1), cq(x1, y, z1), d(x1, y, z0);
             m.sea_quad(a, b, cq, d, Vector3(0, 1, 0), cc, mid);
-            m.sea_quad(d, cq, cq - dn, d - dn, Vector3(1, 0, 0), cc, mid);
-            m.sea_quad(b, a, a - dn, b - dn, Vector3(-1, 0, 0), cc, mid);
-            m.sea_quad(cq, b, b - dn, cq - dn, Vector3(0, 0, 1), cc, mid);
-            m.sea_quad(a, d, d - dn, a - dn, Vector3(0, 0, -1), cc, mid);
+            m.sea_quad(d, cq, cq - dn, d - dn, Vector3(1, 0, 0), cc, mid, SKIRT_M);
+            m.sea_quad(b, a, a - dn, b - dn, Vector3(-1, 0, 0), cc, mid, SKIRT_M);
+            m.sea_quad(cq, b, b - dn, cq - dn, Vector3(0, 0, 1), cc, mid, SKIRT_M);
+            m.sea_quad(a, d, d - dn, a - dn, Vector3(0, 0, -1), cc, mid, SKIRT_M);
         }
     }
     // The tiers' mask.
@@ -3246,6 +3252,28 @@ Vector3i BrickFluid::cell_of(Vector3 p) {
             (int)std::floor(p.z / STUD_M));
 }
 
+bool BrickFluid::any_fluid(Vector3i lo, Vector3i hi, int fluid) {
+    const int x0 = std::min(lo.x, hi.x), x1 = std::max(lo.x, hi.x);
+    const int b0 = std::min(lo.y, hi.y), b1 = std::max(lo.y, hi.y);
+    const int z0 = std::min(lo.z, hi.z), z1 = std::max(lo.z, hi.z);
+    // A box is a plot's reach, not a region: refuse anything huge.
+    if ((int64_t)(x1 - x0 + 1) * (b1 - b0 + 1) * (z1 - z0 + 1) > 65536) {
+        return false;
+    }
+    MainLock lk;
+    for (int b = b0; b <= b1; ++b) {
+        for (int z = z0; z <= z1; ++z) {
+            for (int x = x0; x <= x1; ++x) {
+                const Cell c = rcell(x, b, z);
+                if (c_wet(c) && c_fluid(c) == fluid) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 Dictionary BrickFluid::cell_info(Vector3i cell) {
     MainLock lk;
     const Cell c = rcell(cell.x, cell.y, cell.z);
@@ -3681,6 +3709,7 @@ void BrickFluid::_bind_methods() {
     ClassDB::bind_static_method("BrickFluid", D_METHOD("request_mesh", "tx", "tz"), &BrickFluid::request_mesh);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("drawn_tiles"), &BrickFluid::drawn_tiles);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("cell_info", "cell"), &BrickFluid::cell_info);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("any_fluid", "lo", "hi", "fluid"), &BrickFluid::any_fluid);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("cell_of", "p"), &BrickFluid::cell_of);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("fluid_at", "p"), &BrickFluid::fluid_at);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("surface_at", "p"), &BrickFluid::surface_at);

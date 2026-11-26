@@ -290,7 +290,7 @@ Small stages, each with a probe and a gate, each merged:
    the inventory (section 12).
 3. Door, trapdoor, gate tile; observer (from `terrain_edited`); sequencer
    brick; number tile. **Door, trapdoor, observer built 2026-11-25** (section
-   15); gate tile, sequencer, number tile are stage 3b.
+   15); gate tile, sequencer, number display **built 2026-11-26** (section 16).
 4. Piston: up first (unclutch + group + limit), then sideways with the hop,
    the stand-in slide, the kinematic shove; sticky piston. Moving groups are
    contraptions (section 12): one body, riders carried by contact.
@@ -565,6 +565,37 @@ pulse for a cable laid in front, none for a load). `--gate=wiring`: a door
 laid by the builder faces across the view and a lever swings its panel and
 collider open and shut; a real ground edit flashes an observer's lamp; a
 trapdoor over a dug pit opens from a lever; all back after a reload.
+
+## 16. Stage 3b, built (2026-11-26): gate tile, sequencer, number display
+
+- **Gate tile** (`gate_tile`, Terraria's actuator): a 1-stud brick with a
+  stud and a collider (WORLD). Powered, it turns see-through and passable
+  (collider off). Gate tiles touching side by side or stacked a brick apart
+  are one GROUP, open while any of them is powered (a flood over the group
+  each tick) -- so a lever at one end opens a whole wall, or drops a whole
+  bridge. Held by ground under it or by another gate tile under or beside it
+  (a bridge hangs off one that stands; a gate tile does not yet fall when
+  the one holding it goes).
+- **Sequencer** (`sequencer`, a facing gate, Create's sequenced gearshift):
+  its back turning on starts a program of steps out of its front -- ticks
+  on, off, on, ... -- and a turn-on while it runs is ignored. RMB steps
+  through `PROGRAMS` ([5,5,5], [10], [2,2,2,2,2], [20,10,20], seven 3s,
+  [10,30,10]); the wrench shows the program. A program editor panel is
+  later.
+- **Number display** (`number_display`): a 2-stud brick facing a way with
+  the level (0-15) of what touches it printed on its front (a Label3D). It
+  drives nothing.
+- Cable MultiMeshes are out of physics interpolation (they never move; it
+  warned once when changed outside the physics tick).
+
+Tests: `wiring_probe` 115 ok (stage 3b: a stacked and side-held wall is one
+group, opened by a lever and shut again, a tile one stud apart its own
+group, none in mid-air; the sequencer's pattern 11111000001111100000 with
+its back held on, RMB picks the next program, saved; the display's 0 and
+15, its label, driving nothing). `--gate=wiring`: a 6-tile wall opened and
+shut by a lever with its colliders off and on, a display laid by the
+builder reading 15, a sequencer's lamp lit-dark-lit-dark in the real tick,
+all back after a reload.
 
 ## Sources
 

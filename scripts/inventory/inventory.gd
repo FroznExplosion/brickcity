@@ -649,6 +649,24 @@ func swap_with_hotbar(a: Dictionary, i: int) -> void:
 	changed.emit()
 
 
+## Slots `a` and `b` change places, if each may hold the other's item (C and
+## B over a slot in the screen: the off-hand, the quick slot). True if they did.
+func swap_slots(a: Dictionary, b: Dictionary) -> bool:
+	if a.area == b.area and a.index == b.index:
+		return false
+	var s := get_slot(a)
+	var t := get_slot(b)
+	if not slot_accepts(a, t) or not slot_accepts(b, s):
+		return false
+	set_slot(a, t)
+	set_slot(b, s)
+	# The quick slot emptied while out: the toolbar slot is the hand again.
+	if get_slot(main_addr()) == null and quick_out:
+		quick_out = false
+	changed.emit()
+	return true
+
+
 ## The cursor stack back into storage (the screen closing). False if some did
 ## not fit (it is kept on the cursor).
 func return_cursor() -> bool:

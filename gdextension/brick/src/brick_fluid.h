@@ -145,6 +145,10 @@ public:
 
     /// What is in a cell: {fluid, kind, amount, dist, solid, ocean, capacity}.
     static Dictionary cell_info(Vector3i cell);
+    /// Is any cell in the box lo..hi (inclusive, cells) wet with `fluid`
+    /// (1 water, 2 lava)? One lock for the whole box: a farm plot's water
+    /// look (Docs/MineFarming.md 19) asked cell_info ~200 times.
+    static bool any_fluid(Vector3i lo, Vector3i hi, int fluid);
     static Vector3i cell_of(Vector3 p);
     /// The fluid at a point: 0 none, 1 water, 2 lava (by its drawn height).
     static int fluid_at(Vector3 p);

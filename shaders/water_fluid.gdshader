@@ -98,6 +98,7 @@ varying float v_h01;
 // darker than the sea next to it.
 varying vec3 v_nrm;
 varying float v_depth;
+uniform float sea_side_min = 0.14;     // a real sea piece's side, at least (the tiers' sheet_thickness)
 // BRICK PIECES (W4, Docs/MineWaterNext.md 9): calm tops are flat brick
 // tiles. CUSTOM0.xw is the way to the piece's middle in studs, so here the
 // fragment's place in its piece (v_piece) and the piece's half size
@@ -166,6 +167,14 @@ void vertex() {
 		float ground = lattice_ground(mid);
 		float raw = ground < sea_level ? surface_offset(mid, wave_time, 1.0, 0.0) : 0.0;
 		VERTEX.y += raw;
+		if (CUSTOM0.z > 0.0) {
+			// A side's foot: from the top down to the neighbour this side
+			// faces, a plate at least -- as the tiers' pieces (water.gdshader).
+			// A fixed brick-deep side showed through the water as a band.
+			vec2 nb = mid + normalize(NORMAL.xz) * stud;
+			float hn = lattice_ground(nb) < sea_level ? surface_offset(nb, wave_time, 1.0, 0.0) : raw;
+			VERTEX.y += CUSTOM0.z - max(raw - min(hn, raw), sea_side_min);
+		}
 		float amp = 0.0;
 		for (int i = 0; i < wave_count; i++) {
 			amp += waves[i * 2].x;
