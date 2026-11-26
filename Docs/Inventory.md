@@ -397,7 +397,9 @@ a layout, not a rule.
   reloads by itself when empty, and with R. Its trigger rules are the
   gun's own (GunFireMode): a pistol that charges fires on the release, so a
   long hold charges instead. It is drawn low on the left
-  of the view (no left arm pose yet: later, with ViewArms). Dual pistols
+  of the view, the left arm's C round its grip (`PlayerView.off_held`,
+  2026-11-26): it stays on that gun through a sprint, a bash or a reload of
+  the right one; with a block in the main hand the right arm swings open. Dual pistols
   are a main pistol + an off-hand pistol, up: LMB right, RMB left, no
   sights.
 - **HUD**: the off-hand slots left of the bars, dim while down (or lowered
