@@ -52,6 +52,8 @@ const CAN_WATER := 16
 const SAPLING_CHANCE := 0.5
 ## Saplings planted by a drag stand this many plots apart (canopies).
 const SAPLING_SPACING := 3
+## A scarecrow keeps most birds off plots within this (metres).
+const SCARE_M := 8.0
 ## Soil a hoe tills, and the fertility each starts with.
 const SOIL_FERTILITY := {"grass": 60.0, "dirt": 55.0, "podzol": 80.0, "dry grass": 40.0,
 		"lush grass": 75.0, "cold grass": 50.0, "dark grass": 70.0}
@@ -67,6 +69,9 @@ var harvested := 0
 var trampled := 0
 var trees_grown := 0
 var fertilised := 0
+var weeded := 0
+## Fields and enclosure (stage 5): grouped plots, a flood on a worker.
+var fields := FarmFields.new()
 
 var _stud := 0.35
 var _plate := 0.14
@@ -135,8 +140,10 @@ func step(delta: float, eye: Vector3) -> void:
 				_draw_dirty = true
 				if _grown_tree(plot):
 					_grow_tree(plot)
-					if _near.is_empty():
-						break
+				elif bool(plot.get("packed", false)):
+					_packed(plot)
+				if _near.is_empty():
+					break
 		for _i in mini(COND_PER_FRAME, _near.size()):
 			_cond_i = (_cond_i + 1) % _near.size()
 			var b: Vector3i = _near[_cond_i]
@@ -145,6 +152,7 @@ func step(delta: float, eye: Vector3) -> void:
 				var t0 := Time.get_ticks_usec()
 				refresh(b)
 				worst_refresh_us = maxi(worst_refresh_us, Time.get_ticks_usec() - t0)
+	fields.step(delta, store, eye, _stud, _apply_field)
 	if _draw_dirty or _drawn_eye == Vector3.INF or Vector2(eye.x - _drawn_eye.x, eye.z - _drawn_eye.z).length() > 8.0:
 		_draw_dirty = false
 		_drawn_eye = eye
@@ -173,6 +181,54 @@ func settle_all() -> void:
 			_draw_dirty = true
 		if _grown_tree(plot):
 			_grow_tree(plot)
+		elif bool(plot.get("packed", false)):
+			_packed(plot)
+
+
+# ---------------------------------------------------------------------------
+# Trouble (stage 5, Docs/MineFarming.md 9)
+
+## A field's answer is in: its plots open to animals or not, one-crop or not
+## -- each settled first, so what grew before grew under the old flags.
+func _apply_field(f: Dictionary) -> void:
+	var t := now()
+	for b in f.plots:
+		var plot := store.get_plot(b)
+		if plot.is_empty():
+			continue
+		var open := bool(f.open)
+		var mono: bool = f.mono != &"" and plot.crop == f.mono
+		if open != bool(plot.get("open", false)) or mono != bool(plot.get("mono", false)):
+			FarmPlant.settle(plot, t)
+			plot.open = open
+			plot.mono = mono
+			store.touch(b)
+
+
+## The ground near the farms changed (MineWorld.terrain_edited): fields are
+## looked at again (a wall built or broken).
+func terrain_changed() -> void:
+	fields.dirty = true
+
+
+## Animals trampled it (FarmPlant's event): the tilled brick is dirt again.
+func _packed(plot: Dictionary) -> void:
+	plot.packed = false
+	plot.crop = &""
+	trample(plot)
+	trampled -= 1             # (not the player's)
+	log_lines.append("animals trampled %s" % plot.b)
+
+
+## Is a scarecrow standing within SCARE_M of the plot?
+func _scared(b: Vector3i) -> bool:
+	var at := _top_middle(b)
+	var chests: MineChests = host.chests
+	for key in chests.chests:
+		if chests.item_of(key) == &"scarecrow" \
+				and chests.box_of(chests.chests[key].block).get_center().distance_to(at) <= SCARE_M:
+			return true
+	return false
 
 
 # ---------------------------------------------------------------------------
@@ -251,11 +307,18 @@ func _soil_plot(target: Dictionary) -> Dictionary:
 func fertilise(plot: Dictionary, def: Dictionary) -> bool:
 	var add := float(def.get("fertility", 0.0))
 	var days := float(def.get("boost_days", 0.0))
-	if days <= 0.0 and float(plot.fert) >= 100.0:
+	var mulch := bool(def.get("mulch", false))
+	if mulch and bool(plot.get("mulch", false)):
+		return false
+	if not mulch and days <= 0.0 and float(plot.fert) >= 100.0:
 		return false
 	var t := now()
 	FarmPlant.settle(plot, t)
 	plot.fert = minf(100.0, float(plot.fert) + add)
+	if mulch:
+		# Mulch: no weeds come up; the ones there are smothered.
+		plot.mulch = true
+		plot.weeds = false
 	if days > 0.0:
 		plot.boost_until = t + days * FarmPlant.DAY
 	store.touch(plot.b)
@@ -428,6 +491,14 @@ func break_target(target: Dictionary) -> bool:
 	var plot := plot_at_target(target)
 	if plot.is_empty() or plot.crop == &"":
 		return false
+	FarmPlant.settle(plot, now())
+	if bool(plot.get("weeds", false)):
+		# Weeds first: pulled, the crop stays.
+		plot.weeds = false
+		store.touch(plot.b)
+		weeded += 1
+		log_lines.append("weeded %s" % plot.b)
+		return true
 	if FarmPlant.is_ripe(plot):
 		return harvest(plot)
 	var crop := FarmPlant.crop_of(plot)
@@ -672,10 +743,13 @@ func refresh(b: Vector3i) -> void:
 	var mid := _top_middle(b) + Vector3(0, 0.25, 0)
 	var sky := clampf(BrickTerrain.sky_light_at(mid) / 15.0, 0.0, 1.0)
 	var lamp := clampf(BrickTerrain.block_light_at(mid) / 15.0, 0.0, 1.0)
-	var changed: bool = wet != bool(plot.wet) or absf(sky - float(plot.sky)) > 0.01 or absf(lamp - float(plot.lamp)) > 0.01
+	var scared := _scared(b)
+	var changed: bool = wet != bool(plot.wet) or absf(sky - float(plot.sky)) > 0.01 \
+			or absf(lamp - float(plot.lamp)) > 0.01 or scared != bool(plot.get("scared", false))
 	plot.wet = wet
 	plot.sky = sky
 	plot.lamp = lamp
+	plot.scared = scared
 	if changed:
 		store.touch(b)
 	_set_soil(plot, t)
@@ -747,4 +821,10 @@ func look_text(target: Dictionary) -> String:
 	var line := "%s  ·  %s" % [head, state]
 	if not held.is_empty():
 		line += "  ·  held back: " + ", ".join(held)
+	if str(plot.get("last_event", "")) != "" and t - float(plot.get("event_at", 0.0)) < FarmPlant.DAY:
+		line += "  ·  %s %s ago" % [plot.last_event, FarmPlant.span_words(t - float(plot.event_at))]
+	if bool(plot.get("mulch", false)):
+		soil += ", mulched"
+	if bool(plot.get("scared", false)):
+		soil += ", scarecrow near"
 	return line + "\n" + soil

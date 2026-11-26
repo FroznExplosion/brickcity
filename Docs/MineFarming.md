@@ -1,7 +1,7 @@
 # Farming in the mine world -- plan
 
 Planned 2026-11-25; stages 1 and 2 BUILT the same day (section 15), stage 3
-on 2026-11-26 (section 16), stage 4 the same day (section 17). The
+on 2026-11-26 (section 16), stage 4 the same day (section 17), stage 5 too (section 18). The
 scene is `scenes/terrain_test.tscn` (Docs/MineWorld.md). The user's answers
 to the questions are in section 14.
 
@@ -381,8 +381,7 @@ written from the crop table and the growth rules), `farm_gate.gd`.
 Crops: wheat, carrot, potato, beans (give fertility back), pumpkin (thirsty,
 slow), berry bush (regrows); items in content/base/data/items/farming.json.
 
-**Not yet** (later stages): animals and enclosure, birds, weeds, blight,
-breeding, giant crops, automation, death.
+**Not yet** (later stages): real animals (abstract for now), breeding, giant crops, automation, death.
 
 **Tests.** `farm_probe` (headless, 55 checks): the materials and shader
 numbers, the crops and their items, one settle == many == saved half way for
@@ -470,3 +469,50 @@ plain soil, a sapling grows up, the recipes, every produce composts.
 cabbage and melon planted, compost crafted at a bin, compost raises a plot's
 fertility, a grow mix drag boosts 8 plots, the sapling grows into a planted
 tree and is felled; picture user://dev/farm_stage4.png.
+
+## 18. Built (2026-11-26): stage 5, trouble
+
+**Events, still exact.** Each planted plot has a hazard: the sum of its
+trouble rates, which hold still between changes. It keeps `haz_acc` (hazard
+so far) and `haz_next` (an exponential drawn from its seed and its event
+count); an event happens when the one reaches the other. `settle` now walks
+in steps to the next of: a can's water or grow mix running out, the stage's
+end, the next event, or now -- so an event lands at the same moment however
+often the plot is settled (farm_probe: 12 plots with every trouble on, once ==
+often == saved half way). `FarmPlant.trouble` off: no events (a setting is
+later work; the gate's other checks run with it off).
+
+| Trouble | Rate a plot a day | Needs | Does | Stops it |
+|---|---|---|---|---|
+| animals | 0.25 | an open field | 3 in 4 eat it back 2 stages (a stress point); 1 in 4 trample it: crop lost, the tilled brick dirt again | close the field in |
+| birds | 0.6 | ripe grain or beans, open sky | peck it back from ripe to half a stage before | a scarecrow within 8 m (x0.2) |
+| weeds | 0.12 | a crop, no mulch | x0.6 growth, a stress point a stage, till pulled (LMB) | mulch (12 leaves -> 6, by hand) |
+| blight | 0.06 | a field of one crop (24+ plots, 90%) | the crop lost | mixed fields |
+
+**Fields** (FarmFields): plots touching 8 ways, within a brick of each
+other's height. Open or closed by a flood over stud columns from the field's
+plots: a step is allowed to a column whose top is within one brick (3
+plates) up or down with two plates of room over it; reaching 24 studs past
+the field means open. So a wall two bricks high, a two-brick drop, or a dug
+moat all round closes it. The flood runs on a WorkerThreadPool job, one
+field at a time, taken when done (never a wait); fields are worked out again
+when plots come or go or any terrain edit lands (MineWorld.terrain_edited ->
+`terrain_changed`), at most every 1.5 s, for fields within 96 m. The flags
+(open, mono) are set on the plots after settling them, and saved with them:
+while far away a field stays as it was.
+
+**In the world.** An animals' trample (`packed`) is applied when the plot is
+next settled in reach: the tilled brick turns to dirt and the plot goes. LMB
+on a weedy plot pulls the weeds first (the crop stays). The look line shows
+"open to animals", "one-crop field: blight", weeds, "mulched", "scarecrow
+near", and the last event with how long ago. Items: scarecrow (12 wood + 6
+wheat at a workbench, a placed station with its own model), mulch. Plot rows
+now have 31 fields; older rows load with no trouble.
+
+**Tests.** farm_probe 109 (+9): exact with every trouble on; animals only in
+open fields; mulch keeps weeds off; a scarecrow cuts bird visits; weeds slow
+growth; trouble off means no events; fields group and spot a one-crop field;
+old rows load. --gate=farm: the field open, a stone ring closes it, a gap
+opens it (real floods), a scarecrow marks plots, LMB pulls weeds and keeps
+the crop, mulch goes on, an animals' trample turns a plot to dirt, and three
+days with trouble on bring events.

@@ -243,6 +243,24 @@
 			"colour": "#6b4a2a",
 			"glyph": "B",
 			"description": "Place it: compost recipes (leaves or crops into compost) can be made within 4 m of it."
+		},
+		"scarecrow": {
+			"name": "Scarecrow",
+			"kind": "station",
+			"model": "scarecrow",
+			"hand": "right",
+			"colour": "#c9a24a",
+			"glyph": "Y",
+			"description": "Place it by a field: birds keep off ripe crops within 8 m (most of them)."
+		},
+		"mulch": {
+			"name": "Mulch",
+			"kind": "fertiliser",
+			"mulch": true,
+			"max_stack": 99,
+			"colour": "#5b4a2a",
+			"glyph": "~",
+			"description": "Right-click a plot (or drag over a field): no weeds come up there, and the ones there are smothered. Made from leaves."
 		}
 	}
 }

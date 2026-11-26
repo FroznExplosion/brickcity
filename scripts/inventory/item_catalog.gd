@@ -185,7 +185,7 @@ static func _complete(e: Dictionary) -> Dictionary:
 	# how often it repeats while held (MineBuilder._break_cells/_break_repeat).
 	# A seed's crop (Docs/MineFarming.md): what it grows into.
 	# A fertiliser's fertility and boost (Docs/MineFarming.md 17).
-	for k in ["break_area", "break_repeat", "model", "crop", "fertility", "boost_days"]:
+	for k in ["break_area", "break_repeat", "model", "crop", "fertility", "boost_days", "mulch"]:
 		if e.has(k):
 			out[k] = e[k]
 	return out

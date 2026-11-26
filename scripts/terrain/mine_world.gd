@@ -1027,6 +1027,8 @@ func _wait_breaks() -> void:
 ## The field changed (a shot, a block broken or placed): rebake the tiles it
 ## names behind the old ones, and the far blocks over them.
 func terrain_edited(res: Dictionary) -> void:
+	if farming != null:
+		farming.terrain_changed()     # fields: a wall built or broken
 	water.terrain_changed(res)
 	# A stamped building undermined on one side tips (Docs/TerrainBuildings.md 4b).
 	MineBuildings.after_edit(self, res)
@@ -2102,7 +2104,7 @@ func how_kit_added(inv: Inventory) -> bool:
 	# (--gate=inventory counts on it).
 	for it in [&"hoe", &"scythe", &"watering_can", &"wheat_seeds", &"carrot", &"potato", &"beans", &"pumpkin_seeds", &"berries", &"corn",
 			&"cabbage_seeds", &"melon_seeds", &"oak_sapling", &"birch_sapling", &"dark_oak_sapling", &"acacia_sapling",
-			&"compost", &"grow_mix", &"compost_bin"]:
+			&"compost", &"grow_mix", &"compost_bin", &"scarecrow", &"mulch"]:
 		if ItemCatalog.has(it) and inv.ensure_item(it):
 			print("[mine] %s added to the inventory" % it)
 			added = true
