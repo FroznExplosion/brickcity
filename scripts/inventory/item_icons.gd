@@ -315,6 +315,14 @@ static func _model(d: Dictionary) -> Node3D:
 				_part(inner, _box(Vector3(0.04, 0.4, 0.55)), _mat(Color(0.1, 0.1, 0.12), 0.4), Vector3(0.41, 0.42, 0))
 				for z in [-0.13, 0.13]:
 					_part(inner, _box(Vector3(0.05, 0.1, 0.1)), _mat(Color(0.9, 0.9, 0.85), 0.3), Vector3(0.44, 0.5, z))
+			elif dm == "gatetile":
+				_part(inner, _box(Vector3(0.6, 0.9, 0.6)), _mat(col, 0.5), Vector3(0, 0.45, 0))
+				_part(inner, _cyl(0.18, 0.18, 0.15), _mat(col, 0.5), Vector3(0, 0.97, 0))
+				_part(inner, _box(Vector3(0.62, 0.9, 0.08)), _mat(col.lightened(0.4), 0.3, 0.5), Vector3(0, 0.45, 0.33))
+			elif dm == "display":
+				_part(inner, _box(Vector3(0.35, 0.8, 1.0)), _mat(Color(0.12, 0.13, 0.15), 0.5), Vector3(0, 0.4, 0))
+				_part(inner, _box(Vector3(0.04, 0.4, 0.14)), _mat(col, 0.3, 1.0, true), Vector3(0.18, 0.4, -0.12))
+				_part(inner, _box(Vector3(0.04, 0.4, 0.14)), _mat(col, 0.3, 1.0, true), Vector3(0.18, 0.4, 0.12))
 			elif dm == "button":
 				_part(inner, _box(Vector3(0.9, 0.4, 0.9)), _mat(Color(0.5, 0.5, 0.52), 0.6), Vector3(0, 0.2, 0))
 				_part(inner, _box(Vector3(0.5, 0.2, 0.5)), _mat(col, 0.35), Vector3(0, 0.5, 0))
