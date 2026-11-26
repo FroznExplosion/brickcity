@@ -221,7 +221,85 @@ static func _read_chunk(world: BrickWorld, c: int, ymap: Array) -> Array:
 ## the ground there. `host`: the mine world (terrain_edited). Returns
 ## {base (plate of its ground floor), lo, hi (its plate box), bricks, cells}.
 static func stamp(host: Node, corner: Vector2i, p: Dictionary) -> Dictionary:
-	return stamp_cells(host, corner, tower_cells(p))
+	var info := stamp_cells(host, corner, tower_cells(p))
+	if not info.is_empty():
+		info.merge(fit_out(host, corner, int(info.base), p))
+	return info
+
+
+# ---------------------------------------------------------------------------
+# Fittings (stage 6): the wiring's devices (Docs/MineWiring.md), not bricks.
+
+## Doors in every interior doorway and a lamp with its lever in every room,
+## as the mine world's wiring devices (MineWiring): a door opens with RMB (or
+## power), a lever lights its lamp. Lamps start dark: a lit lamp is a light
+## of its own (MineWiring: fine for tens, not a town's hundreds). Returns
+## {"doors", "lamps"}. Nothing when the world has no wiring.
+static func fit_out(host: Node, corner: Vector2i, base: int, p: Dictionary) -> Dictionary:
+	var wiring = host.get("wiring")
+	if wiring == null:
+		return {"doors": 0, "lamps": 0}
+	var ymap := course_map(int(p.courses))
+	var at := func(x: int, y: int, z: int) -> Vector3i:
+		return Vector3i(corner.x + x, base + int(ymap[clampi(y, 0, ymap.size() - 1)][0]), corner.y + z)
+	var keep: Array = []
+	var stair := TowerBlockout.stair_rect(p)
+	if stair.size != Vector2i.ZERO:
+		keep.append(stair)
+	var doors := 0
+	if bool(p.get("rooms", true)):
+		for dw: Dictionary in TowerRecipe.doorways(int(p.x), int(p.z), int(p.courses), keep, true):
+			doors += _hang_doors(wiring, dw, at)
+	var lamps := 0
+	if bool(p.get("rooms", true)):
+		for room: Room in RoomManifest.rooms_for(int(p.x), int(p.z), int(p.courses), int(p.get("seed", 1)),
+				p.get("program", {})):
+			lamps += _lamp_in(wiring, room, at)
+	return {"doors": doors, "lamps": lamps}
+
+
+## A doorway (TowerRecipe.doorways) is DOOR_WIDE studs: two 2-stud doors,
+## hinged at its two ends, meeting in the middle (a double door), in the
+## wall's near layer. How many it hung.
+static func _hang_doors(wiring, dw: Dictionary, at: Callable) -> int:
+	var span: Vector2i = dw.span
+	var line := int(dw.line)
+	var y := int(dw.floor_y)
+	var n := 0
+	var hung := []
+	if bool(dw.along_z):
+		# A wall along z: doors face +x / -x; +x's right is +z.
+		hung = [[at.call(line, y, span.x), 0], [at.call(line, y, span.y - 1), 1]]
+	else:
+		# A wall along x: -z's right is +x, +z's is -x.
+		hung = [[at.call(span.x, y, line), 3], [at.call(span.y - 1, y, line), 2]]
+	if span.y - span.x < 4:
+		hung = [hung[0]]
+	for h: Array in hung:
+		if wiring.place_device(h[0], &"door", false, false, int(h[1])):
+			n += 1
+	return n
+
+
+## A lamp on the floor of `room`, near its middle, a lever beside it (the
+## lever touching it lights it). 1 when laid.
+static func _lamp_in(wiring, room: Room, at: Callable) -> int:
+	var mid := Vector2(room.lo.x + room.size.x * 0.5, room.lo.z + room.size.z * 0.5)
+	var spots := []
+	for x in range(room.lo.x, room.lo.x + room.size.x):
+		for z in range(room.lo.z, room.lo.z + room.size.z):
+			spots.append([Vector2(x + 0.5, z + 0.5).distance_squared_to(mid), x, z])
+	spots.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
+	for sp: Array in spots:
+		var c: Vector3i = at.call(int(sp[1]), room.lo.y, int(sp[2]))
+		if not wiring.can_place_device(c, &"lamp"):
+			continue
+		for side: Vector3i in MineWiring.SIDES:
+			if wiring.can_place_device(c + side, &"lever"):
+				wiring.place_device(c, &"lamp")
+				wiring.place_device(c + side, &"lever")
+				return 1
+	return 0
 
 
 ## A workshop build (a BuildRecipe file) written into the field, as `stamp`.

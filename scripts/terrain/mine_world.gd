@@ -6711,6 +6711,33 @@ func _run_buildings_gate() -> void:
 	ok = int(info.glass) > 0 and MineBuildings.glass_material() == 41
 	check.call(ok, "its windows are glass (%d cells; material %d, the shader's 41)" % [int(info.glass), MineBuildings.glass_material()])
 	fails += 0 if ok else 1
+	# Stage 6: its fittings are the wiring's devices -- doors in its
+	# doorways, a lamp and lever in each room. A lever lights its lamp; a
+	# door opens by hand.
+	var in_box := func(c: Vector3i) -> bool:
+		return c.x >= lo.x and c.x <= hi.x and c.z >= lo.z and c.z <= hi.z and c.y >= base and c.y <= hi.y
+	var a_door := Vector3i.MAX
+	var lit_lamps := 0
+	for c: Vector3i in wiring.devices.keys():
+		if not in_box.call(c):
+			continue
+		var item: StringName = wiring.devices[c].item
+		if item == &"door" and a_door == Vector3i.MAX:
+			a_door = c
+		# The first storey's levers on: its rooms lit for the inside picture.
+		if item == &"lever" and c.y < base + 24:
+			wiring.use_device(c)
+	wiring.tick()
+	for c: Vector3i in wiring.devices.keys():
+		if in_box.call(c) and wiring.devices[c].item == &"lamp" and wiring.is_lit(c):
+			lit_lamps += 1
+	ok = int(info.get("doors", 0)) > 0 and int(info.get("lamps", 0)) > 0 and lit_lamps > 0
+	check.call(ok, "fitted out: %d doors, %d lamps with levers; the first storey's levers light %d" % [
+			int(info.get("doors", 0)), int(info.get("lamps", 0)), lit_lamps])
+	fails += 0 if ok else 1
+	ok = a_door != Vector3i.MAX and wiring.use_device(a_door) and wiring.is_open(a_door)
+	check.call(ok, "a door opens by hand")
+	fails += 0 if ok else 1
 	# Stage 4c: a building brick, mined, is an item -- plastic bricks of its
 	# colour; glass is its own block.
 	var bmat := MineBuildings.BUILDING_MATERIAL_BASE + 8
