@@ -30,6 +30,15 @@ extends SceneTree
 ##             is a one-way joint.
 ##   wrench    the readout names the net's level and a gate's facing and
 ##             inputs; turning a gate moves its output.
+## Stage 3 (Docs/MineWiring.md 15):
+##   door      fills 2 studs x 14 plates (no cable in it), opens with power
+##             from a side and shuts when it goes, RMB by hand, is not turned
+##             by the wrench, breaks when the ground under it goes.
+##   trapdoor  held by ground beside it over a pit (not in mid-air), opens
+##             with power from a lever a step up.
+##   observer  an edit or a cable in the stud it watches gives 15 out of its
+##             back for exactly 2 ticks, nothing at its side, nothing for an
+##             edit elsewhere; a load is not a change.
 
 var _pass := 0
 var _fail := 0
@@ -76,6 +85,7 @@ func _init() -> void:
 	_sensors(w)
 	_gates(w)
 	_wrench(w)
+	_stage3(w)
 	_save(w)
 	_save2(w)
 	_items()
@@ -441,6 +451,88 @@ func _wrench(w: MineWiring) -> void:
 	var gt := w.readout({"device": Vector3i(4, 0, 0)})
 	_ok("gate readout: facing and inputs (%s)" % gt, gt.contains("faces +x") and gt.contains("back 15"))
 	_ok("nothing looked at: no readout", w.readout({}) == "")
+
+
+func _stage3(w: MineWiring) -> void:
+	print("doors and observers")
+	w.clear()
+	var door := Vector3i(0, 0, 50)
+	_ok("a door on the ground", w.place_device(door, &"door", false, false, 0))
+	_ok("it fills its second stud to its top", w._device_at(Vector3i(0, 13, 51)) == door
+			and w._device_at(Vector3i(0, 14, 51)) == null)
+	_ok("no cable inside it", not w.place_cable(Vector3i(0, 0, 51)))
+	w.place_device(Vector3i(-1, 0, 50), &"lever")
+	w.tick()
+	_ok("shut while nothing powers it", not w.is_open(door))
+	w.use_device(Vector3i(-1, 0, 50))
+	w.tick()
+	_ok("the lever on: open", w.is_open(door))
+	w.use_device(Vector3i(-1, 0, 50))
+	w.tick()
+	_ok("the lever off: shut", not w.is_open(door))
+	_ok("RMB opens it by hand", w.use_device(door) and w.is_open(door))
+	w.tick()
+	_ok("and it stays open with no power change", w.is_open(door))
+	_ok("the wrench does not turn a door", not w.use_device(door, "turn"))
+	_holes[Vector3i(0, -1, 51)] = true
+	w.check(Vector3i(0, -1, 51), Vector3i(0, -1, 51))
+	_ok("the ground under its second stud gone: it breaks", not w.devices.has(door)
+			and w._device_at(Vector3i(0, 5, 50)) == null)
+	_holes.clear()
+	# Trapdoor over a pit 4 plates deep.
+	w.clear()
+	for x in [10, 11]:
+		for z in [50, 51]:
+			for y in range(-4, 0):
+				_holes[Vector3i(x, y, z)] = true
+	var trap := Vector3i(10, -1, 50)
+	_ok("no trapdoor in mid-air", not w.place_device(Vector3i(30, 3, 50), &"trapdoor", false, false, 0))
+	_ok("a trapdoor over the pit, held by the ground beside it", w.place_device(trap, &"trapdoor", false, false, 0))
+	w.place_device(Vector3i(12, 0, 50), &"lever")
+	w.tick()
+	_ok("shut", not w.is_open(trap))
+	w.use_device(Vector3i(12, 0, 50))
+	w.tick()
+	_ok("a lever a step up beside it: open", w.is_open(trap))
+	_holes.clear()
+	# Observer: watches (21, 0..2, 50), its back at 19.
+	w.clear()
+	var ob := Vector3i(20, 0, 50)
+	w.place_device(ob, &"observer", false, false, 0)
+	w.place_device(Vector3i(19, 0, 50), &"lamp")
+	w.place_device(Vector3i(20, 0, 51), &"lamp")
+	_ticks(w, 3)
+	_ok("nothing changed: dark", not w.is_lit(Vector3i(19, 0, 50)))
+	_extra[Vector3i(21, 0, 50)] = true
+	w.check(Vector3i(21, 0, 50), Vector3i(21, 0, 50))
+	var lit := 0
+	var side := false
+	for i in 6:
+		w.tick()
+		if w.is_lit(Vector3i(19, 0, 50)):
+			lit += 1
+		side = side or w.is_lit(Vector3i(20, 0, 51))
+	_ok("ground put in the stud it watches: its back lit for exactly 2 ticks (%d)" % lit, lit == 2)
+	_ok("nothing out of its side", not side)
+	_extra.clear()
+	w.check(Vector3i(21, 0, 50), Vector3i(21, 0, 50))
+	_ticks(w, 4)
+	w.check(Vector3i(25, 0, 50), Vector3i(25, 0, 50))
+	w.tick()
+	_ok("an edit elsewhere: nothing", not w.is_lit(Vector3i(19, 0, 50)))
+	w.place_cable(Vector3i(21, 0, 50))
+	w.tick()
+	_ok("a cable laid in front of it: a pulse", w.is_lit(Vector3i(19, 0, 50)))
+	_ticks(w, 4)
+	var saved: Variant = JSON.parse_string(JSON.stringify(w.to_save()))
+	var w2 := MineWiring.new()
+	w2.solid_fn = _solid
+	root.add_child(w2)
+	w2.restore(saved)
+	_ticks(w2, 2)
+	_ok("loaded again: the observer faces +x and does not fire for the load", int(w2.devices[ob].facing) == 0
+			and not w2.is_lit(Vector3i(19, 0, 50)))
+	w2.queue_free()
 
 
 func _save2(w: MineWiring) -> void:

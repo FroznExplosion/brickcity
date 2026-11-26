@@ -294,6 +294,19 @@ static func _model(d: Dictionary) -> Node3D:
 				_part(inner, _box(Vector3(1.0, 0.3, 1.0)), _mat(Color(0.5, 0.5, 0.52), 0.6), Vector3(0, 0.15, 0))
 				_part(inner, _box(Vector3(0.8, 0.5, 0.8)), _mat(col, 0.45), Vector3(0, 0.55, 0))
 				_part(inner, _box(Vector3(0.16, 0.3, 0.36)), _mat(Color(0.95, 0.95, 0.9), 0.4), Vector3(0.48, 0.5, 0))
+			elif dm == "door":
+				_part(inner, _box(Vector3(0.6, 1.2, 0.12)), _mat(col, 0.7), Vector3(0, 0.6, 0))
+				_part(inner, _box(Vector3(0.4, 0.3, 0.14)), _mat(Color(0.75, 0.88, 0.95), 0.1), Vector3(0, 0.85, 0))
+				_part(inner, _box(Vector3(0.08, 0.06, 0.2)), _mat(Color(0.8, 0.75, 0.4), 0.3), Vector3(0.2, 0.55, 0))
+			elif dm == "trapdoor":
+				_part(inner, _box(Vector3(1.0, 0.16, 1.0)), _mat(col, 0.7), Vector3(0, 0.08, 0))
+				for z in [-0.25, 0.25]:
+					_part(inner, _box(Vector3(0.95, 0.18, 0.08)), _mat(col.darkened(0.3), 0.7), Vector3(0, 0.09, z))
+			elif dm == "observer":
+				_part(inner, _box(Vector3(0.8, 0.8, 0.8)), _mat(col, 0.6), Vector3(0, 0.4, 0))
+				_part(inner, _box(Vector3(0.04, 0.4, 0.55)), _mat(Color(0.1, 0.1, 0.12), 0.4), Vector3(0.41, 0.42, 0))
+				for z in [-0.13, 0.13]:
+					_part(inner, _box(Vector3(0.05, 0.1, 0.1)), _mat(Color(0.9, 0.9, 0.85), 0.3), Vector3(0.44, 0.5, z))
 			elif dm == "button":
 				_part(inner, _box(Vector3(0.9, 0.4, 0.9)), _mat(Color(0.5, 0.5, 0.52), 0.6), Vector3(0, 0.2, 0))
 				_part(inner, _box(Vector3(0.5, 0.2, 0.5)), _mat(col, 0.35), Vector3(0, 0.5, 0))

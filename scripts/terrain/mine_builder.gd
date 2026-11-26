@@ -995,11 +995,13 @@ func _place_wiring(k: String, id: StringName) -> bool:
 	var ok := false
 	if k == "wire":
 		ok = host.wiring.place_cable(cell)
-	elif not _box_hits_player(host.wiring.device_box(cell, id)) and not host.chests.overlaps(host.wiring.device_box(cell, id)):
+	else:
 		# A device faces away from the player placing it.
 		var cam: Camera3D = host._eye_camera()
 		var f := MineWiring.facing_of(host.global_transform.basis.inverse() * -cam.global_transform.basis.z) if cam != null else 0
-		ok = host.wiring.place_device(cell, id, false, false, f)
+		var dbox: AABB = host.wiring.device_box(cell, id, f)
+		if not _box_hits_player(dbox) and not host.chests.overlaps(dbox):
+			ok = host.wiring.place_device(cell, id, false, false, f)
 	if not ok:
 		return false
 	inv.consume_hand(1)

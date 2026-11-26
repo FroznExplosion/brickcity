@@ -30,6 +30,15 @@ extends Node3D
 ##                  latch (left sets, right resets), delay (the back, 1-10
 ##                  ticks later; RMB sets), pulse (the back turning on gives
 ##                  2/5/10/20 ticks of 15; RMB sets).
+##   door           2 studs wide, 14 plates tall, a collider: opens (swings
+##                  to its front) while powered from any side, RMB opens or
+##                  shuts it by hand (stage 3, section 15).
+##   trapdoor       2 x 2 studs, a plate thick, a collider, held by ground
+##                  beside or under it: swings down open while powered (a
+##                  floor that drops whoever stands on it); RMB too.
+##   observer       a brick facing a way: when the ground, a cable or a device
+##                  in the column in front of it changes, it gives 15 out of
+##                  its BACK for 2 ticks.
 ##
 ## The TICK (10 Hz, with the water): sensors, then drivers' outputs, then net
 ## levels, then lamps, then every gate works out its next output from what it
@@ -54,7 +63,9 @@ const STEP := 3
 ## check()'s default box: everything (far from int overflow when grown).
 const WHOLE := 1 << 30
 ## The tallest device (plates): how far down a cell looks for one.
-const DEVICE_PLATES := 3
+const DEVICE_PLATES := 14
+## How long an observer's pulse is (ticks).
+const OBSERVER_TICKS := 2
 ## How long a button stays on, and a sensor after the last touch (ticks).
 const BUTTON_TICKS := 10
 const SENSOR_HOLD := 5
@@ -75,6 +86,11 @@ const DEVICES := {
 	&"latch": {"kind": "gate", "op": "latch", "plates": 3, "facing": true, "colour": Color(0.82, 0.64, 0.23)},
 	&"delay": {"kind": "gate", "op": "delay", "plates": 3, "facing": true, "colour": Color(0.42, 0.45, 0.5)},
 	&"pulse": {"kind": "gate", "op": "pulse", "plates": 3, "facing": true, "colour": Color(0.18, 0.72, 0.77)},
+	# Stage 3 (section 15). w: studs to the right of the facing; d: studs to
+	# the front. A device is a footprint of bottom cells, `plates` tall.
+	&"door": {"kind": "door", "plates": 14, "w": 2, "facing": true},
+	&"trapdoor": {"kind": "trapdoor", "plates": 1, "w": 2, "d": 2, "facing": true},
+	&"observer": {"kind": "observer", "plates": 3, "facing": true},
 }
 const SIDES: Array[Vector3i] = [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
 const SIDE_NAMES := ["+x", "-x", "+z", "-z"]
@@ -104,6 +120,8 @@ var nets := {}
 var _next_net := 1
 ## trip hook -> its partner (both ways).
 var pairs := {}
+## plate cell -> the bottom cell of the device filling it.
+var _occupied := {}
 
 var _changed_cells: Array[Vector3i] = []
 var _logic_dirty := false
@@ -238,11 +256,44 @@ func cable_box(c: Vector3i) -> AABB:
 	return AABB(Vector3(c.x * _stud, c.y * _plate, c.z * _stud), Vector3(_stud, _plate, _stud))
 
 
-func device_box(c: Vector3i, item: StringName = &"") -> AABB:
+## The bottom cells a device stands on: its own cell, then `w` studs to the
+## right of its facing and `d` to its front.
+static func footprint(c: Vector3i, item: StringName, facing: int) -> Array[Vector3i]:
+	var out: Array[Vector3i] = []
+	var def: Dictionary = DEVICES.get(item, {})
+	var f := clampi(facing, 0, 3)
+	var right := SIDES[right_of(f)]
+	var front := SIDES[f]
+	for i in int(def.get("w", 1)):
+		for k in int(def.get("d", 1)):
+			out.append(c + right * i + front * k)
+	return out
+
+
+## Every plate cell a device fills.
+static func cells_of(c: Vector3i, item: StringName, facing: int) -> Array[Vector3i]:
+	var out: Array[Vector3i] = []
+	for b in footprint(c, item, facing):
+		for dy in plates_of(item):
+			out.append(b + Vector3i(0, dy, 0))
+	return out
+
+
+func device_box(c: Vector3i, item: StringName = &"", facing := -1) -> AABB:
 	var it := item
-	if it == &"" and devices.has(c):
-		it = devices[c].item
-	return AABB(Vector3(c.x * _stud, c.y * _plate, c.z * _stud), Vector3(_stud, plates_of(it) * _plate, _stud))
+	var f := facing
+	if devices.has(c):
+		if it == &"":
+			it = devices[c].item
+		if f < 0:
+			f = int(devices[c].facing)
+	var box := AABB()
+	var first := true
+	for b in footprint(c, it, maxi(f, 0)):
+		var one := AABB(Vector3(b.x * _stud, b.y * _plate, b.z * _stud), Vector3(_stud, plates_of(it) * _plate, _stud))
+		box = one if first else box.merge(one)
+		first = false
+	return box
 
 
 func _solid(c: Vector3i) -> bool:
@@ -251,11 +302,45 @@ func _solid(c: Vector3i) -> bool:
 
 ## The device whose box holds plate cell `c`, as its bottom cell, or null.
 func _device_at(c: Vector3i):
-	for dy in DEVICE_PLATES:
-		var b := c - Vector3i(0, dy, 0)
-		if devices.has(b) and dy < plates_of(devices[b].item):
-			return b
-	return null
+	return _occupied.get(c, null)
+
+
+## Is a device held where it stands? A trapdoor by ground under it or beside
+## it at its plate; any other by ground under every cell of its footprint.
+func _supported(c: Vector3i, item: StringName, facing: int) -> bool:
+	var fp := footprint(c, item, facing)
+	if str(DEVICES.get(item, {}).get("kind", "")) == "trapdoor":
+		for b in fp:
+			if _solid(b + Vector3i.DOWN):
+				return true
+			for s in SIDES:
+				if not fp.has(b + s) and _solid(b + s):
+					return true
+		return false
+	for b in fp:
+		if not _solid(b + Vector3i.DOWN):
+			return false
+	return true
+
+
+## The column an observer watches: the stud in front of it, its height.
+func _watched(c: Vector3i) -> Array:
+	var f := SIDES[int(devices[c].facing)]
+	return [c + f, c + f + Vector3i(0, plates_of(devices[c].item) - 1, 0)]
+
+
+## Something changed in the plate cells lo..hi: the observers watching any of
+## them give their pulse.
+func _poke(lo: Vector3i, hi: Vector3i) -> void:
+	for c in devices:
+		if str(DEVICES[devices[c].item].kind) != "observer":
+			continue
+		var w := _watched(c)
+		var a: Vector3i = w[0]
+		var b: Vector3i = w[1]
+		if a.x >= lo.x and a.x <= hi.x and a.z >= lo.z and a.z <= hi.z and b.y >= lo.y and a.y <= hi.y:
+			devices[c].timer = OBSERVER_TICKS
+			_logic_dirty = true
 
 
 func _host_bodies() -> Array:
@@ -280,33 +365,36 @@ func place_cable(c: Vector3i, force := false) -> bool:
 	cables[c] = true
 	_changed_cells.append(c)
 	_pairs_dirty = true
+	_poke(c, c)
 	_changed()
 	return true
 
 
-func can_place_device(c: Vector3i, item: StringName = &"lamp") -> bool:
-	if not _solid(c + Vector3i.DOWN):
+func can_place_device(c: Vector3i, item: StringName = &"lamp", facing := 0) -> bool:
+	if not _supported(c, item, facing):
 		return false
-	for dy in plates_of(item):
-		var k := c + Vector3i(0, dy, 0)
+	for k in cells_of(c, item, facing):
 		if _solid(k) or cables.has(k) or _device_at(k) != null:
 			return false
-	# Nothing standing just under it reaches into it either.
 	return true
 
 
 func place_device(c: Vector3i, item: StringName, on := false, force := false, facing := 0, setting := -1) -> bool:
-	if not is_device(item) or (not force and not can_place_device(c, item)):
+	if not is_device(item) or (not force and not can_place_device(c, item, facing)):
 		return false
 	var op := str(DEVICES[item].get("op", ""))
 	var st := setting
 	if st < 0:
 		st = 2 if op == "delay" else (5 if op == "pulse" else 0)
-	var node := _device_node(c, item)
+	var f := clampi(facing, 0, 3)
+	var node := _device_node(c, item, f)
 	add_child(node)
-	devices[c] = {"item": item, "on": on, "facing": clampi(facing, 0, 3), "setting": st, "timer": 0,
+	devices[c] = {"item": item, "on": on, "facing": f, "setting": st, "timer": 0,
 			"out": 0, "lit": false, "prev": 0, "queue": [], "node": node}
+	for k in cells_of(c, item, f):
+		_occupied[k] = c
 	_show_device(c)
+	_poke_cells(c)
 	_logic_dirty = true
 	_pairs_dirty = true
 	_changed()
@@ -322,8 +410,8 @@ func use_device(c: Vector3i, how := "use") -> bool:
 	var d: Dictionary = devices[c]
 	var def: Dictionary = DEVICES[d.item]
 	if how == "turn":
-		if not bool(def.get("facing", false)):
-			return false
+		if not bool(def.get("facing", false)) or footprint(c, d.item, 0).size() > 1:
+			return false   # a door or trapdoor is taken up and laid again
 		d.facing = right_of(int(d.facing))
 		_show_device(c)
 		_pairs_dirty = true
@@ -333,6 +421,8 @@ func use_device(c: Vector3i, how := "use") -> bool:
 				d.on = not bool(d.on)
 			"button":
 				d.timer = BUTTON_TICKS
+			"door", "trapdoor":
+				d.on = not bool(d.on)
 			"gate":
 				match str(def.get("op", "")):
 					"delay":
@@ -357,6 +447,7 @@ func remove_cable(c: Vector3i, drop := true) -> bool:
 	cables.erase(c)
 	_changed_cells.append(c)
 	_pairs_dirty = true
+	_poke(c, c)
 	if drop:
 		_drop(&"cable", cable_box(c).get_center())
 	_changed()
@@ -368,6 +459,9 @@ func remove_device(c: Vector3i, drop := true) -> bool:
 		return false
 	var d: Dictionary = devices[c]
 	var box := device_box(c)
+	_poke_cells(c)
+	for k in cells_of(c, d.item, int(d.facing)):
+		_occupied.erase(k)
 	devices.erase(c)
 	if is_instance_valid(d.node):
 		(d.node as Node).queue_free()
@@ -377,6 +471,17 @@ func remove_device(c: Vector3i, drop := true) -> bool:
 	_pairs_dirty = true
 	_changed()
 	return true
+
+
+## A device's cells changed (placed, taken): the observers watching them pulse.
+func _poke_cells(c: Vector3i) -> void:
+	var d: Dictionary = devices[c]
+	var box_lo := c
+	var box_hi := c
+	for k in cells_of(c, d.item, int(d.facing)):
+		box_lo = Vector3i(mini(box_lo.x, k.x), mini(box_lo.y, k.y), mini(box_lo.z, k.z))
+		box_hi = Vector3i(maxi(box_hi.x, k.x), maxi(box_hi.y, k.y), maxi(box_hi.z, k.z))
+	_poke(box_lo, box_hi)
 
 
 func _drop(item: StringName, at: Vector3) -> void:
@@ -459,13 +564,18 @@ func check(lo := Vector3i(-WHOLE, -WHOLE, -WHOLE), hi := Vector3i(WHOLE, WHOLE, 
 	for c in devices.keys():
 		if not _inside(c, lo2, hi2):
 			continue
-		var bad := not _solid(c + Vector3i.DOWN)
-		for dy in plates_of(devices[c].item):
-			bad = bad or _solid(c + Vector3i(0, dy, 0))
+		var d: Dictionary = devices[c]
+		var bad := not _supported(c, d.item, int(d.facing))
+		for k in cells_of(c, d.item, int(d.facing)):
+			bad = bad or _solid(k)
 		if bad:
 			remove_device(c)
 			gone += 1
 	_pairs_dirty = true
+	# The ground changed in the box: observers watching it pulse (not for a
+	# whole check, which is not a change).
+	if lo.x != -WHOLE:
+		_poke(lo, hi)
 	return gone
 
 
@@ -478,6 +588,7 @@ func clear() -> void:
 		if is_instance_valid(devices[c].node):
 			(devices[c].node as Node).queue_free()
 	devices.clear()
+	_occupied.clear()
 	cables.clear()
 	net_of.clear()
 	nets.clear()
@@ -582,6 +693,8 @@ func output_toward(n: Vector3i, dir: Vector3i) -> int:
 	var def: Dictionary = DEVICES[d.item]
 	if str(def.kind) == "gate":
 		return int(d.out) if SIDES[int(d.facing)] == dir else 0
+	if str(def.kind) == "observer":
+		return int(d.out) if -SIDES[int(d.facing)] == dir else 0
 	return int(d.out) if bool(def.get("omni", false)) else 0
 
 
@@ -604,6 +717,8 @@ func _drive_sides(c: Vector3i) -> Array[Vector3i]:
 	var d: Dictionary = devices[c]
 	if str(DEVICES[d.item].kind) == "gate":
 		return [SIDES[int(d.facing)]]
+	if str(DEVICES[d.item].kind) == "observer":
+		return [-SIDES[int(d.facing)]]
 	if bool(DEVICES[d.item].get("omni", false)):
 		return SIDES
 	return []
@@ -628,6 +743,9 @@ func _evaluate() -> void:
 			"trip":
 				if pairs.has(c) and _crossed(c, pairs[c], bodies):
 					d.timer = SENSOR_HOLD
+				d.out = LEVEL_MAX if int(d.timer) > 0 else 0
+				d.timer = maxi(int(d.timer) - 1, 0)
+			"observer":
 				d.out = LEVEL_MAX if int(d.timer) > 0 else 0
 				d.timer = maxi(int(d.timer) - 1, 0)
 	# A string crossed powers both its hooks.
@@ -662,6 +780,20 @@ func _evaluate() -> void:
 		if lit != bool(d.lit):
 			d.lit = lit
 			_show_device(c)
+	# 3b. Doors and trapdoors: power turning on opens them, turning off shuts
+	# them; RMB in between opens or shuts by hand (Minecraft's iron door is
+	# power only, its wooden one hand only: here both).
+	for c in devices:
+		var d: Dictionary = devices[c]
+		var k := str(DEVICES[d.item].kind)
+		if k != "door" and k != "trapdoor":
+			continue
+		var p := power_in(c) > 0
+		if p != (int(d.prev) > 0):
+			d.prev = 1 if p else 0
+			if bool(d.on) != p:
+				d.on = p
+				_show_device(c)
 	# 4. Gates: the next output from what they read now, applied together.
 	var nexts := {}
 	for c in devices:
@@ -676,7 +808,7 @@ func _evaluate() -> void:
 			changed = true
 	for c in devices:
 		var k := str(DEVICES[devices[c].item].kind)
-		if k == "button" or k == "pressure" or k == "trip":
+		if k == "button" or k == "pressure" or k == "trip" or k == "observer":
 			_show_device(c)
 	if changed:
 		_logic_dirty = true
@@ -728,6 +860,23 @@ func _gate_next(c: Vector3i, d: Dictionary) -> int:
 			d.timer = maxi(int(d.timer) - 1, 0)
 			return out
 	return 0
+
+
+## The highest level reaching any side of a device's footprint (a door's
+## two studs, a trapdoor's four).
+func power_in(c: Vector3i) -> int:
+	var d: Dictionary = devices[c]
+	var fp := footprint(c, d.item, int(d.facing))
+	var lvl := 0
+	for b in fp:
+		for s in SIDES:
+			if not fp.has(b + s):
+				lvl = maxi(lvl, int(side_input(b, s)[0]))
+	return lvl
+
+
+func is_open(c: Vector3i) -> bool:
+	return devices.has(c) and bool(devices[c].on) and str(DEVICES[devices[c].item].kind) in ["door", "trapdoor"]
 
 
 ## Is someone standing on a pressure tile?
@@ -830,6 +979,11 @@ func readout(target: Dictionary) -> String:
 			parts.append("string to %s" % key_of(pairs[c]) if pairs.has(c) else "no string")
 		if str(def.kind) == "lamp":
 			parts.append("lit" if bool(d.lit) else "dark")
+		if str(def.kind) in ["door", "trapdoor"]:
+			parts.append("open" if bool(d.on) else "shut")
+			parts.append("power %d" % power_in(c))
+		if str(def.kind) == "observer":
+			parts.append("watches %s" % key_of(_watched(c)[0]))
 		return " | ".join(parts)
 	if target.has("cable") and net_of.has(target.cable):
 		var id: int = net_of[target.cable]
@@ -979,8 +1133,8 @@ func _redraw() -> void:
 		sm.set_instance_color(k, strings[k][1])
 
 
-func _device_node(c: Vector3i, item: StringName) -> Node3D:
-	var box := device_box(c, item)
+func _device_node(c: Vector3i, item: StringName, facing := 0) -> Node3D:
+	var box := device_box(c, item, facing)
 	var root := Node3D.new()
 	root.name = "%s_%s" % [String(item).capitalize().replace(" ", ""), key_of(c).replace(",", "_").replace("-", "m")]
 	root.position = Vector3(box.get_center().x, box.position.y, box.get_center().z)
@@ -1047,6 +1201,69 @@ func _device_node(c: Vector3i, item: StringName) -> Node3D:
 			light.position = Vector3(0, box.size.y * 0.6, 0)
 			light.visible = false
 			root.add_child(light)
+		"door", "trapdoor":
+			# Built with +x the front and +z the right, turned to the facing.
+			# The panel and its collider hang from a hinge: a door's at its
+			# left edge (swings to the front), a trapdoor's at its back edge
+			# (swings down).
+			var turn := Node3D.new()
+			turn.name = "Turn"
+			turn.rotation.y = _yaw(facing)
+			root.add_child(turn)
+			var hinge := Node3D.new()
+			hinge.name = "Hinge"
+			turn.add_child(hinge)
+			var size: Vector3
+			var mid: Vector3
+			if str(def.kind) == "door":
+				hinge.position = Vector3(0, 0, -_stud)
+				size = Vector3(_stud * 0.3, plates_of(item) * _plate, _stud * 2.0)
+				mid = Vector3(0, size.y * 0.5, _stud)
+			else:
+				hinge.position = Vector3(-_stud, 0, 0)
+				size = Vector3(_stud * 2.0, _plate, _stud * 2.0)
+				mid = Vector3(_stud, _plate * 0.5, 0)
+			var wood := _mat(Color(0.55, 0.37, 0.2), 0.7)
+			_add_box(hinge, size * Vector3(1, 1, 0.98), mid, wood)
+			if str(def.kind) == "door":
+				# A window and a handle.
+				_add_box(hinge, Vector3(size.x * 1.05, _plate * 3.0, _stud * 0.8), mid + Vector3(0, _plate * 3.0, 0),
+						_mat(Color(0.75, 0.88, 0.95), 0.1))
+				_add_box(hinge, Vector3(size.x * 1.6, _plate * 0.5, _stud * 0.12), mid + Vector3(0, -_plate * 0.5, _stud * 0.7),
+						_mat(Color(0.8, 0.75, 0.4), 0.3))
+			else:
+				for z in [-0.5, 0.5]:
+					_add_box(hinge, Vector3(_stud * 1.9, _plate * 1.08, _stud * 0.12), mid + Vector3(0, 0, z * _stud),
+							_mat(Color(0.4, 0.27, 0.15), 0.7))
+			var body := StaticBody3D.new()
+			body.collision_layer = Layers.WORLD
+			body.collision_mask = 0
+			var shape := CollisionShape3D.new()
+			var bs := BoxShape3D.new()
+			bs.size = size
+			shape.shape = bs
+			shape.position = mid
+			body.add_child(shape)
+			hinge.add_child(body)
+		"observer":
+			var turn := Node3D.new()
+			turn.name = "Turn"
+			turn.rotation.y = _yaw(facing)
+			root.add_child(turn)
+			_add_box(turn, Vector3(_stud * 0.96, _plate * 2.9, _stud * 0.96), Vector3(0, _plate * 1.45, 0),
+					_mat(Color(0.35, 0.36, 0.4), 0.6))
+			# The face it watches with (front), a light at its back.
+			_add_box(turn, Vector3(_stud * 0.06, _plate * 1.6, _stud * 0.7), Vector3(_stud * 0.49, _plate * 1.5, 0),
+					_mat(Color(0.1, 0.1, 0.12), 0.4))
+			for z in [-0.18, 0.18]:
+				_add_box(turn, Vector3(_stud * 0.08, _plate * 0.4, _stud * 0.14), Vector3(_stud * 0.52, _plate * 1.8, z * _stud),
+						_mat(Color(0.9, 0.9, 0.85), 0.3))
+			var glow := _mat(Color(0.8, 0.15, 0.1), 0.3)
+			glow.emission_enabled = true
+			glow.emission = Color(1.0, 0.2, 0.1)
+			glow.emission_energy_multiplier = 0.0
+			var dot := _add_box(turn, Vector3(_stud * 0.06, _plate * 0.6, _stud * 0.3), Vector3(-_stud * 0.49, _plate * 1.5, 0), glow)
+			dot.name = "Glow"
 		"gate":
 			# A slab, a coloured brick on it, an arrow at the front (+x before
 			# the turn), a light on top that glows while the output is on.
@@ -1117,6 +1334,21 @@ func _show_device(c: Vector3i) -> void:
 			var light := node.get_node_or_null("Light") as OmniLight3D
 			if light != null:
 				light.visible = bool(d.lit)
+		"door":
+			var h := node.get_node_or_null("Turn/Hinge") as Node3D
+			if h != null:
+				h.rotation.y = PI * 0.5 if bool(d.on) else 0.0
+		"trapdoor":
+			var h2 := node.get_node_or_null("Turn/Hinge") as Node3D
+			if h2 != null:
+				h2.rotation.z = -PI * 0.5 if bool(d.on) else 0.0
+		"observer":
+			var turn2 := node.get_node_or_null("Turn") as Node3D
+			if turn2 != null:
+				turn2.rotation.y = _yaw(int(d.facing))
+				var g2 := turn2.get_node_or_null("Glow") as MeshInstance3D
+				if g2 != null:
+					(g2.material_override as StandardMaterial3D).emission_energy_multiplier = 3.0 if int(d.out) > 0 else 0.0
 		"gate":
 			var turn := node.get_node_or_null("Turn") as Node3D
 			if turn != null:
@@ -1160,4 +1392,8 @@ func restore(saved) -> void:
 				continue
 			place_device(Vector3i(int(p[0]), int(p[1]), int(p[2])), StringName(str(e.get("item", ""))),
 					bool(e.get("on", false)), true, int(e.get("facing", 0)), int(e.get("setting", -1)))
+	# Loading is not a change: no observer fires for it.
+	for c in devices:
+		if str(DEVICES[devices[c].item].kind) == "observer":
+			devices[c].timer = 0
 	tick()
