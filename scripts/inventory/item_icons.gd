@@ -165,7 +165,13 @@ static func _model(d: Dictionary) -> Node3D:
 		kind = "produce"
 	elif str(d.get("model", "")) == "sapling":
 		kind = "sapling"
+	elif str(d.get("model", "")) == "ingot":
+		kind = "ingot"
 	match kind:
+		"ingot":
+			# A bar, narrower on top (Minecraft's ingot, in bricks).
+			_part(inner, _box(Vector3(1.0, 0.24, 0.5)), _mat(col, 0.25), Vector3(0, 0.12, 0))
+			_part(inner, _box(Vector3(0.8, 0.16, 0.36)), _mat(col.lightened(0.15), 0.25), Vector3(0, 0.32, 0))
 		"produce":
 			_part(inner, _cyl(0.45, 0.45, 0.6, 18), _mat(col, 0.4), Vector3(0, 0.3, 0))
 			_part(inner, _cyl(0.16, 0.16, 0.12), _mat(col, 0.4), Vector3(0, 0.66, 0))

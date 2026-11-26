@@ -1,0 +1,12 @@
+{
+	"smelting": [
+		{ "name": "Iron ingot", "input": "iron_ore", "take": 12, "output": "iron_ingot", "count": 1, "time": 5 },
+		{ "name": "Gold ingot", "input": "gold_ore", "take": 12, "output": "gold_ingot", "count": 1, "time": 5 },
+		{ "name": "Glass", "input": "sand", "take": 12, "output": "glass", "count": 12, "time": 5 }
+	],
+	"fuels": {
+		"coal_ore": { "take": 12, "seconds": 40 },
+		"wood": { "take": 12, "seconds": 7.5 },
+		"leaves": { "take": 12, "seconds": 2.5 }
+	}
+}

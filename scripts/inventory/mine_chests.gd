@@ -30,8 +30,12 @@ var sky: MineSkyLit = null
 ## key "x,y,z" (block) -> {"block": Vector3i, "slots": Array, "node": Node3D,
 ## "item": the item it is}. Not only chests: a crafting STATION (a workbench,
 ## a furnace; Docs/Inventory.md 12) is placed, kept, saved and broken the same
-## way, with no slots; `stations_near` says which are in reach.
+## way, with no slots; `stations_near` says which are in reach. A SMELTER (the
+## furnace; Docs/Inventory.md 15) has Smelting.SLOTS slots and a "furnace"
+## state, settled to the world time here every SETTLE_EVERY seconds.
 var chests := {}
+const SETTLE_EVERY := 0.25
+var _settle_in := 0.0
 var _stud := 0.35
 var _plate := 0.14
 
@@ -108,7 +112,7 @@ func place(block: Vector3i, slots: Array = [], force := false, item: StringName 
 	if chests.has(key):
 		return false
 	var s := slots
-	if not is_container(item):
+	if not is_container(item) and not is_smelter(item):
 		s = []
 	elif s.size() != slot_count(item):
 		# A backpack keeps the very array it carried (its contents go with it).
@@ -122,8 +126,51 @@ func place(block: Vector3i, slots: Array = [], force := false, item: StringName 
 		sky.sky_lit_model(node)
 		sky.track(node)
 	chests[key] = {"block": block, "slots": s, "node": node, "item": item}
+	if is_smelter(item):
+		chests[key]["furnace"] = Smelting.new_state(_now())
 	_changed()
 	return true
+
+
+## A furnace (Docs/Inventory.md 15): holds input, fuel and output and smelts.
+static func is_smelter(item: StringName) -> bool:
+	return bool(ItemCatalog.get_def(item).get("smelter", false))
+
+
+## A furnace's fire and smelt ({burn, burn_max, cook, t}), or {}.
+func furnace_state(key: String) -> Dictionary:
+	return chests[key].get("furnace", {}) if chests.has(key) else {}
+
+
+func _now() -> float:
+	if host != null and host.get("world_time") != null:
+		return float(host.get("world_time"))
+	return Time.get_ticks_msec() / 1000.0
+
+
+## Every furnace brought up to the world time: the one open in the screen
+## redraws it (its slots are the screen's), a change is saved.
+func settle_furnaces() -> void:
+	var now := _now()
+	var any := false
+	for key in chests:
+		var c: Dictionary = chests[key]
+		if not c.has("furnace"):
+			continue
+		if Smelting.settle(c.furnace, c.slots, now):
+			any = true
+			if inv != null and inv.chest_key == key:
+				inv.changed.emit()
+	if any:
+		_changed()
+
+
+func _process(delta: float) -> void:
+	_settle_in -= delta
+	if _settle_in > 0.0:
+		return
+	_settle_in = SETTLE_EVERY
+	settle_furnaces()
 
 
 func slots_of(key: String) -> Array:
@@ -139,6 +186,8 @@ static func is_container(item: StringName) -> bool:
 
 
 static func slot_count(item: StringName) -> int:
+	if is_smelter(item):
+		return Smelting.SLOTS
 	if ItemCatalog.kind(item) == "backpack":
 		return maxi(int(ItemCatalog.get_def(item).get("slots", 9)), 1)
 	return Inventory.CHEST_SIZE
@@ -308,6 +357,8 @@ func to_save() -> Dictionary:
 	for key in chests:
 		out[key] = {"item": String(chests[key].get("item", &"chest")),
 				"slots": Inventory._save_array(chests[key].slots)}
+		if chests[key].has("furnace"):
+			out[key]["furnace"] = (chests[key].furnace as Dictionary).duplicate()
 	return out
 
 
@@ -331,3 +382,8 @@ func restore(saved) -> void:
 		var slots := Inventory._empty(slot_count(item))
 		Inventory._load_array(slots, raw)
 		place(Vector3i(int(parts[0]), int(parts[1]), int(parts[2])), slots, true, item)
+		# A furnace's fire as it was: settling catches it up to the world time.
+		if is_smelter(item) and e is Dictionary and e.get("furnace") is Dictionary and chests.has(str(key)):
+			var f: Dictionary = chests[str(key)].furnace
+			for k in ["burn", "burn_max", "cook", "t"]:
+				f[k] = float(e.furnace.get(k, f[k]))

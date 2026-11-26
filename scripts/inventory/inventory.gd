@@ -58,6 +58,9 @@ var chest_slots: Array = []
 var chest_key := ""
 ## What the open container is called (a chest, a backpack put down).
 var chest_title := "Chest"
+## Whose rules its slots follow: "" (any item anywhere) or "furnace"
+## (Smelting: input, fuel only fuels, output taken from, never put into).
+var chest_rules := ""
 
 var _drag_active := false
 var _drag_button := -1
@@ -190,6 +193,13 @@ func slot_accepts(a: Dictionary, s: ItemStack) -> bool:
 		return false
 	if a.area == &"backpack":
 		return d.kind == "backpack"
+	if a.area == &"chest" and chest_rules == "furnace":
+		match int(a.index):
+			Smelting.OUTPUT:
+				return false
+			Smelting.FUEL:
+				return not Smelting.fuel_of(s.id).is_empty()
+		return true
 	match a.area:
 		&"offhand":
 			return d.hand == "any" or d.hand == "off"
@@ -226,6 +236,15 @@ func left_click(a: Dictionary) -> void:
 			return
 		set_slot(a, cursor)
 		cursor = null
+	elif s.same_kind(cursor) and not slot_accepts(a, cursor):
+		# A furnace's output: what is there comes onto the held stack.
+		var n := mini(s.count, ItemCatalog.max_stack(s.id) - cursor.count)
+		if n <= 0:
+			return
+		cursor.count += n
+		s.count -= n
+		if s.count <= 0:
+			set_slot(a, null)
 	elif s.same_kind(cursor):
 		cursor = _merge_into(s, cursor)
 	else:
@@ -244,7 +263,7 @@ func right_click(a: Dictionary) -> void:
 			if not slot_accepts(a, cursor):
 				return
 			set_slot(a, ItemStack.make(cursor.id, 1, cursor.data))
-		elif s.same_kind(cursor) and s.count < ItemCatalog.max_stack(s.id):
+		elif s.same_kind(cursor) and s.count < ItemCatalog.max_stack(s.id) and slot_accepts(a, cursor):
 			s.count += 1
 		else:
 			return
@@ -281,6 +300,15 @@ func shift_click(a: Dictionary) -> void:
 		targets = [hotbar_area(), hotbar_area(1 - active_hotbar)] + ([&"chest"] if not chest_key.is_empty() else [])
 	elif not chest_key.is_empty() and a.area == &"chest":
 		targets = [hotbar_area(), hotbar_area(1 - active_hotbar), &"main"]
+	elif not chest_key.is_empty() and chest_rules == "furnace":
+		# Into a furnace: what smelts on top, what burns below (fuel first
+		# for what only burns).
+		var order := [addr(&"chest", Smelting.INPUT), addr(&"chest", Smelting.FUEL)]
+		if not Smelting.smelts(s.id):
+			order.reverse()
+		set_slot(a, _insert_addrs(s, order))
+		changed.emit()
+		return
 	elif not chest_key.is_empty():
 		targets = [&"chest"]
 	elif a.area == &"main":
@@ -474,7 +502,7 @@ func _insert(s: ItemStack, areas: Array) -> ItemStack:
 	for area in areas:
 		for i in area_size(area):
 			var t := get_slot(addr(area, i))
-			if t != null and t.same_kind(s):
+			if t != null and t.same_kind(s) and slot_accepts(addr(area, i), s):
 				s = _merge_into(t, s)
 				if s == null:
 					return null
@@ -485,6 +513,51 @@ func _insert(s: ItemStack, areas: Array) -> ItemStack:
 				set_slot(a, s)
 				return null
 	return s
+
+
+## `s` into the slots `addrs` in order (those that take it): onto its own
+## kind, else an empty one. What did not fit, or null.
+func _insert_addrs(s: ItemStack, addrs: Array) -> ItemStack:
+	for a in addrs:
+		var t := get_slot(a)
+		if t != null and t.same_kind(s) and slot_accepts(a, s):
+			s = _merge_into(t, s)
+			if s == null:
+				return null
+	for a in addrs:
+		if get_slot(a) == null and slot_accepts(a, s):
+			set_slot(a, s)
+			return null
+	return s
+
+
+## Everything carried of item `id` moved into slot `a` (onto what is there,
+## up to a full stack): the recipe book filling a furnace (Bedrock's). How many.
+func fill_slot(a: Dictionary, id: StringName) -> int:
+	var t := get_slot(a)
+	if t != null and t.id != id:
+		return 0
+	var moved := 0
+	for c in _carried():
+		var s := get_slot(c)
+		if s == null or s.id != id or not s.contents.is_empty():
+			continue
+		t = get_slot(a)
+		var room := ItemCatalog.max_stack(id) - (t.count if t != null else 0)
+		if room <= 0:
+			break
+		var n := mini(room, s.count)
+		if t == null:
+			set_slot(a, ItemStack.make(id, n, s.data))
+		else:
+			t.count += n
+		s.count -= n
+		moved += n
+		if s.count <= 0:
+			set_slot(c, null)
+	if moved > 0:
+		changed.emit()
+	return moved
 
 
 ## Take one (or the whole stack) out of slot `a`, for dropping into the world.
@@ -754,16 +827,18 @@ func clear_craft() -> Array:
 
 ## Borrow `slots` (kept by the chest's owner) under `key`, so the clicks change
 ## it in place.
-func open_chest(key: String, slots: Array, title := "Chest") -> void:
+func open_chest(key: String, slots: Array, title := "Chest", rules := "") -> void:
 	chest_key = key
 	chest_slots = slots
 	chest_title = title
+	chest_rules = rules
 	changed.emit()
 
 
 func close_chest() -> void:
 	chest_key = ""
 	chest_slots = []
+	chest_rules = ""
 	changed.emit()
 
 
