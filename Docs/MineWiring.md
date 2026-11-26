@@ -291,7 +291,7 @@ Small stages, each with a probe and a gate, each merged:
 3. Door, trapdoor, gate tile; observer (from `terrain_edited`); sequencer
    brick; number tile. **Door, trapdoor, observer built 2026-11-25** (section
    15); gate tile, sequencer, number display **built 2026-11-26** (section 16).
-4. Piston: up first (unclutch + group + limit), then sideways with the hop,
+4. Piston (plan in section 17): up first (unclutch + group + limit), then sideways with the hop,
    the stand-in slide, the kinematic shove; sticky piston. Moving groups are
    contraptions (section 12): one body, riders carried by contact.
 4b. Turntable brick and winch (the same contraption mover).
@@ -596,6 +596,62 @@ its back held on, RMB picks the next program, saved; the display's 0 and
 shut by a lever with its colliders off and on, a display laid by the
 builder reading 15, a sequencer's lamp lit-dark-lit-dark in the real tick,
 all back after a reload.
+
+## 17. Stage 4 plan: pistons (written 2026-11-26, before building)
+
+What the code has to do, from what the ground gives (section 6, 1):
+
+- **The unit that moves is a placed brick** (`BrickTerrain.mark_placed`,
+  TerrainBond.md 1): a course of 1-15 x 1-15 studs, its cells in `g_placed`
+  with their offset and size (`placed_at`, brick_terrain.cpp). Generated
+  ground is bonded into the hillside and never moves (the piston stalls);
+  sand and gravel (loose, 1x1 columns) may be moved one column at a time
+  later.
+- **C++ first (small):** bind `BrickTerrain.placed_rect(x, course, z)` ->
+  `Vector4i(rx, rz, sx, sz)` or `(0,0,0,0)` (a wrapper over `placed_at`), so
+  a script finds the brick in front of a piston without reading every placed
+  cell (`get_placed` is the whole table). Needs the godot-cpp junction and
+  SCons in the worktree (CLAUDE.md "Building"); build alone.
+- **The group (clutch is slime, 6.3):** the brick in front, then every placed
+  brick standing on a group brick's top studs (a placed cell in the course
+  above any of its cells), repeated; for an UP push only the bricks above
+  come along; for a sideways push the same, and a placed brick beside it in
+  the push direction is pushed too (Minecraft's line). Limit 12 bricks
+  (section 9); any generated ground, bedrock, a device or a chest in the way
+  of the moved cells stalls the push.
+- **The move:** read each brick's cells (material per plate via `solid_at`),
+  `fill_box` air over all of them, `fill_box` them at the new place (+1
+  course up, or +push studs sideways; a placed brick's step is its own
+  width along the push? no: one stud per push, so bricks stay on the stud
+  lattice), `mark_placed` each brick again, one `terrain_edited` over the
+  union (collapse survey, water, observers all follow). Pull (sticky) is the
+  same backwards.
+- **The look (6.1, 6.2):** the move is written at once; a stand-in (the
+  group's bricks as boxes in one MultiMesh, the falling-sand way) animates
+  from the old place to the new in 0.2 s -- straight up, or the HOP sideways
+  (up a plate, across, down) -- and is hidden when the rebaked tiles swap in
+  (~40-60 ms) or the animation ends, whichever is later.
+- **The player:** a moving group shoves or lifts a body in its way: during
+  the animation, the player's feet inside the group's box are moved with it
+  (the carried-by-contact rule, Hulls.md 7b.3, kept simple: lifted on top,
+  pushed when beside).
+- **Devices:** a piston is a facing device that may also face UP (a fifth
+  facing; the builder gives UP when the camera looks steeply down). Its head
+  shows extended while powered; power rising pushes, falling retracts (a
+  sticky piston pulls the brick back). A chest or device in front stalls it
+  (moving those is later).
+- **Cost:** one push = one terrain edit (a tile rebake on a worker, 9-14
+  ms); at most 4 pushes a tick, the rest wait a tick.
+- **Tests:** wiring_probe can test the group and limit rules only against the
+  real field (placed bricks are C++ state), so a probe on a flat generated
+  world or `--gate=wiring` checks: a placed brick pushed up one course and
+  still one brick; a stack of 3 rides along; 13 stalls; generated ground
+  stalls; sideways push lands one stud over, the brick beside pushed too;
+  sticky pull brings it back; the collapse survey drops what a pulled support
+  held; the player on a pushed brick is lifted.
+
+Order: C++ binding -> group + move + stall (no animation) with tests -> the
+stand-in animation and hop -> the player shove -> sticky piston.
 
 ## Sources
 
