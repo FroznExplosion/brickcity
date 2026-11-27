@@ -1205,7 +1205,7 @@ uint32_t g_rain_seq = 0;
 /// A column's top solid plate (packed_tops), or INT_MIN.
 int rain_top(int x, int z) {
     const int tx = fdiv(x, SX), tz = fdiv(z, SX);
-    const std::shared_ptr<const TilePack> pk = packed_tops(tx, tz);
+    const std::shared_ptr<const TileTops> pk = packed_tops(tx, tz);
     if (!pk || pk->top.size() < (size_t)(SX * SX)) return INT_MIN;
     return pk->top[(size_t)(x - tx * SX) + (size_t)SX * (size_t)(z - tz * SX)];
 }
@@ -3274,6 +3274,37 @@ bool BrickFluid::any_fluid(Vector3i lo, Vector3i hi, int fluid) {
     return false;
 }
 
+/// TerrainNav (ai/terrain_nav.cpp, Docs/MineCreatures.md 11): courses
+/// [b0, b0 + nb) of column (x, z): 0 dry, 1 water, 2 lava. One lock for the
+/// column; safe from a worker (g_state is the lock every reader takes).
+void fluid_column(int x, int z, int b0, int nb, uint8_t *out) {
+    MainLock lk;
+    for (int i = 0; i < nb; ++i) {
+        const Cell c = rcell(x, b0 + i, z);
+        out[i] = c_wet(c) ? (uint8_t)c_fluid(c) : 0;
+    }
+}
+
+/// TerrainNav (Docs/MineCreatures.md 11): the cells changed since write
+/// count `since`, as (x, course, z) triplets, and the count now. False when
+/// the log is off or does not reach back that far: everything may have changed.
+bool fluid_changes_since(int64_t since, int64_t &now, std::vector<int> &out) {
+    std::lock_guard<std::recursive_mutex> lk(g_state);
+    now = g_writes.load();
+    if (!g_log_on || since < g_log_floor) {
+        return false;
+    }
+    auto it = std::upper_bound(g_log.begin(), g_log.end(), std::make_pair(since, INT64_MAX));
+    for (; it != g_log.end(); ++it) {
+        int x, b, z;
+        unpack3(it->second, x, b, z);
+        out.push_back(x);
+        out.push_back(b);
+        out.push_back(z);
+    }
+    return true;
+}
+
 Dictionary BrickFluid::cell_info(Vector3i cell) {
     MainLock lk;
     const Cell c = rcell(cell.x, cell.y, cell.z);
@@ -3320,7 +3351,10 @@ double BrickFluid::surface_at(Vector3 p) {
     }
     const int f = c_fluid(c);
     int b = k.y;
-    for (int i = 0; i < 64; ++i) {
+    // Up to the top of the body, however deep (the deep ocean is 70-90 m,
+    // Docs/MineOcean.md 2.1; 64 bricks stopped 27 m down, and a swimmer
+    // deeper floated to that as its surface). The bedrock is 300 bricks down.
+    for (int i = 0; i < 400; ++i) {
         const Cell a = rcell(k.x, b + 1, k.z);
         if (!(c_wet(a) && c_fluid(a) == f)) break;
         c = a;

@@ -13,8 +13,11 @@ extends RefCounted
 ##   fluid (1 water, 2 lava, 0 none), fluid_kind ("source" / "still").
 
 const KINDS := ["block", "fluid", "bucket", "source_bucket", "chest", "station", "tool", "backpack", "gun", "grenade",
-		"hoe", "seed", "scythe", "can", "fertiliser", "wire", "device", "wrench", "misc"]
-## Which hand an item may be in (zylanntest's HandUse).
+		"hoe", "seed", "scythe", "can", "fertiliser", "wire", "device", "wrench", "fence", "shield", "spawner", "misc"]
+## Which hand an item may be in (zylanntest's HandUse). Since 2026-11-26
+## only "two" limits a slot: a two-handed item never goes in the off-hand
+## (Inventory.slot_accepts); "right" and "off" say how an item is meant to
+## be held (a shield "off"), every hand slot takes them.
 const HANDS := ["any", "right", "off", "two"]
 ## The gun classes held in one hand (PlayerView.ONE_HAND draws them so).
 const ONE_HANDED_GUNS: Array[StringName] = [&"pistol", &"revolver"]
@@ -78,6 +81,15 @@ static func load_all(force := false) -> void:
 				var e: Dictionary = raw.duplicate(true)
 				e["id"] = StringName(k)
 				_add(e)
+	# SPAWNERS (Docs/MineCreatures.md 12): one per creature -- the zombie and
+	# every CreatureBook animal, a pack's too -- for the creative Spawn tab.
+	_add_spawner(&"zombie", "Zombie", Color("5f8f4a"), "The mine world's monster.")
+	for kind in CreatureBook.ids():
+		var cd := CreatureBook.get_def(kind)
+		var look: Dictionary = cd.get("look", {})
+		_add_spawner(kind, str(cd.name), Color(str(look.get("colour", "#a08060"))),
+				"A %s, %s." % [str(cd.name).to_lower(), {"prey": "a herd animal", "boar": "charges when hurt",
+						"predator": "a pack hunter"}.get(str(cd.temper), "an animal")])
 	# PLASTIC BRICKS (Docs/TerrainBuildings.md 4c): one material for every
 	# building colour (brick_terrain.h MAT_FIL_BASE + a filament), so a brick
 	# mined out of a stamped building is one of these, in its colour, and
@@ -192,10 +204,33 @@ static func _complete(e: Dictionary) -> Dictionary:
 	# how often it repeats while held (MineBuilder._break_cells/_break_repeat).
 	# A seed's crop (Docs/MineFarming.md): what it grows into.
 	# A fertiliser's fertility and boost (Docs/MineFarming.md 17).
-	# A furnace smelts (`smelter`, Docs/Inventory.md 15).
-	for k in ["break_area", "break_repeat", "model", "crop", "fertility", "boost_days", "mulch", "smelter"]:
+	# A furnace smelts (`smelter`, Docs/Inventory.md 15); a station's crafting grid (`grid`, 16).
+	# A fence's height in plates (MineFences, Docs/MineCreatures.md 5.3).
+	# A shield's damage it takes before it breaks (`durability`, round four).
+	for k in ["break_area", "break_repeat", "model", "crop", "fertility", "boost_days", "mulch", "smelter", "plates",
+			"grid", "counts_as", "durability", "gate", "creature"]:
 		if e.has(k):
 			out[k] = e[k]
+	return out
+
+
+## A creative spawn item for `creature`: spawn_<creature>.
+static func _add_spawner(creature: StringName, nice: String, colour: Color, what: String) -> void:
+	var id := StringName("spawn_%s" % creature)
+	if _items.has(id):
+		return
+	_add({"id": id, "name": "Spawn %s" % nice.to_lower(), "kind": "spawner", "creature": String(creature),
+			"max_stack": 64, "colour": colour, "glyph": nice.substr(0, 1).to_upper(), "tags": ["creative", "spawn"],
+			"description": "%s Right-click the ground: one appears there (an animal joins a herd of its kind near it)." % what})
+
+
+## The spawn items, in order (the creative Spawn tab).
+static func spawn_ids() -> Array:
+	load_all()
+	var out := []
+	for id in _order:
+		if str(_items[id].kind) == "spawner":
+			out.append(id)
 	return out
 
 
@@ -242,6 +277,9 @@ static func label(s: ItemStack) -> String:
 			return str(s.data.get("name", n))
 		"bucket":
 			return "%s %d/%d tiles" % [n, int(s.data.get("tiles", 0)), BUCKET_TILES]
+		"shield":
+			var cap := maxi(int(d.get("durability", 336)), 1)
+			return "%s %d%%" % [n, roundi(100.0 * (cap - int(s.data.get("wear", 0))) / cap)]
 		"source_bucket":
 			return "%s (%s)" % [n, ["empty", "water", "lava"][clampi(int(s.data.get("fluid", 0)), 0, 2)]]
 		"can":

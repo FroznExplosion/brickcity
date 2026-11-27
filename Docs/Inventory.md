@@ -374,12 +374,13 @@ a layout, not a rule.
   kept, so going back to a one-handed item brings the off-hand back up.
   `Inventory.offhand()` is the off-hand in use: null while down, empty or
   lowered.
-- **What may go in the off-hand** (`hand`): `any` (the default for a pack
-  item with none) = blocks, pistols, revolvers, every wiring device and
-  cable, chests, buckets and fluids, pickaxes, seeds and crops; `off` =
-  shields (none yet); `right` = the wrench, grenades, hoe, scythe, watering
-  can, backpacks, stations; `two` = the other guns. RMB with a non-gun in
-  the off-hand, up, is its place/pour (`place_target` on the off-hand).
+- **What may go where** (the user, 2026-11-26): the hotbars and the
+  quick slot (an extra hotbar slot) take anything. The off-hand takes
+  anything but a two-handed item (`hand: "two"`: every gun but pistol and
+  revolver) -- placeables (blocks, devices, chests), food, one-handed guns,
+  shields (`off`, none yet), tools. `right` and `off` no longer limit a
+  slot; they say how an item is meant to be held. RMB with a non-gun in the
+  off-hand, up, is its place/pour (`place_target` on the off-hand).
 - **The quick slot** (`Inventory.quick`, one slot, saved; area `quick`):
   B pulls it out (pad: hold RB) -- it is the main hand until put away:
   B again, a tap of X or a turn of the wheel (pad: an RB/LB tap, a Y tap)
@@ -396,24 +397,39 @@ a layout, not a rule.
   reloads by itself when empty, and with R. Its trigger rules are the
   gun's own (GunFireMode): a pistol that charges fires on the release, so a
   long hold charges instead. It is drawn low on the left
-  of the view (no left arm pose yet: later, with ViewArms). Dual pistols
+  of the view, the left arm's C round its grip (`PlayerView.off_held`,
+  2026-11-26): it stays on that gun through a sprint, a bash or a reload of
+  the right one; with a block in the main hand the right arm swings open. Dual pistols
   are a main pistol + an off-hand pistol, up: LMB right, RMB left, no
   sights.
 - **HUD**: the off-hand slots left of the bars, dim while down (or lowered
   by a two-handed item); the quick slot right of the bars, outlined while
   out; the caption names both hands ("Pickaxe  |  off: Stone").
-- **Filling them**: the screen has no off-hand or quick slots (section 14):
-  C over a slot swaps it with the active off-hand slot, B with the quick
-  slot; over an empty slot the hand's item lands there.
+- **Filling them**: the screen shows both (2026-11-26, section 14): the
+  off-hand slots left of the hotbars, the quick slot right of hotbar 1;
+  click items in and out like any slot. C over a slot still swaps it with
+  the active off-hand slot and B with the quick slot, as a shortcut; over an
+  empty slot the hand's item lands there.
 - **Never by themselves**: pickups, crafting, shift-click and the cursor
   going back never put an item into an empty off-hand slot (a stack of the
   same kind there is topped up by a pickup).
-- Shields: an `off` item needs blocking, which does not exist yet -- later.
+- **Shields** (2026-11-26): the Brick Shield (`shield`, kind `shield`,
+  hand `off`, `durability` 336; workbench: 72 wood + 1 iron ingot). In the
+  off-hand, up: drawn low on the left, the left arm on its handle; RMB held
+  raises it (MineHands.blocking, 0.12 s). Raised, it is the pawn's
+  `HealthPool.guard` (a hook in DamageSystem, one funnel for every hit): a
+  hit from within 60 degrees of the view -- where its source is, or its
+  point -- is blocked whole (`DamageResult.blocked`, no damage, no status)
+  and wears the shield by its damage (`data.wear`, shown as "Brick Shield
+  83%"); worn out it breaks and is gone. Hits from the side or behind land.
+  Not done: slower walking while it is up, a block sound, armour (section 16).
 - Tests: inventory_probe (the off-hand rules, pickups never into it, the
   quick slot and up flag saved); `--gate=inventory` 4a (stone laid from the
   off-hand with C and RMB), 4b (the off-hand pistol fires on RMB taps, a
-  rifle lowers it, it comes back), 4c (B, X, the wheel, 3; saved).
-  2026-11-26: probe 141 ok, gate PASS (109 checks).
+  rifle lowers it, it comes back), 4c (B, X, the wheel, 3; saved), 4d
+  (the shield: raised by RMB, a hit from in front blocked and worn, one
+  from behind lands, let go it lands, worn out it breaks).
+  2026-11-26: probe 147 ok, gate PASS (115 checks).
 
 ## 5. Tests
 
@@ -552,12 +568,16 @@ ingredient lists, not shapes, so the grid only shows them.
   leaves it, a click elsewhere too. Otherwise every key is the screen's (E,
   Tab, Escape, Q, 1-9 as before).
 
-**No off-hand slots in the screen** (the user: no armour, off-hand or player
-figure there). The off-hand itself came back the same day in play (round
-four, section 4, decided with the user in another chat): it is filled
-Minecraft's way -- C over a slot in the screen swaps it with the active
-off-hand slot, B with the quick slot (`Inventory.swap_slots`) -- and the HUD
-shows both. Crafting and pickups still never put anything there by themselves.
+**The hands in the screen.** First the user wanted no armour, off-hand or
+player figure in the screen; the off-hand came back the same day in play
+(round four, decided with the user in another chat), and on 2026-11-26 the
+user asked for the off-hand and quick slots to be shown in the screen too.
+They sit as the HUD has them: the two off-hand slots in a column left of the
+hotbars (the active one framed, both dimmed while the off-hand is down), the
+quick slot right of hotbar 1 (framed while it is out); the storage is padded
+to stay over the hotbars. C / B over a slot remain shortcuts
+(`Inventory.swap_slots`). Crafting and pickups still never put anything there
+by themselves. Still no armour and no player figure.
 
 **Not done (Minecraft has it):** 3x3 shapes, the result onto the cursor.
 Furnaces smelt over time since section 15.
@@ -632,3 +652,135 @@ book's Iron ingot fills the input, the coal clicked below, the world's time
 moved on (half a smelt shown on the arrow, then 2 ingots), the ingots
 clicked out, then shut: a minute on gives 3 gold ingots; saved with its
 fire. Pictures: user://dev/inv_furnace, inv_furnace_done.
+
+## 16. Shaped crafting, the recipe editor, armour and the figure (2026-11-26)
+
+**Status:** 16.1-16.3 built (shaped recipes, the real grid, the result onto
+the cursor, the recipe editor); 16.4 not built: the user, 2026-11-26, will
+not use Minecraft's armour system (armour, if any, is its own design later),
+and the player figure waits with it. Built as below, with these choices for the open
+questions: (1) a new **Workshop table** station (`grid: 4`, `counts_as:
+workbench`) gives the 4x4 grid, made at a workbench from 8 wood + an iron
+ingot; no recipe needs 4x4 yet. (2) The editor saves into the base pack's
+`data/recipes/custom.json` in the editor build, into the mod pack
+`user://mods/my_recipes/` (made with its pack.json) in a player build. (4)
+base.json's recipes have Minecraft shapes with cells of 12; farming.json's
+(the farming chat's) stay shapeless lists, which the grid also takes.
+
+**How it plays.** The grid is real: 2x2 in the inventory, 3x3 at a
+workbench, 4x4 at a workshop table; click or drag items in. The result slot
+shows what the grid's layout makes (shape anywhere in the grid, mirrored
+too; or a shapeless list's items), red while a cell is short even with what
+you carry. Click it: onto the cursor (only onto nothing or the same item);
+Shift-click: as many as can be, into the inventory, the grid's cells topped
+up from what you carry between makes -- and only of the recipe it started
+with (a half-used ring of wood is also a compost bin: Shift-click stops
+there). The book's click empties the grid back and lays the recipe in it
+from what you carry, each cell up to its count; what is missing shows as a
+faint ghost, red. The picked recipe is matched first (two lists of iron
+ingots, a can and a sprinkler, are told apart by what was picked). Closing
+the screen puts the grid's items back.
+
+**Code.** `RecipeBook`: `pattern`/`key` parsed and trimmed (`trim_shape`,
+`signature`), `grid`, `match_grid(grid, n, prefer)`, `to_raw`,
+`save_custom`, `delete_custom`, `custom_path` (`custom_path_override` for
+probes). `Inventory`: area `craft` (`craft_grid`, `craft_n`,
+`set_craft_size`, `grid_match`, `grid_lack`, `craft_grid_now`, `fill_grid`,
+`grid_prefer`); `count_of` counts the grid too, `count_carried` not.
+`InventoryScreen`: the grid's slots, ghosts (`InvSlot.ghost`), the Editor
+tab. `RecipeEditorPanel`: the editor. `MineChests.stations_near` adds a
+station's `counts_as`.
+
+**Tests.** inventory_probe `_grid_crafting` (17 checks): shapes parsed, a
+cell's count made up from what is carried, the lack in words, a shape in a
+corner of a bigger grid, the book's fill and its ghosts, Shift-click
+stopping at its recipe, a 3x3 recipe refused in a 2x2 grid, shapeless,
+nothing onto a held stack of another kind, a recipe to JSON and back, the
+editor's save (2 wood in one cell) and its refusing a taken shape (to a
+probe file). `--gate=inventory`: the book laying 12 stone in the 2x2 grid,
+the gravel onto the cursor, put back; the 3x3 grid at the workbench; the
+Editor tab, wood from the palette clicked into a cell twice (wood x2).
+Picture: user://dev/inv_editor.
+
+The user: do all of what section 14 left out (3x3 shapes, the result onto the
+cursor, armour, the player figure); use zylanntest's recipe builder
+(`tools/recipe_builder/crafting/`) so recipes can be made and edited in game;
+crafting grids of **2x2, 3x3 and 4x4**; a grid cell may need **several of an
+item** (e.g. 2 sticks + 1 coal in the same shape as 1 + 1); and when a cell
+needs more than the grid holds, **the rest is taken from what the player
+carries** (needs 2 coal, 1 in the grid: the other comes from the inventory).
+
+### 16.1 Recipes with shapes (zylanntest's model, in our JSON tables)
+
+A recipe in `content/<pack>/data/recipes/*.json` may have a pattern (else it
+stays a list, `inputs`, matched in any arrangement -- Minecraft's shapeless):
+
+```json
+{ "name": "Chest", "station": "workbench", "output": "chest", "count": 1,
+  "pattern": ["WWW", "W W", "WWW"],
+  "key": { "W": { "item": "wood", "count": 12 } } }
+```
+
+- `pattern` rows, trimmed (no empty outer rows/columns, zylanntest's), a
+  space for an empty cell; `key` letter -> `{item | tag, count}`: a cell
+  needs that many of that item (or any item with the tag). One cell of a
+  material is normally 12 plate cells (one 2x2 brick), so today's numbers
+  map onto Minecraft's shapes: workbench 2x2 of wood x12 (48), chest and
+  furnace the 3x3 ring (96).
+- The grid a recipe needs is the smallest that holds it: up to 2x2 by hand
+  (the inventory screen), up to 3x3 at a crafting table, up to 4x4 at a
+  4x4 station (open question 1).
+- Matching (zylanntest `match_grid`): trim the grid, compare the shape; each
+  cell's ITEM decides the shape (it must be there, at least one); mirrored
+  left-right also matches (Minecraft's). A recipe's signature
+  (`3x3:wood*12,...`) keeps two recipes from having the same shape.
+- **Counts: grid first, then the player.** A cell that needs 12 and holds 5
+  takes the 5 and 7 more of the same item (or tag) from what is carried
+  (hotbars, storage; never an open chest, never the off-hand/quick slots
+  unless asked). The cell turns red when grid + carried is not enough.
+- Crafting takes from the grid cells, then the carried rest; the result
+  shows as soon as the grid's shape matches and the counts are there.
+
+### 16.2 The crafting grid in the screen (Minecraft's, with Bedrock's book)
+
+- A real grid of slots: 2x2 in the inventory, 3x3 at a crafting table, 4x4
+  at its station; items are clicked/dragged in like any slot. Closing the
+  screen puts what is left in the grid back (`clear_craft`, already there).
+- The book (left) still lists the recipes; clicking one **fills the grid**
+  in its shape from what is carried (each cell up to its count; a cell
+  short stays red), Bedrock's auto-fill.
+- **The result onto the cursor** (Minecraft): click the result -> onto the
+  held stack (same kind and room, else nothing); Shift-click -> as many as
+  can be made, into the inventory.
+- Shapeless (`inputs`) recipes keep working: any arrangement of their items
+  in the grid, or the book's fill.
+
+### 16.3 The recipe editor (zylanntest's builder, ported)
+
+In game, creative only (and the dev menu): a grid with a 2x2 / 3x3 / 4x4
+switch; items from the creative palette placed in cells; a cell's count set
+by clicks (left +1, right -1, shift x10) as zylanntest's CraftingSlot does;
+the output and its count, the name, the station, the book tab; Save (trims,
+checks the signature is not taken), Load an existing recipe to edit, Delete.
+Saved as our JSON (16.1): in the editor build into the base pack's
+`data/recipes/`, in a player build into `user://mods/<id>/data/recipes/`
+(open question 2), so ContentPacks picks it up.
+
+### 16.4 Armour and the player figure (Minecraft's left column)
+
+- Four armour slots (head, chest, legs, feet) left of a figure of the
+  player that turns its head toward the mouse, the backpack slot under them.
+- Needs decisions with the user (open question 3): what armour does in this
+  game (damage taken by the pawn -- the Weapons area's PlayerHealth/pawn,
+  not this area's), which materials (iron, gold, diamond?), whether it shows
+  on the pawn in play, and which model the figure uses.
+
+### 16.5 Open questions
+
+1. Which station gives the 4x4 grid (a new "workshop table"? the workbench
+   upgraded?), and which recipes need it.
+2. Where player-made recipes are saved in a player build (a mod pack
+   `user://mods/my_recipes/`?), and whether they are shared in multiplayer.
+3. Armour: effect, materials, look in play, the figure's model.
+4. Converting today's recipes: every one gets a pattern (proposed: the
+   Minecraft shape of the same thing, cells of 12), or some stay shapeless.

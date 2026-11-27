@@ -354,8 +354,32 @@ static func _hang_doors(wiring, dw: Dictionary, at: Callable) -> int:
 		hung = [hung[0]]
 	for h: Array in hung:
 		if wiring.place_device(h[0], &"door", false, false, int(h[1])):
+			_stream(wiring, h[0])
 			n += 1
 	return n
+
+
+## ROOM STREAMING for a building's fittings (Docs/TerrainBuildings.md 6d):
+## their meshes drawn only within FITTINGS_RANGE_M of the eye, a lamp's light
+## fading out by LIGHT_FADE_M -- the renderer culls both, so a town's
+## hundreds of doors and lamps cost nothing far off. Their colliders stay
+## (a door is shut or open wherever it is seen from).
+const FITTINGS_RANGE_M := 70.0
+const LIGHT_FADE_M := 28.0
+
+
+static func _stream(wiring, c: Vector3i) -> void:
+	var d: Dictionary = wiring.devices.get(c, {})
+	var node: Node = d.get("node")
+	if node == null:
+		return
+	for g in node.find_children("*", "GeometryInstance3D", true, false):
+		(g as GeometryInstance3D).visibility_range_end = FITTINGS_RANGE_M
+		(g as GeometryInstance3D).visibility_range_end_margin = 5.0
+	for l in node.find_children("*", "Light3D", true, false):
+		(l as Light3D).distance_fade_enabled = true
+		(l as Light3D).distance_fade_begin = LIGHT_FADE_M
+		(l as Light3D).distance_fade_length = 8.0
 
 
 ## A lamp on the floor of `room`, near its middle, a lever beside it (the
@@ -375,6 +399,8 @@ static func _lamp_in(wiring, room: Room, at: Callable) -> int:
 			if wiring.can_place_device(c + side, &"lever"):
 				wiring.place_device(c, &"lamp")
 				wiring.place_device(c + side, &"lever")
+				_stream(wiring, c)
+				_stream(wiring, c + side)
 				return 1
 	return 0
 
@@ -478,6 +504,9 @@ static func after_edit(host: Node, res: Dictionary) -> void:
 			continue
 		var changed := false
 		var base := int(b.base)
+		# Its far facade is made again (MineBuildingsFar).
+		if ehi.y >= base:
+			b["far_dirty"] = true
 		if ehi.y >= base:
 			for z in range(maxi(elo.z, lo.z), mini(ehi.z, hi.z) + 1):
 				for x in range(maxi(elo.x, lo.x), mini(ehi.x, hi.x) + 1):
@@ -521,8 +550,14 @@ static func balances(b: Dictionary) -> bool:
 		if BrickTerrain.solid_at(k.x, base, k.y) != 0 and BrickTerrain.solid_at(k.x, base - 1, k.y) != 0:
 			for c in [Vector2(0, 0), Vector2(1, 0), Vector2(0, 1), Vector2(1, 1)]:
 				support.append(Vector2(k) + c)
-	if mass <= 0.0 or support.is_empty():
-		return true   # nothing under it: the survey drops it whole
+	if mass <= 0.0:
+		return true
+	if support.is_empty():
+		# Nothing under it at all: it drops, let go here as one piece (not
+		# left to the collapse survey, whose fitted ground floats a group
+		# of more than ~500 cells: Docs/TerrainBuildings.md 4e).
+		b["lean"] = Vector2.ZERO
+		return false
 	var middle := sum / mass
 	var hull := Geometry2D.convex_hull(support)
 	# Which way it would go: from what holds it toward its middle.
@@ -618,7 +653,7 @@ static func _topple(host: Node, b: Dictionary) -> void:
 	var spin := Vector3.ZERO
 	if lean.length() > 0.01:
 		spin = Vector3.UP.cross(Vector3(lean.x, 0.0, lean.y).normalized()) * TIP_SPIN
-	collapse.call("_let_group_go", g, 1.0, spin)
+	collapse.call("_let_group_go", g, 1.0, spin, true)
 	# Rubble lying on it or in it (a shot brick on its roof) is frozen still:
 	# immovable, it held the whole building up. Woken, it falls with it.
 	var pieces = collapse.get("pieces")

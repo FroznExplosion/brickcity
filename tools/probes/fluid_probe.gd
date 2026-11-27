@@ -61,6 +61,7 @@ var _failed := 0
 
 
 func _initialize() -> void:
+	preload("res://scripts/terrain/worldgen_presets.gd").apply_fitted_flag()
 	_run.call_deferred()
 
 

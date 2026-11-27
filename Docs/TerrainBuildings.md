@@ -106,6 +106,12 @@ not move its middle yet (the weights are the stamp's).
   (glass runs, furniture plates, stair steps) stayed in the ground and held
   it from inside (cleared when it topples); and frozen rubble on or in it (a
   shot brick on its roof) is immovable -- such pieces are woken.
+- **4e, dug out from under all of it (2026-11-26).** A building with no
+  column left on solid ground is let go by MineBuildings itself (balances
+  fails, the topple drops it straight, kept awake as a tipping one), not by
+  the collapse survey: with the region fit on, the survey floats a group of
+  more than ~500 cells (terrain-regions), which would leave a tower hanging.
+  after_edit runs inside terrain_edited, before the survey is even started.
 - **4c, items.** "Plastic bricks" (ItemCatalog): one material family whose
   colours are every building material (MAT_FIL_BASE + each filament). A
   mined building brick is one of its colour, and lays that colour again.
@@ -121,6 +127,16 @@ not move its middle yet (the weights are the stamp's).
   faces (it wrote none on block faces before -- only glass gets one, so no
   other face's look changes). A translucent brick of a stamped building
   or build is glass. Not a real transparent pass: one opaque draw kept.
+- **5b, real glass** (2026-11-26). The near mesher's glass faces (material
+  byte MAT_GLASS) are split out of the tile's mesh (BrickTerrain
+  split_glass, before split_behind, so none lands behind) into
+  "glass_mesh"; TerrainTile draws them on a node of their own,
+  "SurfaceGlass", blended (shaders/terrain_glass.gdshader: the glass
+  colour, 22% opaque face-on, more edge-on, glossy), casting no shadow
+  (set_casts_shadow leaves it off), so the sun reaches the room. The
+  terrain shader's screen-door stays only for a glass face that still
+  reaches the opaque mesh (none today). Coarse tiles keep glass as its top
+  colour; the far facades draw it blue.
 - **6, interiors.** The tower's rooms are furnished as the city's
   (TowerBlockout._furnish: RoomManifest's furniture as plain bricks), so
   furniture is building bricks too: mined, shot, falling with it. Not yet:
@@ -141,9 +157,22 @@ not move its middle yet (the weights are the stamp's).
   across it split round it as bond cells, `_cut`), a double door hung in
   it, and stone steps (a brick each, two studs deep, up to 4) down to the
   ground outside. `"entrance": false` in the parameters leaves it shut.
-- **7, far view.** Partly: windows are glass cells now, not air, so the
-  coarse tier keeps them as sky-blue cells on the block. The far view from
-  bricks (Docs/Structures.md) is still the city's alone.
+- **7, far view (2026-11-26).** Past the near tiles a tower was a coarse
+  block of its roof's colour. `MineBuildingsFar` (a child of the mine world)
+  draws each stamped building's FACADE from its bricks in the field: each
+  wall a grid of studs x courses, coloured by the outermost building cell
+  within 3 studs of the wall (glass blue, an opening dark), merged along
+  rows; the roof each column's top cell. A hair outside the box, over the
+  coarse block (which lies inside the footprint: its cell takes the min of
+  its corners). Shown only while the building's tile is not a near tile;
+  made again after an edit reaches it (`far_dirty`), one building a tend
+  (0.25 s); plain vertex colours, no shadow, ~1000 triangles a 6-floor
+  tower. Not lit by the sky-light grid (the far tier has none either).
+- **6d, room streaming.** The fittings (doors, lamps, levers) of a stamped
+  building have a visibility range (70 m) and each lamp's light a distance
+  fade (28 m), so the renderer culls a town's hundreds of them far off.
+  Their colliders stay. (The rooms themselves are ground: the near tiles
+  draw them, as they draw any cave.)
 - **8, placing.** `MineBuildings.stamp_build(host, corner, path)`: any
   workshop build (BuildRecipe; its towers and catalogue furniture expanded as
   the city placer does) stamped the same way (a brick placed where it fills

@@ -224,6 +224,10 @@ func stations_near(p: Vector3, reach := 4.0) -> Array:
 		if ItemCatalog.kind(it) == "station" and not out.has(it) \
 				and box_of(chests[key].block).get_center().distance_to(p) <= reach:
 			out.append(it)
+			# A workshop table is a workbench too (its 4x4 grid takes 3x3 recipes).
+			var also := StringName(str(ItemCatalog.get_def(it).get("counts_as", "")))
+			if also != &"" and not out.has(also):
+				out.append(also)
 	return out
 
 

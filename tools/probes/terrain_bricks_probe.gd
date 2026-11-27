@@ -188,17 +188,38 @@ func _check(tag: String, d: Dictionary, origin: Vector3) -> void:
 				lost += 1
 	_lost += lost
 	_covered += covered
-	var unused := 0
+	# A surface piece whose top a laid tile or plate covers (a listed brick of
+	# the same footprint lying right on it) and whose sides its neighbours
+	# cover has no face of its own: listed, harmless, not counted.
+	var under_plate := {}
 	for i in n:
-		if used[i] == 0:
+		var a: Vector3 = lo[i]
+		var e: Vector3 = hi[i]
+		under_plate[Vector4(snappedf(a.x, 0.01), snappedf(a.z, 0.01), snappedf(e.x, 0.01), snappedf(e.z, 0.01))] = \
+				under_plate.get(Vector4(snappedf(a.x, 0.01), snappedf(a.z, 0.01), snappedf(e.x, 0.01), snappedf(e.z, 0.01)), []) + [i]
+	var unused := 0
+	var covered_pieces := 0
+	for i in n:
+		if used[i] != 0:
+			continue
+		var a: Vector3 = lo[i]
+		var e: Vector3 = hi[i]
+		var plated := false
+		for j in under_plate.get(Vector4(snappedf(a.x, 0.01), snappedf(a.z, 0.01), snappedf(e.x, 0.01), snappedf(e.z, 0.01)), []):
+			if j != i and absf((lo[j] as Vector3).y - e.y) < 0.001:
+				plated = true
+				break
+		if plated:
+			covered_pieces += 1
+		else:
 			unused += 1
-	print("[bricks] %s: %d bricks, %d triangles, %d off every brick (first %s), %d bricks with no face, %d overlaps"
-			% [tag, n, tris, off, first_off, unused, overlaps])
+	print("[bricks] %s: %d bricks, %d triangles, %d off every brick (first %s), %d bricks with no face (%d more under a laid plate), %d overlaps"
+			% [tag, n, tris, off, first_off, unused, covered_pieces, overlaps])
 	_expect(n > 0 or tris == 0, "%s lists its bricks" % tag)
 	# A few thin strips on a surface tile's outer edge, facing out, are no
 	# brick's (filler where tiles meet): under 1 %, 20 a tile.
 	_expect(off <= maxi(tris / 100, 20), "%s: every face lies on a listed brick (%d of %d off)" % [tag, off, tris])
-	# A surface piece whose top a tile or plate covers and whose sides its
-	# neighbours cover has no face of its own: listed, harmless (under 5 %, 50 a tile).
-	_expect(unused <= maxi(n / 20, 50), "%s: every listed brick has a face (%d of %d without)" % [tag, unused, n])
+	# Pieces under a laid plate are counted apart (above); the rest each have
+	# a face (a few more allowed, under 5 %, 50 a tile).
+	_expect(unused <= maxi(n / 20, 50), "%s: every listed brick has a face (%d of %d without, %d under a laid plate)" % [tag, unused, n, covered_pieces])
 	_expect(overlaps == 0, "%s: no two bricks overlap (%d)" % [tag, overlaps])

@@ -15,9 +15,16 @@ extends Node3D
 ## The OFF-HAND (Docs/Inventory.md round four): a one-handed gun in the
 ## active off-hand slot, with the off-hand up (Inventory.offhand), is made the
 ## same way into its own GunController (`off_gun`) and drawn low on the left
-## of the view (`_off_view`; no left arm yet). RMB is its trigger; it reloads
+## of the view (`_off_view`), the left arm's C round its grip
+## (PlayerView.off_held). RMB is its trigger; it reloads
 ## by itself when empty, and with R. While anything is in the off-hand, up,
 ## the main gun's sights rest (PlayerController.hold_aim): RMB is that hand's.
+##
+## A SHIELD in the off-hand, up: drawn low on the left, held by the left arm;
+## RMB held raises it (`blocking`). Raised, it is the pawn's HealthPool.guard:
+## a hit from in front (within BLOCK_CONE of the view) is blocked whole and
+## wears the shield by its damage (`data.wear`); worn to its `durability` it
+## breaks and is gone. Hits from the side or behind land as ever.
 ##
 ## The city and the planets keep the arsenal: nothing here is theirs.
 
@@ -37,8 +44,24 @@ var _off_view: Node3D
 var _off_kick := 0.0
 ## RMB down, from its events (Input's polled state may lag a synthesised one).
 var _rmb_down := false
+## The shield in the off-hand in use, its model, and whether it is raised.
+var shield_held: ItemStack = null
+var blocking := false
+## Hits blocked since the world started (the gate reads it).
+var blocked_hits := 0
+var _shield_view: Node3D
+var _shield_node: Node3D
+var _raise := 0.0
+## A hit is blocked when it comes from within this many degrees of the view.
+const BLOCK_CONE := 60.0
+## The shield's place, lowered and raised (camera frame), its size, and the
+## time it takes to come up.
+const SHIELD_LOW := Vector3(-0.21, -0.17, -0.36)
+const SHIELD_UP := Vector3(-0.13, -0.1, -0.33)
+const SHIELD_SIZE := 0.22
+const SHIELD_RAISE := 0.12
 ## Where the off-hand gun is drawn, in the camera's frame, and how long.
-const OFF_POS := Vector3(-0.15, -0.12, -0.34)
+const OFF_POS := Vector3(-0.13, -0.065, -0.3)
 const OFF_LENGTH := 0.26
 ## ItemStack -> GunInstance, the guns made for stacks still carried.
 var _made := {}
@@ -76,6 +99,13 @@ func setup(p_host: Node, p_gun: GunController, p_view: PlayerView, p_library: Gu
 	else:
 		add_child(_off_view)
 	_off_view.position = OFF_POS
+	_shield_view = Node3D.new()
+	_shield_view.name = "ShieldView"
+	_shield_view.visible = false
+	if view != null and view.camera != null:
+		view.camera.add_child(_shield_view)
+	else:
+		add_child(_shield_view)
 
 
 func set_inventory(p_inv: Inventory) -> void:
@@ -129,6 +159,8 @@ func _release_off() -> void:
 		if old.get_parent() == _off_view:
 			old.reparent(_holster, false)
 	off_held = null
+	if view != null:
+		view.off_held = null
 
 
 func _refresh_main() -> void:
@@ -184,12 +216,15 @@ func _refresh_off() -> void:
 			_fit_off(g)
 			g.visible = true
 			off_held = want
+			# The left arm holds it (PlayerView.off_held).
+			if view != null:
+				view.off_held = g
 	_prune()
 
 
 ## The off-hand gun sized and placed in its corner: OFF_LENGTH long, its
-## back end at the view node.
-static func _fit_off(gi: GunInstance) -> void:
+## back end at the view node; where the left hand takes it (`view_holds`).
+func _fit_off(gi: GunInstance) -> void:
 	gi.transform = Transform3D.IDENTITY
 	var inv_xf := gi.global_transform.affine_inverse()
 	var box := AABB()
@@ -202,6 +237,8 @@ static func _fit_off(gi: GunInstance) -> void:
 	if first or box.size.z < 0.01:
 		return
 	var sc := OFF_LENGTH / box.size.z
+	if view != null:
+		gi.set_meta(&"view_holds", view.holds_for(gi, inv_xf, box))
 	gi.scale = Vector3.ONE * sc
 	gi.position = -Vector3(box.get_center().x, box.end.y, box.end.z) * sc
 
@@ -220,12 +257,98 @@ func _process(delta: float) -> void:
 		if off_gun.ammo <= 0 and not off_gun.is_reloading():
 			off_gun.reload()
 	off_gun.set_trigger(down)
+	_step_shield(delta)
 	# A kick back and up on each round, settling.
 	_off_kick = maxf(_off_kick - delta * 9.0, 0.0)
 	if _off_view != null:
 		_off_view.position = OFF_POS + Vector3(0, 0.012, 0.035) * _off_kick
 		_off_view.rotation = Vector3(0.18 * _off_kick, 0, 0)
 		_off_view.visible = off_held != null
+
+
+## The shield in the off-hand: its model, raised while RMB is held, and the
+## pawn's guard while it is.
+func _step_shield(delta: float) -> void:
+	var o := inv.offhand()
+	var sh := o if o != null and ItemCatalog.kind(o.id) == "shield" else null
+	if sh != shield_held:
+		if _shield_node != null:
+			_shield_node.queue_free()
+			_shield_node = null
+		shield_held = sh
+		if sh != null:
+			_shield_node = ItemIcons.make_shield(ItemCatalog.get_def(sh.id).colour)
+			_shield_node.scale = Vector3.ONE * SHIELD_SIZE
+			_shield_node.set_meta(&"view_holds", {"grip": ItemIcons.SHIELD_GRIP})
+			_shield_view.add_child(_shield_node)
+	var free: bool = host.get("_menu") == null and not host.inventory_open()
+	var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED or PlayerCamera.hands_off
+	blocking = sh != null and free and captured \
+			and (_rmb_down or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT))
+	_raise = move_toward(_raise, 1.0 if blocking else 0.0, delta / SHIELD_RAISE)
+	var k := _raise * _raise * (3.0 - 2.0 * _raise)
+	_shield_view.visible = sh != null
+	_shield_view.position = SHIELD_LOW.lerp(SHIELD_UP, k)
+	# Lowered, turned edge-on a little and tipped back; raised, square to the view.
+	_shield_view.rotation = Vector3(lerpf(-0.35, 0.0, k), lerpf(0.55, 0.1, k), 0.0)
+	if view != null:
+		if sh != null:
+			view.off_held = _shield_node
+		elif view.off_held == _shield_node or (view.off_held != null and not is_instance_valid(view.off_held)):
+			view.off_held = null
+	var pawn: Pawn = host.get("pawn")
+	if pawn != null and pawn.health != null:
+		var want := Callable(self, "guard") if blocking else Callable()
+		if pawn.health.guard != want:
+			pawn.health.guard = want
+
+
+## HealthPool.guard while the shield is raised: a hit from in front is
+## blocked (0 gets through) and wears the shield; else it lands whole (1).
+## Where it came from: its source (a shooter, a thrower) if that is not the
+## player, else its point.
+func guard(packet: DamagePacket) -> float:
+	if shield_held == null or not blocking or packet == null:
+		return 1.0
+	var pawn: Pawn = host.get("pawn")
+	var cam: Node3D = gun.aim if gun != null else null
+	if pawn == null or cam == null:
+		return 1.0
+	var from := Vector3.INF
+	var src := packet.source as Node3D
+	if src != null and is_instance_valid(src) and src != pawn and not pawn.is_ancestor_of(src):
+		from = src.global_position
+	elif packet.hit_position != Vector3.ZERO:
+		from = packet.hit_position
+	if from == Vector3.INF:
+		return 1.0
+	var to := from - cam.global_position
+	if to.length() < 0.01:
+		return 1.0
+	var fwd := -cam.global_transform.basis.z
+	if to.normalized().dot(fwd) < cos(deg_to_rad(BLOCK_CONE)):
+		return 1.0
+	blocked_hits += 1
+	_wear_shield(maxi(1, ceili(packet.amount)))
+	return 0.0
+
+
+## `n` more wear on the shield; worn out, it breaks (gone from the off-hand).
+func _wear_shield(n: int) -> void:
+	var sh := shield_held
+	if sh == null:
+		return
+	var wear := int(sh.data.get("wear", 0)) + n
+	var cap := int(ItemCatalog.get_def(sh.id).get("durability", 336))
+	if wear >= cap:
+		for i in inv.offhands.size():
+			if inv.offhands[i] == sh:
+				inv.offhands[i] = null
+		print("[hands] the shield broke")
+		inv.changed.emit()
+		return
+	sh.data["wear"] = wear
+	inv.changed.emit()
 
 
 func _input(event: InputEvent) -> void:

@@ -233,6 +233,24 @@ func _check_big_island() -> void:
 			(r.groups as Array).size(), _all_cells(r), want, int(r.grown)])
 	print("    long arm survey %.1f ms (%d bricks; tops %.1f, bond %.1f, world %.1f)" % [ms, int(r.bricks),
 			float(r.get("tops_ms", 0.0)), float(r.get("bond_ms", 0.0)), float(r.get("world_ms", 0.0))])
+	if TerrainFit.get_enabled():
+		_check_big_floats()
+
+
+## BIG GROUPS FLOAT (the user, Docs/TerrainRegions.md 11; the fit's bricks
+## only): a stone arm of ~640 cells let go stays where it is, where the long
+## arm above (180 cells) falls.
+func _check_big_floats() -> void:
+	BrickTerrain.clear_terrain_edits()
+	_fill(Vector3i(0, 1, 0), Vector3i(1, 18, 3), 4)
+	_fill(Vector3i(2, 7, 0), Vector3i(41, 18, 3), 4)
+	var r := _survey(Vector3i(0, 1, 0), Vector3i(41, 18, 3))
+	_expect((r.groups as Array).is_empty(), "big arm: held while its pillar stands")
+	_fill(Vector3i(0, 1, 0), Vector3i(1, 3, 3), 0)
+	r = _survey(Vector3i(0, 1, 0), Vector3i(1, 3, 3))
+	_expect((r.groups as Array).is_empty() and int(r.get("floated", 0)) >= 1,
+			"big arm (%d+ cells): foot shot out, it floats (%d groups fall, %d float)" % [
+			int(TerrainFit.get_configured().get("float_cells", 500)), (r.groups as Array).size(), int(r.get("floated", 0))])
 
 
 ## The same survey again, nothing edited: the tiles' top course comes from

@@ -156,6 +156,45 @@ static func _cyl(top: float, bottom: float, h: float, seg := 20) -> CylinderMesh
 	return c
 
 
+## Every mesh under `n` as a plain child of `into`, where it stands (`xf`).
+static func _flatten(into: Node3D, n: Node, xf: Transform3D) -> void:
+	for c in n.get_children():
+		if not (c is Node3D):
+			continue
+		var t := xf * (c as Node3D).transform
+		if c is MeshInstance3D and (c as MeshInstance3D).mesh != null:
+			var mi := MeshInstance3D.new()
+			mi.mesh = (c as MeshInstance3D).mesh
+			mi.material_override = (c as MeshInstance3D).material_override
+			mi.transform = t
+			into.add_child(mi)
+		_flatten(into, c, t)
+
+
+## A brick shield, fitted to about 1.0 tall, its face toward -Z, its handle
+## behind (+Z) at `SHIELD_GRIP`: a board of the item's colour, a grey rim and
+## a boss -- the icon's model and the one the off-hand holds (MineHands).
+const SHIELD_GRIP := Vector3(0.0, 0.0, 0.16)
+static func make_shield(col: Color) -> Node3D:
+	var n := Node3D.new()
+	n.name = "Shield"
+	_shield_parts(n, col)
+	return n
+
+
+## The shield's parts, each a MeshInstance3D straight under `n` (the icon fit
+## measures direct children).
+static func _shield_parts(n: Node3D, col: Color) -> void:
+	var rim := _mat(Color(0.55, 0.56, 0.6), 0.3)
+	_part(n, _box(Vector3(0.72, 0.96, 0.1)), _mat(col, 0.6), Vector3.ZERO)
+	_part(n, _box(Vector3(0.8, 0.08, 0.14)), rim, Vector3(0, 0.48, 0))
+	_part(n, _box(Vector3(0.8, 0.08, 0.14)), rim, Vector3(0, -0.48, 0))
+	_part(n, _box(Vector3(0.08, 1.04, 0.14)), rim, Vector3(0.38, 0, 0))
+	_part(n, _box(Vector3(0.08, 1.04, 0.14)), rim, Vector3(-0.38, 0, 0))
+	_part(n, _cyl(0.12, 0.16, 0.08), rim, Vector3(0, 0, -0.08), Basis(Vector3.RIGHT, PI / 2))
+	_part(n, _box(Vector3(0.06, 0.3, 0.06)), rim, SHIELD_GRIP)
+
+
 static func _model(d: Dictionary) -> Node3D:
 	var inner := Node3D.new()
 	var col: Color = d.get("colour", Color(0.8, 0.8, 0.8))
@@ -165,9 +204,13 @@ static func _model(d: Dictionary) -> Node3D:
 		kind = "produce"
 	elif str(d.get("model", "")) == "sapling":
 		kind = "sapling"
+	elif str(d.get("model", "")) == "collector":
+		kind = "collector"
 	elif str(d.get("model", "")) == "ingot":
 		kind = "ingot"
 	match kind:
+		"shield":
+			_shield_parts(inner, col)
 		"ingot":
 			# A bar, narrower on top (Minecraft's ingot, in bricks).
 			_part(inner, _box(Vector3(1.0, 0.24, 0.5)), _mat(col, 0.25), Vector3(0, 0.12, 0))
@@ -222,7 +265,18 @@ static func _model(d: Dictionary) -> Node3D:
 			_part(inner, _cyl(0.16, 0.16, 0.16), _mat(Color(0.75, 0.75, 0.78), 0.3), Vector3(0, 0.7, 0))
 			_part(inner, _box(Vector3(0.08, 0.45, 0.12)), _mat(Color(0.75, 0.75, 0.78), 0.3), Vector3(0.24, 0.55, 0))
 		"station":
-			if str(d.get("model", "")) == "scarecrow":
+			if str(d.get("model", "")) == "sprinkler":
+				# A pipe up from a base, a spinning head with four arms.
+				var m := _mat(col, 0.3)
+				_part(inner, _cyl(0.3, 0.36, 0.16), m, Vector3(0, 0.08, 0))
+				_part(inner, _cyl(0.06, 0.06, 0.8), m, Vector3(0, 0.55, 0))
+				_part(inner, _cyl(0.14, 0.14, 0.12), m, Vector3(0, 0.98, 0))
+				for i in 4:
+					var a := TAU * float(i) / 4.0
+					_part(inner, _box(Vector3(0.5, 0.05, 0.06)), m, Vector3(cos(a) * 0.26, 1.0, sin(a) * 0.26),
+							Basis(Vector3.UP, -a))
+				_part(inner, _cyl(0.05, 0.05, 0.05), _mat(Color(0.4, 0.65, 0.95), 0.1, 0.8), Vector3(0, 1.06, 0))
+			elif str(d.get("model", "")) == "scarecrow":
 				# A pole, a cross bar with a shirt on it, a straw head and hat.
 				var wood := _mat(Color(0.45, 0.3, 0.16), 0.7)
 				_part(inner, _box(Vector3(0.1, 1.4, 0.1)), wood, Vector3(0, 0.7, 0))
@@ -270,6 +324,14 @@ static func _model(d: Dictionary) -> Node3D:
 			_part(inner, _cyl(0.32, 0.36, 0.6), m, Vector3(0, 0.3, 0))
 			_part(inner, _cyl(0.05, 0.07, 0.6), m, Vector3(0.42, 0.42, 0), Basis(Vector3.BACK, deg_to_rad(-55.0)))
 			_part(inner, _box(Vector3(0.08, 0.08, 0.5)), m, Vector3(-0.1, 0.72, 0), Basis(Vector3.UP, PI * 0.5))
+		"collector":
+			# A wooden bin with a metal hopper on top and a little scoop arm
+			# (Docs/MineFarming.md 21).
+			_part(inner, _box(Vector3(1.0, 0.55, 0.8)), _mat(col, 0.6), Vector3(0, 0.28, 0))
+			_part(inner, _cyl(0.3, 0.42, 0.3, 4), _mat(Color(0.62, 0.64, 0.68), 0.3), Vector3(0, 0.7, 0),
+					Basis(Vector3.UP, PI * 0.25))
+			_part(inner, _box(Vector3(0.08, 0.5, 0.08)), _mat(Color(0.62, 0.64, 0.68), 0.3), Vector3(0.42, 0.8, 0),
+					Basis(Vector3.BACK, deg_to_rad(-30.0)))
 		"sapling":
 			# A short trunk and a leafy block on it (Docs/MineFarming.md 17).
 			_part(inner, _cyl(0.1, 0.12, 0.6), _mat(Color(0.45, 0.3, 0.16), 0.7), Vector3(0, 0.3, 0))
@@ -349,6 +411,13 @@ static func _model(d: Dictionary) -> Node3D:
 				var lean := Basis(Vector3.BACK, deg_to_rad(-30.0))
 				_part(inner, _box(Vector3(0.12, 0.7, 0.12)), _mat(Color(0.45, 0.3, 0.16), 0.7), Vector3(0.15, 0.55, 0), lean)
 				_part(inner, _box(Vector3(0.22, 0.22, 0.22)), _mat(Color(0.75, 0.1, 0.08), 0.4), Vector3(0.33, 0.86, 0))
+		"spawner":
+			# The creature itself, its block-out (Docs/MineCreatures.md 12),
+			# turned a little to show its side; flattened into plain meshes.
+			var cr := StringName(str(d.get("creature", "")))
+			var look := MobLooks.make(cr, CreatureBook.get_def(cr))
+			_flatten(inner, look, Transform3D(Basis(Vector3.UP, deg_to_rad(-60.0)), Vector3.ZERO))
+			look.free()
 		_:
 			_part(inner, _box(Vector3(0.8, 0.8, 0.8)), _mat(col, 0.5), Vector3.ZERO)
 	# Fit: the biggest extent 1.0, the middle on the origin.

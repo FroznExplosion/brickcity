@@ -103,6 +103,17 @@ func rebuild(material: Material) -> void:
 	build(tx, tz, material)
 
 
+static var _glass_mat: ShaderMaterial = null
+
+
+## The blended material of a tile's glass faces (shaders/terrain_glass).
+static func glass_material() -> ShaderMaterial:
+	if _glass_mat == null:
+		_glass_mat = ShaderMaterial.new()
+		_glass_mat.shader = load("res://shaders/terrain_glass.gdshader")
+	return _glass_mat
+
+
 ## The C++ half, with no scene tree involved — safe to run on a worker
 ## thread, because `build_tile` only READS the field and returns fresh
 ## arrays. Hand the result to `build()`.
@@ -156,6 +167,16 @@ func build(tile_x: int, tile_z: int, material: Material,
 			bs.name = "SurfaceBehind"
 			bs.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	data.erase("behind_mesh")   # on the GPU now: not kept twice
+	# GLASS (Docs/TerrainBuildings.md 5b): its faces split out of the mesh,
+	# drawn blended (the terrain shader is one opaque pass). No shadow: a
+	# window lets the sun into the room behind it.
+	var glass: Array = data.get("glass_mesh", [])
+	if not glass.is_empty():
+		var gs := _add_surface(glass, glass_material(), 0.0, 0.0)
+		if gs != null:
+			gs.name = "SurfaceGlass"
+			gs.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	data.erase("glass_mesh")
 	overlay = data.get("overlay_bricks", PackedFloat32Array())
 	overlay_version += 1
 	_data = data
@@ -254,7 +275,7 @@ func set_casts_shadow(on: bool) -> void:
 	_shadow_on = on
 	var mode := GeometryInstance3D.SHADOW_CASTING_SETTING_ON if on 			else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	for child in get_children():
-		if child is MeshInstance3D:
+		if child is MeshInstance3D and child.name != &"SurfaceGlass":
 			(child as MeshInstance3D).cast_shadow = mode
 
 

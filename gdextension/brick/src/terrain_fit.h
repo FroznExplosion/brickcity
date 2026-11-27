@@ -8,6 +8,7 @@
 using namespace godot;
 
 #include <array>
+#include <functional>
 #include <memory>
 #include <vector>
 #include <unordered_map>
@@ -49,6 +50,34 @@ private:
 };
 /// The game's ground bricks come from the fit (TerrainFit.set_enabled).
 bool fit_enabled();
+
+/// THE TOP COURSE's bricks (Docs/TerrainRegions.md 12.3): the surface's
+/// pieces cut by the fit, not the old pattern. A cell's brick is fitted in
+/// its square of its course among the cells `group` says go with it (the
+/// packer's rule: same height, material, colour, free), each one's bond
+/// group (BOND_MEDIUM / STRONG; NONE: not with it): a pure function of
+/// those cells, so tiles either side of an edge agree. One course only.
+/// `cls` names the group (the packer's height, material and colour), the
+/// memo keeps a square's fit for one caller.
+class TopFitMemo {
+public:
+    TopFitMemo();
+    ~TopFitMemo();
+    struct Square;
+    std::unordered_map<uint64_t, std::unique_ptr<Square>> squares;
+};
+bool fit_top(TopFitMemo &memo, int x, int course, int z, uint64_t cls,
+        const std::function<int(int, int)> &group, FitBrick &out);
+/// Column (x, z)'s GENERATED top plate and the material there (edits
+/// ignored), kept by tile. False without the biome generator.
+bool generated_top(int x, int z, int &plate, int &mat);
+/// A group let go of at least this many cells floats (the world's
+/// "float_cells"; 0 never). Docs/TerrainRegions.md 11.
+int fit_float_cells();
+/// The top course cut from the fit too (the world's "fit_top"; deferred,
+/// off: the old pattern's top course over the fitted ground).
+bool fit_top_enabled();
+
 /// Drops every kept region (new settings, a new world).
 void fitted_clear();
 } // namespace brick
@@ -83,6 +112,8 @@ public:
     /// WorldgenPresets.DEFAULT_BRICKS' keys). Held for the game's bricks.
     static void configure(const Dictionary &settings);
     static Dictionary get_configured();
+    /// What configure's calibration did: calibration_ms, calibration_error.
+    static Dictionary get_calibration();
     /// fitted_brick for scripts: {x, z, c, sx, sz, h, mat, loose}, or empty.
     static Dictionary brick_at(int x, int course, int z);
     static Dictionary lookup_stats();

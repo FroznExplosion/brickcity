@@ -222,11 +222,11 @@ func on_mode_changed() -> void:
 # ---------------------------------------------------------------------------
 # Both hands and the quick slot (Docs/Inventory.md round four)
 
-## The off-hand is up with a block, device or chest in it (not a gun: that
-## one is MineHands').
+## The off-hand is up with a block, device or chest in it (not a gun or a
+## shield: those are MineHands').
 func offhand_builds() -> bool:
 	var o := inv.offhand()
-	return o != null and ItemCatalog.kind(o.id) != "gun"
+	return o != null and not ItemCatalog.kind(o.id) in ["gun", "shield"]
 
 
 ## Run `f` with the off-hand as the hand (`Inventory.using_off`): place_target
@@ -860,6 +860,11 @@ func place_target() -> bool:
 			log_blocks.append("use device %s" % dev)
 		target = {}
 		return used
+	# A fence gate opens or shuts (Docs/MineCreatures.md 11), whatever is in the hand.
+	if host.mobs != null and not rmb_repeat and host.mobs.use_gate(target.get("cell", Vector3i(1 << 30, 0, 0))):
+		log_blocks.append("gate %s" % target.get("cell"))
+		target = {}
+		return true
 	var d := hand_def()
 	var k := str(d.get("kind", ""))
 	if k == "wire" or k == "device":
@@ -912,6 +917,23 @@ func place_target() -> bool:
 				log_blocks.append("plant %s %s" % [d.id, target.cell])
 			target = {}
 			return ok2
+	if k == "spawner":
+		# A creature on the face aimed at (Docs/MineCreatures.md 12).
+		if host.mobs == null or rmb_repeat:
+			return false
+		var c: Vector3i = (target.cell as Vector3i) + (target.normal as Vector3i)
+		var stud := BrickWorld.get_stud_metres()
+		var plate := BrickWorld.get_plate_metres()
+		var made: bool = host.mobs.spawn_one(StringName(str(d.get("creature", ""))),
+				Vector3((c.x + 0.5) * stud, c.y * plate, (c.z + 0.5) * stud))
+		if made:
+			inv.consume_hand(1)
+			placed += 1
+			log_blocks.append("spawn %s %s" % [d.get("creature", ""), c])
+		target = {}
+		return made
+	if k == "fence":
+		return _place_fence(d)      # a panel of posts and rails (MineFences)
 	if k == "chest" or k == "station" or k == "backpack":
 		return _place_chest()          # a workbench, furnace or backpack stands like a chest
 	var b := _block_of(target.cell)
@@ -943,6 +965,41 @@ func place_target() -> bool:
 	placed += 1
 	log_blocks.append("place %s" % to)
 	host.terrain_edited(res)
+	target = {}
+	return true
+
+
+## A fence item's RMB (Docs/MineCreatures.md 5.3): one panel over the face
+## aimed at, across the view, `plates` high, in the item's material.
+func _place_fence(d: Dictionary) -> bool:
+	var n: Vector3i = target.normal
+	var at: Vector3i = (target.cell as Vector3i) + n
+	var right := Vector3.RIGHT
+	if host.cam != null:
+		right = (host.cam as Node3D).global_transform.basis.x
+	var along_x := absf(right.x) >= absf(right.z)
+	var plates := int(d.get("plates", 6))
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	for bx in MineFences.panel_boxes(at, along_x, plates):
+		var lo: Vector3i = bx[0]
+		var hi: Vector3i = bx[1]
+		var box := AABB(Vector3(lo.x * stud, lo.y * plate, lo.z * stud),
+				Vector3((hi.x - lo.x + 1) * stud, (hi.y - lo.y + 1) * plate, (hi.z - lo.z + 1) * stud))
+		if _box_hits_player(box):
+			return false
+	if bool(d.get("gate", false)) and host.mobs != null:
+		if not host.mobs.place_gate(at, along_x, plates, lay_material(d)):
+			return false
+	else:
+		var res := MineFences.place(at, along_x, plates, lay_material(d))
+		if res.is_empty():
+			return false
+		for r in res:
+			host.terrain_edited(r)
+	inv.consume_hand(1)
+	placed += 1
+	log_blocks.append("fence %s %s" % [at, "x" if along_x else "z"])
 	target = {}
 	return true
 
@@ -1146,9 +1203,11 @@ func _refresh_bar() -> void:
 	var what := ItemCatalog.label(inv.hand())
 	if inv.quick_out:
 		what = "[quick] " + what
+	# The off-hand last, after the main hand's details (a block's colour).
+	var off_txt := ""
 	var off := inv.offhands[inv.active_offhand] as ItemStack
 	if off != null:
-		what += "   |   off: %s%s" % [ItemCatalog.label(off),
+		off_txt = "   |   off: %s%s" % [ItemCatalog.label(off),
 				" (lowered)" if inv.offhand_lowered() else ("" if inv.offhand_up else " (down)")]
 	var keys := "1-9 / wheel hand  X bar  C off-hand  B quick  E items"
 	if hand_kind() == "block":
@@ -1163,7 +1222,7 @@ func _refresh_bar() -> void:
 		what += "  -  %s%s, %d cells" % [SHAPES[size_i][0], " turned" if turned and dd.x != dd.z else "",
 				dd.x * dd.y * dd.z]
 		keys = "Z shape  R turn  V colour  " + keys
-	_hud.caption = "%s%s   (%s)" % [what, "" if inv.creative else "  [survival]", keys]
+	_hud.caption = "%s%s%s   (%s)" % [what, off_txt, "" if inv.creative else "  [survival]", keys]
 	_hud.redraw()
 
 

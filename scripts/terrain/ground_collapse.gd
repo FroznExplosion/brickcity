@@ -583,7 +583,9 @@ static func _colour(m: int) -> Color:
 ## `times`: its joints' strength, x the city's (the ground's TERRAIN_TIMES; a
 ## toppled building's 1.0, so it breaks where it lands as a city one does).
 ## `spin`: its angular velocity once it falls (a toppled building's lean).
-func _let_group_go(g: PackedInt32Array, times := TERRAIN_TIMES, spin := Vector3.ZERO) -> void:
+## `awake`: kept from settling, and what is settled in its way woken, for
+## TIP_AWAKE_MS (a toppled building: _keep_tipping).
+func _let_group_go(g: PackedInt32Array, times := TERRAIN_TIMES, spin := Vector3.ZERO, awake := false) -> void:
 	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
 	var hi := -lo
 	var runs := PackedInt32Array()
@@ -624,7 +626,7 @@ func _let_group_go(g: PackedInt32Array, times := TERRAIN_TIMES, spin := Vector3.
 	bricks.bake_chunk_async(chunk)
 	groups_let_go += 1
 	bricks_let_go += n
-	_wait({"kind": "piece", "chunk": chunk, "job": [], "spin": spin}, res)
+	_wait({"kind": "piece", "chunk": chunk, "job": [], "spin": spin, "awake": awake}, res)
 
 
 ## Wait for the ground: `w` holds the tiles and sections its cells were
@@ -676,7 +678,7 @@ func _release() -> void:
 			var p := pieces.adopt(int(w.chunk), null)
 			pieces.toppled -= 1
 			var spin: Vector3 = w.get("spin", Vector3.ZERO)
-			if spin != Vector3.ZERO and is_instance_valid(p.body):
+			if bool(w.get("awake", false)) and is_instance_valid(p.body):
 				# A toppled building starts at rest on the edge of what held
 				# it: asleep there, the physics never turns it (its weight is
 				# a constant force, which does not wake a body).

@@ -1,0 +1,30 @@
+{
+	"recipes": [
+		{
+			"name": "Fence",
+			"inputs": {
+				"wood": 6
+			},
+			"station": "workbench",
+			"output": "fence",
+			"count": 2
+		},
+		{
+			"name": "Tall fence",
+			"inputs": {
+				"wood": 9
+			},
+			"station": "workbench",
+			"output": "tall_fence",
+			"count": 2
+		},
+		{
+			"name": "Fence gate",
+			"inputs": {
+				"wood": 8
+			},
+			"station": "workbench",
+			"output": "fence_gate"
+		}
+	]
+}

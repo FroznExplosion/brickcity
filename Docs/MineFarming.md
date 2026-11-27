@@ -221,7 +221,8 @@ plans). So trouble comes in two forms, both as random events (section 5):
   the plant lost).
 - **Loaded, with real animals** (later, when creatures come to the mine world):
   real animals path to crops they like and eat them; the abstract pressure
-  stops for loaded farms.
+  stops for loaded farms. Planned in Docs/MineCreatures.md 5.3: per-animal
+  open/closed (deer jump two bricks), eating and trampling by real herds.
 
 **Open or closed.** A farm is a connected group of plots (a field). It is
 **enclosed** when a walk over the ground from its plots cannot get more than
@@ -618,3 +619,97 @@ cactus fruit refused outside its biomes, four 3-star pumpkins merging into a
 giant (chance set to 1 for the gate), drawn as one, picked for 14 pumpkins
 (user://dev/farm_giant.png). The "away" check now waits until the farm has
 noticed the player left (its in-reach list is rebuilt once a second).
+
+## 21. Built (2026-11-27): stage 7, automation
+
+**Sprinkler** (3 iron ingots at a workbench; a placed station, its own
+model): every plot within 3 plots of it (a 7 x 7 square, within 6 plates up
+or down) counts as wet -- no water source. Joined to the plot's own water
+in the refresh (`_sprinkled`; the cached water look stays separate, so a
+sprinkler put down counts at once). The look line says "wet (sprinkler)".
+
+**Collector** (a chest, 4 iron ingots and 1 gold ingot at a workbench; a
+placed chest of 27 slots with its own model, opened like a chest): when a
+plot within 4 plots of it (9 x 9) is refreshed ripe, the collector harvests
+it into its own slots and replants it from a seed it holds (the harvest's own
+traits first, else any). It leaves giants and saplings, and does nothing
+while it has no empty slot (the crop waits ripe). It works in reach only, as
+the plot refresh does; a field left alone simply waits ripe (nothing rots),
+and is collected when the player comes back. Sprinklers, collectors and
+scarecrows are gathered together once a second, and again whenever the
+number of placed things changes.
+
+**Not built**: a farmhand that walks the rounds needs a creature to walk
+(the creature work); the collector does its job for now.
+
+**Tests.** farm_probe 140 (+4): the items and their kinds (the collector is
+a container), the recipes, the collector's slot filling and seed finding.
+--gate=farm 73 (+3): a sprinkler turns a dry plot wet and dark; a collector
+given wheat seeds, corn and beans harvests the ripe plots in reach (5: wheat,
+pumpkins, a melon and their seeds) and replants from what it holds; it is
+then broken so the 'away' check sees plain growth.
+
+**All stages of section 12 are built.** Set aside, by the user's choice:
+what crops are for (selling, health, hunger, crafting), real animals, crops
+dying, and a farmhand.
+
+## 22. Gaps closed (2026-11-27)
+
+**Far fields.** Past DRAW_M (96 m) a plot is drawn out to FAR_M (512 m) as
+a low 2 x 2-stud patch (FarmDraw `_far`: one MultiMesh of boxes, colour per
+instance) as tall as its crop has grown -- a plate to two bricks -- in its
+leaf colour turning to its ripe one. The stage is the plot's own as last
+settled (a plot out of reach is not touched), so a far field shows how it
+stood. The gate: from 150 m, 14 far patches and no near crops
+(user://dev/farm_far.png). Before, a field past 96 m was bare soil.
+
+**Crops in caves.** When the mine world draws sky light (MineSkyLit), crops
+and far patches use the falling sand's sky-lit item shader
+(`MineSkyLit.sand_material`, roughness 0.45): each instance's custom data
+carries the plot's own cached light (r sky, g lamp, 0..1), so a cave farm is
+as dark as the cave unless lamp-lit, with no extra light asked. A plot whose
+light changes is redrawn. That shader takes COLOR as linear, so the crops'
+colours are converted from sRGB when it is used (`FarmDraw._c`); unconverted
+they were washed out (ripe carrots tan).
+
+**Why it was refused.** Tilling and planting say why, over the hotbar, for 3
+s (`MineFarming.refuse`, `hud_text`, the mine world's farm label): "Wheat seeds
+go on tilled soil: use a hoe first", "Cactus fruit only grows in Desert,
+Badlands, Savanna", "Hoe: only grass, dirt or podzol can be tilled", "Hoe:
+clear what stands on it first", "Hoe: the 2x2 under it must be flat", "Hoe:
+the top of soil, not its side".
+
+Tests: --gate=farm 76 (+3): the refusal line, crops sky-lit with light per
+instance, the far patches from 150 m.
+
+## 23. Real animals only (2026-11-27, the user's choice)
+
+The mine world now has real animals (Docs/MineCreatures.md: pigs, zombies,
+and fences 2 or 3 bricks high that stop them). They eat crops and trample
+plots through MineFarming (`animal_eat`, `creature_landed`, `crops_near`;
+`animal_eat` leaves giants alone). Asked whether farming's own random animal
+events should stay beside them, the user chose real animals only. So:
+
+- FarmPlant rolls no animal events (EV_ANIMALS's rate is 0; the number is
+  kept so old saves read the same). Birds, weeds and blight stay.
+- FarmFields no longer floods the ground to tell whether animals could reach
+  a field (the walk is the animals' own now): it only groups plots and spots
+  one-crop fields for blight. No worker job; terrain edits no longer redo
+  fields. A plot's old `open` flag is cleared when its field is next worked
+  out; "open to animals" left the look line.
+- Tests pruned with it (they measured what the game no longer has): the
+  gate's "field open / a stone ring closes it / a gap opens it" and "an
+  animals' trample turns a plot to dirt" checks, and the probe's "animals
+  visit open fields". In their place: the probe checks no animal events come,
+  open field or not; the gate checks three days of trouble bring events and
+  none of them animals. (A real creature's trample uses the same `trample`
+  the gate's real-fall check covers.)
+- The guide's trouble line says the world's animals get in where they can
+  walk: fence your fields.
+
+**Found on the way:** the sprinklers, collectors and scarecrows were gathered
+again only when the number of placed things changed. A floating station broken
+and a collector put down kept the count, and the collector was never seen
+(the gate's collector harvested nothing). Now they are gathered once a frame
+(a few chests walked) as well as on any count change (`_ensure_gathered`).
+--gate=farm 73 (76, less the four pruned, plus the one added); farm_probe 140.

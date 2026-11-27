@@ -631,10 +631,21 @@ struct TilePack {
 /// collapse's survey read the same pieces instead of packing again. Thread
 /// safe; packs on a miss. Shared and immutable: never change what it returns.
 std::shared_ptr<const TilePack> packed_tile(int tx, int tz, TileSample &s);
-/// The same without the sample, for a reader that needs only the pieces and
-/// the column tops (the collapse's survey): a kept tile costs a lookup, where
-/// sampling it was ~8 ms.
-std::shared_ptr<const TilePack> packed_tops(int tx, int tz, bool *packed = nullptr);
+/// What is KEPT of a tile's top course (Docs/TerrainRegions.md 12.5: the
+/// packs themselves are no longer kept, ~14 KB a tile): each column's top
+/// plate and the brick its top course is part of, ~6 KB a tile.
+struct TileTops {
+    std::vector<int16_t> top;    ///< TILE x TILE, x fastest: topmost solid plate
+    /// The column's top brick, from the tile's corner (a brick may cross the
+    /// edge): x, z, sx, sz; sx 0 where no piece owns the column's top.
+    std::vector<int8_t> rect;    ///< TILE x TILE x 4
+    bool piece(int lx, int lz) const { return rect[(size_t)(lx + TILE * lz) * 4 + 2] != 0; }
+};
+
+/// The same without the sample, for a reader that needs only the column tops
+/// and top bricks (the collapse's survey, rain, the pickaxe): a kept tile
+/// costs a lookup; one not kept is sampled and packed (~8 ms).
+std::shared_ptr<const TileTops> packed_tops(int tx, int tz, bool *packed = nullptr);
 
 /// SKY LIGHT for a mesh drawn over the cells but not baked by the terrain
 /// (the water, BrickFluid mesh_tile; Docs/MineWorld.md 19): each vertex's

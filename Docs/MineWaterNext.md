@@ -362,9 +362,10 @@ rivers' waves run side to side, choppy, with no sense of downstream.
   the biome). Near land the swell is steered -- its crests phased on the
   distance to the shore -- so across a river they rolled toward each bank:
   the side-to-side chop. `river_calm` (BrickWave and sea_wave.gdshaderinc,
-  the same samples): within 12 m of land, the distance field looked up 12 m
-  out four ways; no open water there (under 3.5 m) is a river: the swell
-  goes (full again at 9 m), and a 3 cm ripple, 4 m crests at 0.8 m/s, runs
+  the same samples): within 16 m of land, the distance field looked up 16 m
+  out four ways; no open water there (under 5 m) is a river: the swell
+  goes (full again at 12 m; was 12 m / 3.5 / 9, which left a 15 m wide
+  channel of the default seed half its swell, 2026-11-26), and a 3 cm ripple, 4 m crests at 0.8 m/s, runs
   along the banks toward the wider water (looked 30 m each way): downstream.
 - Checks (`--gate=sea`, now finding narrow water, not a River biome): a
   river's surface over 4 s swings 0.06 m where open sea swings 2.7 m

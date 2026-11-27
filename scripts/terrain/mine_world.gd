@@ -97,9 +97,14 @@ var _inv_walker_frozen := false
 var chests: MineChests = null
 ## Cable tiles, levers, lamps (Docs/MineWiring.md).
 var wiring: MineWiring = null
+var buildings_far: MineBuildingsFar = null
 var drops: DroppedItems = null
 ## Farming (Docs/MineFarming.md): tilled plots, crops on the world clock.
 var farming: MineFarming = null
+## Creatures: a zombie, pigs, fences' reason to be (Docs/MineCreatures.md).
+var mobs: MineMobs = null
+## Health, death, coming back (Docs/MineCreatures.md 11).
+var survival_rules: MineSurvival = null
 ## THE WORLD CLOCK (Docs/MineFarming.md 4): seconds played in this world,
 ## saved with it (the world file's "time"). The sky's hour is its day part;
 ## crops grow by it. Runs only while the world is open.
@@ -274,11 +279,22 @@ func _ready() -> void:
 	wiring.name = "Wiring"
 	add_child(wiring)
 	wiring.setup(self, drops)
+	# Stamped buildings' far facades (Docs/TerrainBuildings.md 7).
+	buildings_far = MineBuildingsFar.new()
+	buildings_far.name = "BuildingsFar"
+	add_child(buildings_far)
+	buildings_far.setup(self)
 	wiring.set_hud(_hud_layer)
 	farming = MineFarming.new()
 	farming.name = "Farming"
 	add_child(farming)
 	farming.setup(self)
+	mobs = MineMobs.new()
+	add_child(mobs)
+	mobs.setup(self)
+	survival_rules = MineSurvival.new()
+	add_child(survival_rules)
+	survival_rules.setup(self)
 	_build_item_icons()
 	debris = Debris.new()
 	debris.name = "Debris"
@@ -311,6 +327,8 @@ func _ready() -> void:
 			_run_water_gate()
 		elif "--gate=sea" in OS.get_cmdline_user_args():
 			_run_sea_gate()
+		elif "--gate=ocean" in OS.get_cmdline_user_args():
+			_run_ocean_gate()
 		elif "--gate=gen" in OS.get_cmdline_user_args():
 			_run_gen_gate()
 		elif "--gate=menu" in OS.get_cmdline_user_args():
@@ -318,6 +336,10 @@ func _ready() -> void:
 		elif "--gate=farm" in OS.get_cmdline_user_args():
 			# Farming (Docs/MineFarming.md): scripts/farming/farm_gate.gd.
 			_farm_gate = preload("res://scripts/farming/farm_gate.gd").new()
+			_farm_gate.run(self)
+		elif "--gate=mobs" in OS.get_cmdline_user_args():
+			# Creatures (Docs/MineCreatures.md): scripts/mobs/mobs_gate.gd.
+			_farm_gate = preload("res://scripts/mobs/mobs_gate.gd").new()
 			_farm_gate.run(self)
 		elif "--gate=wiring" in OS.get_cmdline_user_args():
 			# Wiring (Docs/MineWiring.md): scripts/wiring/wiring_gate.gd.
@@ -401,6 +423,8 @@ func generate(s: Dictionary) -> void:
 		save_edits(true)
 	settings = s.duplicate(true)
 	_teardown()
+	if mobs != null:
+		mobs.reset()
 	_pending_tiles = Rect2i()
 	_reanchors = 0
 	_last_reanchor_ms = 0.0
@@ -579,6 +603,9 @@ func _tend_towns(delta: float, eye: Vector3) -> void:
 func _teardown() -> void:
 	MineBuildings.registry.clear()
 	MineBuildings.towns_from_save([])
+	if buildings_far != null:
+		for c in buildings_far.get_children():
+			c.queue_free()
 	fast_hold = false
 	_speed = 0.0
 	_speed_from = Vector3.INF
@@ -1036,6 +1063,8 @@ func _wait_breaks() -> void:
 func terrain_edited(res: Dictionary) -> void:
 	if farming != null:
 		farming.terrain_changed()     # fields: a wall built or broken
+	if mobs != null:
+		mobs.terrain_edited(res)      # the creatures' nav forgets that box
 	water.terrain_changed(res)
 	# A stamped building undermined on one side tips (Docs/TerrainBuildings.md 4b).
 	MineBuildings.after_edit(self, res)
@@ -1344,6 +1373,10 @@ func _process(delta: float) -> void:
 	_tend_towns(delta, eye)
 	if farming != null:
 		farming.step(delta, eye)
+	if mobs != null:
+		mobs.step(delta)
+	if survival_rules != null:
+		survival_rules.step(delta)
 	_autosave(delta)
 	_hud_in -= delta
 	if _hud_in <= 0.0:
@@ -2178,6 +2211,8 @@ func _load_inventory() -> void:
 	if drops != null:
 		drops.inv = inv
 		drops.restore(world.get("drops", []))
+	if mobs != null:
+		mobs.restore(world.get("mobs", {}))
 	Inventory.units_in_bricks = false
 	_world_dirty = false
 	builder._refresh_bar()
@@ -2257,8 +2292,12 @@ func save_edits(wait := false) -> void:
 		_save_task = -1
 	var fluid_at := BrickFluid.change_count()
 	var farm_dirty := farming != null and farming.store.has_dirty()
+	# Creatures penned in or near the player are saved each time (section 11 of
+	# Docs/MineCreatures.md): they move, so there is always something to write.
+	var mobs_save := mobs.to_save() if mobs != null else {}
+	var mobs_dirty := mobs != null and mobs.wants_save()
 	if (not _edits_dirty and not _inv_dirty and not _world_dirty and fluid_at == _fluid_saved_at
-			and not farm_dirty) or settings.is_empty():
+			and not farm_dirty and not mobs_dirty) or settings.is_empty():
 		return
 	_edits_dirty = false
 	_world_dirty = false
@@ -2272,7 +2311,8 @@ func save_edits(wait := false) -> void:
 			"felled": _trees.felled_list() if _trees != null else _felled_load, "time": world_time,
 			"planted": _trees.planted_list() if _trees != null else _planted_load,
 			"farm_trouble": FarmPlant.trouble,
-			"buildings": MineBuildings.to_save(), "towns": MineBuildings.towns_to_save()}
+			"buildings": MineBuildings.to_save(), "towns": MineBuildings.towns_to_save(),
+			"mobs": mobs_save}
 	_time_saved = world_time
 	var farm_regions: Array = farming.store.take_dirty() if farming != null else []
 	if chests != null:
@@ -2440,7 +2480,7 @@ func _build_hud() -> void:
 func _update_farm_label() -> void:
 	if _farm_label == null or farming == null or builder == null:
 		return
-	_farm_label.text = farming.look_text(builder.target) if builder.active else ""
+	_farm_label.text = farming.hud_text(builder.target) if builder.active else ""
 
 
 func _update_hud() -> void:
@@ -2656,6 +2696,70 @@ func _offhand_gun_checks(check: Callable, rifle: ItemStack) -> void:
 	await _frames(10)
 
 
+## Round four's shield in --gate=inventory (Docs/Inventory.md): in the
+## off-hand, up, held by the left arm; RMB held raises it; a hit from in front
+## is blocked whole and wears it, one from behind lands; let go, a hit from in
+## front lands; worn out, the next blocked hit breaks it. Real DamagePackets
+## through DamageSystem; health and the hands put back after.
+func _shield_checks(check: Callable) -> void:
+	var inv: Inventory = builder.inv
+	var pool: HealthPool = pawn.health
+	var was_invulnerable := pool.invulnerable
+	pool.invulnerable = false
+	pool.reset()
+	var sh := ItemStack.make(&"shield", 1)
+	inv.offhands[0] = sh
+	inv.active_offhand = 0
+	inv.offhand_up = true
+	inv.changed.emit()
+	await _frames(10)
+	check.call("4d: a shield up in the off-hand is held, not raised; the sights rest", hands.shield_held == sh
+			and not hands.blocking and player.hold_aim and view.off_held != null)
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_RIGHT
+	press.pressed = true
+	press.button_mask = MOUSE_BUTTON_MASK_RIGHT
+	Input.parse_input_event(press)
+	await _frames(15)
+	check.call("4d: RMB held raises it (the pawn's guard set)", hands.blocking and pool.guard.is_valid())
+	await _shot(UserPaths.DEV + "inv_shield.png")
+	var src := Node3D.new()
+	add_child(src)
+	var c: Camera3D = gun.aim as Camera3D
+	src.global_position = c.global_position - c.global_transform.basis.z * 5.0
+	var before := pool.total_current()
+	var r := DamageSystem.resolve(DamagePacket.new(20.0, null, src), pool)
+	check.call("4d: a hit from in front is blocked whole (dealt %.1f, wear %s)" % [r.dealt, str(sh.data.get("wear", 0))],
+			r.blocked and pool.total_current() == before and int(sh.data.get("wear", 0)) == 20)
+	src.global_position = c.global_position + c.global_transform.basis.z * 5.0
+	r = DamageSystem.resolve(DamagePacket.new(20.0, null, src), pool)
+	check.call("4d: a hit from behind lands (dealt %.1f)" % r.dealt, not r.blocked and r.dealt > 0.0)
+	var up := press.duplicate()
+	up.pressed = false
+	up.button_mask = 0
+	Input.parse_input_event(up)
+	await _frames(10)
+	src.global_position = c.global_position - c.global_transform.basis.z * 5.0
+	r = DamageSystem.resolve(DamagePacket.new(20.0, null, src), pool)
+	check.call("4d: let go, a hit from in front lands (dealt %.1f)" % r.dealt, not hands.blocking
+			and not pool.guard.is_valid() and r.dealt > 0.0)
+	sh.data["wear"] = int(ItemCatalog.get_def(&"shield").get("durability", 336)) - 5
+	Input.parse_input_event(press)
+	await _frames(15)
+	r = DamageSystem.resolve(DamagePacket.new(20.0, null, src), pool)
+	await _frames(5)
+	check.call("4d: worn out, the blocked hit breaks it: gone from the off-hand", r.blocked
+			and inv.offhands[0] == null and hands.shield_held == null)
+	Input.parse_input_event(up)
+	await _frames(5)
+	src.queue_free()
+	inv.offhand_up = false
+	inv.changed.emit()
+	pool.reset()
+	pool.invulnerable = was_invulnerable
+	await _frames(5)
+
+
 ## A mouse button pressed for `frames` and let go, through the engine's input.
 func _mouse_tap(button: MouseButton, frames: int) -> void:
 	var press := InputEventMouseButton.new()
@@ -2862,11 +2966,16 @@ func _run_inventory_gate() -> void:
 		await _frames(3)
 		await _click(mk.get_global_rect().get_center())
 		await _frames(3)
-	check.call("picked: the crafting area shows the gravel result",
-			not scr.picked.is_empty() and scr.picked.name == "Gravel" and scr.result_slot().item_id == &"gravel")
+	var g0: ItemStack = inv.craft_grid[0]
+	check.call("picked: the book laid 12 stone in the 2x2 grid, the result shows gravel (Inventory.md 16)",
+			not scr.picked.is_empty() and scr.picked.name == "Gravel" and scr.result_slot().item_id == &"gravel"
+			and inv.craft_n == 2 and g0 != null and g0.count == 12)
 	await _click(scr.result_slot().get_global_rect().get_center())
 	await _frames(3)
-	check.call("a click on the result: 12 stone -> 12 gravel (gravel %d -> %d, stone %d -> %d)" % [gravel0,
+	check.call("a click on the result: 12 gravel onto the cursor (Minecraft's)", inv.cursor != null
+			and inv.cursor.id == &"gravel" and inv.cursor.count == 12 and inv.craft_grid[0] == null)
+	await _key(KEY_ESCAPE)
+	check.call("put back (Escape): 12 stone -> 12 gravel (gravel %d -> %d, stone %d -> %d)" % [gravel0,
 			_carried_count(inv, &"gravel"), stone0, _carried_count(inv, &"stone")],
 			_carried_count(inv, &"gravel") == gravel0 + 12 and _carried_count(inv, &"stone") == stone0 - 12)
 	var sb := scr.recipe_cell("Sandstone")
@@ -2881,6 +2990,31 @@ func _run_inventory_gate() -> void:
 	await _click(only.get_global_rect().get_center())
 	await _frames(3)
 	check.call("... off again: Sandstone back", scr.recipe_cell("Sandstone") != null)
+	# The recipe editor (16.3): its tab, the palette's wood clicked into a cell,
+	# Shift-click: +12. Not saved here (a test writes no recipe tables).
+	var ed_tab: Control = scr.get("_tabs")["editor"]
+	await _click(ed_tab.get_global_rect().get_center())
+	await _frames(5)
+	var ed: RecipeEditorPanel = scr.get("_editor")
+	check.call("the Editor tab shows the recipe editor and the palette", scr.page == "editor" and ed.is_visible_in_tree()
+			and (scr.get("_creative_scroll") as Control).is_visible_in_tree())
+	var wood_cat := _inv_slot(scr, {}, &"wood")
+	if wood_cat != null:
+		(scr.get("_creative_scroll") as ScrollContainer).ensure_control_visible(wood_cat)
+		await _frames(3)
+		await _click(wood_cat.get_global_rect().get_center())
+	var cell0: InvSlot = ed.find_child("EditorCell0", true, false)
+	if cell0 != null:
+		await _click(cell0.get_global_rect().get_center())
+		await _click(cell0.get_global_rect().get_center())
+	var c0 = ed.cells[0]
+	check.call("a held wood clicked into a cell: wood, then +1 (%s)" % str(c0), c0 != null and c0.id == &"wood"
+			and int(c0.count) == 2)
+	await _shot(UserPaths.DEV + "inv_editor.png")
+	inv.cursor = null
+	ed.clear_all()
+	await _click(tab_s.get_global_rect().get_center())
+	await _frames(3)
 	var winr := get_window()
 	var sizer := winr.size
 	winr.size = Vector2i(640, 400)
@@ -2942,6 +3076,7 @@ func _run_inventory_gate() -> void:
 	check.call("... its rounds went back into its stack (%s)" % str(gun_stack.data.get("ammo", "?")),
 			int(gun_stack.data.get("ammo", -1)) == rounds1)
 	await _offhand_gun_checks(check, gun_stack)
+	await _shield_checks(check)
 	inv.swap_with_hotbar(Inventory.addr(&"main", 26), 6)
 	set_on_foot(false)
 	_fly_to(_eye() + Vector3(0, 0.8, 0), Vector3(0, 0, -1))
@@ -3068,9 +3203,11 @@ func _run_inventory_gate() -> void:
 				await _frames(3)
 				await _click(sb2.get_global_rect().get_center())
 				await _frames(3)
+				check.call("at the workbench the grid is 3x3", inv.craft_n == 3)
 				await _click(_inv_screen.result_slot().get_global_rect().get_center())
 				await _frames(3)
-			check.call("a click on the result: 12 sand -> 12 sandstone (%d -> %d)" % [sand0,
+				await _key(KEY_ESCAPE)
+			check.call("a click on the result, put back: 12 sand -> 12 sandstone (%d -> %d)" % [sand0,
 					_carried_count(inv, &"sandstone")], _carried_count(inv, &"sandstone") == sand0 + 12)
 			await _shot(UserPaths.DEV + "inv_workbench.png")
 			await _key(KEY_E)
@@ -3110,16 +3247,21 @@ func _run_inventory_gate() -> void:
 		_fly_to(box.get_center() + Vector3(0, 2.4, 0), Vector3(0, 0, -1))
 		walker.pitch = -1.45
 		await _frames(10)
+		# Only what the shot makes counts: generating again may have topped up
+		# the farming kit, and what did not fit lies at the spawn already.
+		var before: Array = drops.drops.duplicate()
 		_mine(to_global(box.get_center()), Vector3.DOWN, null)
 		await _frames(5)
-		check.call("a shot breaks the chest, its soil drops (creative: not the chest) (chests %d, drops %s)" % [
-				chests.count(), str(drops.drops.map(func(d): return (d.stack as ItemStack).id))],
-				chests.count() == 0 and drops.count() == 1
-				and (drops.drops[0].stack as ItemStack).id == &"soil")
+		var fresh: Array = drops.drops.filter(func(d): return not before.has(d))
+		check.call("a shot breaks the chest, its soil drops (creative: not the chest) (chests %d, new drops %s)" % [
+				chests.count(), str(fresh.map(func(d): return (d.stack as ItemStack).id))],
+				chests.count() == 0 and fresh.size() == 1
+				and (fresh[0].stack as ItemStack).id == &"soil")
 		await _frames(60)
-		var drop_at: Vector3 = drops.drops[0].pos if drops.count() > 0 else box.get_center()
+		var soil_drop = fresh[0] if fresh.size() > 0 else null
+		var drop_at: Vector3 = soil_drop.pos if soil_drop != null else box.get_center()
 		check.call("the drop came to rest on the ground (%.2f m over the chest's floor)"
-				% (drop_at.y - box.position.y), drops.count() > 0 and bool(drops.drops[0].rest)
+				% (drop_at.y - box.position.y), soil_drop != null and bool(soil_drop.rest)
 				and absf(drop_at.y - box.position.y) < 0.5)
 		await _shot(UserPaths.DEV + "inv_drop.png")
 		var had := 0
@@ -3139,7 +3281,7 @@ func _run_inventory_gate() -> void:
 			if a.area in [&"hotbar_0", &"hotbar_1", &"main"] and inv.get_slot(a) == null:
 				free_n += 1
 		check.call("walking over it picks it up (soil %d -> %d; %d free slots, drops %d)" % [had, now_has, free_n, drops.count()],
-				drops.count() == 0 and now_has > had)
+				soil_drop != null and not drops.drops.has(soil_drop) and now_has > had)
 		# The ground under a second chest goes: it breaks.
 		_fly_to(box.get_center() + Vector3(0, 2.4, 0), Vector3(0, 0, -1))
 		walker.pitch = -1.45
@@ -4119,6 +4261,34 @@ func _gpu_shadows_off(roots: Array) -> void:
 			(g as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 
+## The sea's tiers drawn with the plain water shader (no depth pass, no
+## blend) for --gate=gpu, and back.
+var _gpu_sea_mats := {}
+
+
+func _gpu_sea_opaque(on: bool) -> void:
+	var sea = water.sea
+	for tier in [sea.near, sea.mid, sea.sheet]:
+		if tier == null:
+			continue
+		var m: ShaderMaterial = tier._mat
+		if on:
+			_gpu_sea_mats[tier] = [m.shader, m.next_pass]
+			m.shader = load("res://shaders/water.gdshader")
+			m.next_pass = null
+		elif _gpu_sea_mats.has(tier):
+			m.shader = _gpu_sea_mats[tier][0]
+			m.next_pass = _gpu_sea_mats[tier][1]
+	if not on:
+		_gpu_sea_mats.clear()
+
+
+func _gpu_sea_cull(on: bool) -> void:
+	for tier in [water.sea.near, water.sea.mid, water.sea.sheet]:
+		if tier != null:
+			WaterShaders.set_cull_back(tier._mat, "res://shaders/water.gdshader", water.sea.see_through, on)
+
+
 func _gpu_back() -> void:
 	for n in _gpu_saved:
 		if not is_instance_valid(n):
@@ -4210,6 +4380,15 @@ func _gpu_toggles() -> Array:
 	t.append(["water (all) hidden", func(): _gpu_hide([water]), _gpu_back])
 	if water.sea != null:
 		t.append(["sea hidden", func(): _gpu_hide([water.sea]), _gpu_back])
+		# The sea's parts (Docs/MineWater.md, the cost split 2026-11-26): its
+		# 1x1 tier, its 2x2 tier, the sheet (their meshes: the sea shows the tiers
+		# itself each frame), and drawn opaque (no depth pass).
+		t.append(["sea 1x1 tier hidden", func(): _gpu_hide(water.sea.near.get_children()), _gpu_back])
+		if water.sea.mid != null:
+			t.append(["sea 2x2 tier hidden", func(): _gpu_hide(water.sea.mid.get_children()), _gpu_back])
+		t.append(["sea sheet hidden", func(): _gpu_hide(water.sea.sheet.get_children()), _gpu_back])
+		t.append(["sea opaque (no see-through)", func(): _gpu_sea_opaque(true), func(): _gpu_sea_opaque(false)])
+		t.append(["sea both sides (cull off)" if water.sea._culled else "sea back faces culled", func(): _gpu_sea_cull(not water.sea._culled), func(): _gpu_sea_cull(water.sea._culled)])
 	t.append(["lava lights hidden", func(): _gpu_hide(water._lights.values()), _gpu_back])
 	var lod0 := vp.mesh_lod_threshold
 	t.append(["mesh LOD threshold -> 4 px", func(): vp.mesh_lod_threshold = 4.0, func(): vp.mesh_lod_threshold = lod0])
@@ -6066,6 +6245,133 @@ func _run_water_gate() -> void:
 ## The sea pass: -- --gate=sea (Docs/MineWater.md 14, stages 3 and 4). The
 ## generated sea drawn by the wave tiers at a coast, a river mouth, a channel
 ## dug off the sea filling, then the player: swimming, under water, a bucket.
+## THE DEEP OCEAN (Docs/MineOcean.md 4): deep water found, the look by
+## depth, breath and drowning, a current carrying the swimmer.
+func _run_ocean_gate() -> void:
+	await _frames(10)
+	var dev := UserPaths.DEV
+	DirAccess.make_dir_recursive_absolute(dev)
+	_time = 0.45
+	var stud := BrickWorld.get_stud_metres()
+	var level := BrickFluid.get_sea_level()
+	var e := _eye()
+	var c0 := Vector2i(floori(e.x / stud), floori(e.z / stud))
+	# The deepest column on rings out from the spawn, and how much of what
+	# was sampled is sea, and deep sea.
+	var deep := Vector2i(1 << 30, 0)
+	var deepest := 0.0
+	var sea_n := 0
+	var deep_n := 0
+	var all_n := 0
+	for ring in range(1, 120):
+		var r := ring * 64
+		var n := ring * 8
+		for i in n:
+			var a := TAU * float(i) / float(n)
+			var p := c0 + Vector2i(int(cos(a) * r), int(sin(a) * r))
+			var d := level - _ground_m(p.x, p.y)
+			all_n += 1
+			if d > 0.5:
+				sea_n += 1
+			if d > 40.0:
+				deep_n += 1
+			if d > deepest:
+				deepest = d
+				deep = p
+		if deepest > 75.0:
+			break
+	print("[ocean-gate] sampled %d columns: %d sea, %d deeper than 40 m; deepest %.1f m at %s (%.0f m out)" % [
+			all_n, sea_n, deep_n, deepest, deep, Vector2(deep - c0).length() * stud])
+	if deepest < 40.0:
+		print("[ocean-gate] FAIL no sea deeper than 40 m")
+		get_tree().quit()
+		return
+	var dm := Vector3((deep.x + 0.5) * stud, level, (deep.y + 0.5) * stud)
+	var floor_m := level - deepest
+	# Flying (no breath), the look at three depths.
+	set_on_foot(false)
+	_fly_to(dm + Vector3(0, 30, 0), Vector3(1, 0, 0))
+	walker.pitch = -0.5
+	await _frames(240)
+	view.process_mode = Node.PROCESS_MODE_DISABLED
+	view.rig.visible = false
+	if view.arms != null:
+		view.arms.visible = false
+	_hud.visible = false
+	await _shot(dev + "ocean_above.png")
+	var env: Environment = _rig.env
+	var shades := []
+	for want in [5.0, 30.0, 60.0]:
+		var y := maxf(level - want, floor_m + 2.0)
+		_fly_to(Vector3(dm.x, y, dm.z), Vector3(1, 0, 0.3))
+		walker.pitch = -0.25
+		await _frames(150)
+		shades.append(water.dive.shade)
+		print("[ocean-gate] at %.0f m: %s, fog %.3f, brightness %.2f; %s" % [
+				want, water.dive.report(), env.fog_density, env.adjustment_brightness, water.report()])
+		await _shot(dev + "ocean_%dm.png" % int(want))
+	var darker: bool = shades[0] < shades[1] and shades[1] < shades[2]
+	print("[ocean-gate] look by depth: shade %.2f, %.2f, %.2f (%s)" % [
+			shades[0], shades[1], shades[2], "darker going down" if darker else "FAIL not darker going down"])
+	# The floor from 4 m over it.
+	_fly_to(Vector3(dm.x, floor_m + 4.0, dm.z), Vector3(1, 0, 0.3))
+	walker.pitch = -0.4
+	await _frames(120)
+	await _shot(dev + "ocean_floor.png")
+	# Breath: on foot 12 m down, breath nearly gone, survival.
+	var was_survival := survival
+	survival = true
+	set_on_foot(true, Vector3(dm.x, level - 12.0, dm.z))
+	await _frames(20)
+	water.dive.breath = 0.5
+	var hp0: float = pawn.health.total_current()
+	await _frames(240)
+	var hp1: float = pawn.health.total_current()
+	print("[ocean-gate] survival, out of breath 3.5 s: health %.1f -> %.1f (%s); %s" % [
+			hp0, hp1, "drowning" if hp1 < hp0 - 3.0 else "FAIL no drowning", water.dive.report()])
+	pawn.health.reset()
+	survival = false
+	water.dive.breath = 0.0
+	hp0 = pawn.health.total_current()
+	await _frames(120)
+	hp1 = pawn.health.total_current()
+	print("[ocean-gate] creative, no breath 2 s: health %.1f -> %.1f (%s)" % [
+			hp0, hp1, "no drowning" if hp1 >= hp0 - 0.01 else "FAIL drowned in creative"])
+	set_on_foot(false)
+	_fly_to(Vector3(dm.x, level + 4.0, dm.z), Vector3(1, 0, 0))
+	await _frames(30)
+	print("[ocean-gate] in air 0.5 s: breath %.1f s (want filling)" % water.dive.breath)
+	survival = was_survival
+	# A current: the nearest in the regions round the deep point.
+	water.currents.gather_all(Vector3(dm.x, level - 20.0, dm.z))
+	var cp: Vector3 = water.currents.nearest_point(Vector3(dm.x, level - 20.0, dm.z))
+	print("[ocean-gate] %d current(s) within %d regions of %.0f m" % [
+			water.currents.count_near(), MineCurrents.NEAR_REGIONS, MineCurrents.REGION_M])
+	if cp == Vector3.INF:
+		print("[ocean-gate] FAIL no current near the deep water")
+	else:
+		var push: Vector3 = water.flow_at(cp)
+		print("[ocean-gate] current at %s (%.0f m from the deep point): flow %.1f m/s" % [
+				cp, Vector2(cp.x - dm.x, cp.z - dm.z).length(), push.length()])
+		set_on_foot(true, cp - Vector3.UP * 0.9)
+		await _frames(30)
+		var p0 := to_local(pawn.feet())
+		await _frames(120)
+		var p1 := to_local(pawn.feet())
+		var v := (p1 - p0).length() / 2.0
+		print("[ocean-gate] swimmer in the current: %.1f m/s over 2 s (%s), swimming %s" % [
+				v, "carried" if v > 3.0 else "FAIL not carried", pawn.moves != null and pawn.moves.swimming])
+		set_on_foot(false)
+		var dir := push.normalized() if push.length() > 0.1 else Vector3(1, 0, 0)
+		var side := dir.cross(Vector3.UP).normalized()
+		_fly_to(cp - dir * 6.0 + side * 3.0 + Vector3.UP * 1.0, (dir - side * 0.4).normalized())
+		walker.pitch = -0.05
+		await _frames(120)
+		await _shot(dev + "ocean_current.png")
+	print("[ocean-gate] done; %s" % water.report())
+	get_tree().quit()
+
+
 func _run_sea_gate() -> void:
 	await _frames(10)
 	var dev := UserPaths.DEV
@@ -6259,6 +6565,36 @@ func _run_sea_gate() -> void:
 		# Rivers calm (MineWaterNext.md 11): the river's surface over 4 s
 		# moves a few cm (the ripple), where open sea a coast away swings
 		# much more. The CPU's height, the one swimmers and floaters ride.
+		# The search finds the mouth (open water one way, where the swell
+		# rightly comes in): step up the river, along its open axis, to where
+		# no open water is within 16 m any way -- the inside of the river.
+		var inside := Vector2.INF
+		var opens := []
+		for o in [Vector2(16, 0), Vector2(-16, 0), Vector2(0, 16), Vector2(0, -16)]:
+			opens.append(snappedf(BrickWave.shore_distance(rm.x + o.x, rm.z + o.y), 0.1))
+		print("[sea-gate] the mouth: shore distance 16 m out four ways %s" % [opens])
+		for o in [Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1)]:
+			for k in range(1, 60):
+				var q: Vector2 = Vector2(rm.x, rm.z) + o * k * 1.4
+				var qs := Vector2i(floori(q.x / stud), floori(q.y / stud))
+				if BrickTerrain.surface_plate(qs.x, qs.y) >= (sea_b - 1) * 3:
+					break
+				var widest := 0.0
+				for d: Vector2 in [Vector2(16, 0), Vector2(-16, 0), Vector2(0, 16), Vector2(0, -16)]:
+					widest = maxf(widest, BrickWave.shore_distance(q.x + d.x, q.y + d.y))
+				if widest < 5.0 and BrickWave.shore_distance(q.x, q.y) > 0.5:
+					inside = q
+					break
+			if inside != Vector2.INF:
+				break
+		if inside != Vector2.INF:
+			print("[sea-gate] inside the river at %.1f, %.1f (%.0f m up from the mouth)" % [
+					inside.x, inside.y, inside.distance_to(Vector2(rm.x, rm.z))])
+			rm = Vector3(inside.x, level, inside.y)
+		else:
+			# Open water within 16 m everywhere up it: a bend of the coast
+			# the search took for a river (the default seed's), not a river.
+			print("[sea-gate] no point inside it with no open water in 16 m: a coast, not a river (its swing below is the sea's)")
 		var rlo := INF
 		var rhi := -INF
 		var slo := INF
@@ -7194,8 +7530,61 @@ func _run_buildings_gate() -> void:
 		get_viewport().get_texture().get_image().save_png(dev + "mine_building_%s.png" % tag)
 	var look := centre + Vector3(0, height * 0.45, 0)
 	await shoot_pic.call("near", centre + Vector3(-12.0, 1.8, -9.0), centre + Vector3(0, 3.0, 0))
+	# 5b: near, its glass is drawn blended on a node of its own (split out
+	# of the opaque mesh), casting no shadow.
+	var glass_nodes := 0
+	for n: Node in _streamer.find_children("SurfaceGlass", "MeshInstance3D", true, false):
+		var gmi := n as MeshInstance3D
+		if gmi.material_override == TerrainTile.glass_material() and gmi.mesh != null \
+				and gmi.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF:
+			glass_nodes += 1
+	ok = glass_nodes > 0
+	check.call(ok, "its glass is drawn blended (%d glass surfaces)" % glass_nodes)
+	fails += 0 if ok else 1
 	await shoot_pic.call("mid", centre + Vector3(-40.0, 6.0, -22.0), look)
 	await shoot_pic.call("far", centre + Vector3(-110.0, 25.0, -60.0), look)
+	# Stage 7, the far view: from well past the near tiles the coarse tier
+	# draws it, and its facade (MineBuildingsFar) is drawn over that.
+	var far_from := centre + Vector3(-420.0, 70.0, -260.0)
+	cam.global_transform = Transform3D(Basis(), to_global(far_from)).looking_at(to_global(look))
+	# The eye the tiles follow is the player's (the walker): taken there too.
+	_fly_to(far_from, look - far_from)
+	_streamer.settle(Vector2(far_from.x, far_from.z))
+	var far_built0 := buildings_far.built
+	for k in 12:
+		buildings_far.tend()
+		await _frames(10)
+	await _frames(30)
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png(dev + "mine_building_far_facade.png")
+	var fnode: MeshInstance3D = MineBuildings.registry[0].get("far_node") if not MineBuildings.registry.is_empty() else null
+	ok = fnode != null and fnode.visible and fnode.mesh != null and fnode.mesh.get_surface_count() > 0
+	check.call(ok, "from %.0f m its far facade is drawn (%d made, %d triangles)" % [far_from.distance_to(centre),
+			buildings_far.built - far_built0,
+			0 if fnode == null or fnode.mesh == null or fnode.mesh.get_surface_count() == 0
+			else int(fnode.mesh.surface_get_array_len(0) / 3.0)])
+	fails += 0 if ok else 1
+	# Near again: the facade hidden, the real bricks drawn.
+	_fly_to(e, Vector3.FORWARD)
+	_streamer.settle(Vector2(centre.x, centre.z))
+	await _frames(10)
+	buildings_far.tend()
+	ok = fnode != null and not fnode.visible
+	check.call(ok, "near, the facade is hidden (the real bricks drawn)")
+	fails += 0 if ok else 1
+	# Room streaming (6d): its fittings drawn only near.
+	var ranged := 0
+	for c: Vector3i in wiring.devices.keys():
+		var dn: Node = wiring.devices[c].get("node")
+		if dn != null and in_box.call(c):
+			for g in dn.find_children("*", "GeometryInstance3D", true, false):
+				if (g as GeometryInstance3D).visibility_range_end > 0.0:
+					ranged += 1
+					break
+	ok = ranged >= int(info.get("doors", 0)) + int(info.get("lamps", 0)) * 2
+	check.call(ok, "its fittings are drawn only near (%d of %d)" % [ranged,
+			int(info.get("doors", 0)) + int(info.get("lamps", 0)) * 2])
+	fails += 0 if ok else 1
 	# Inside, its first floor: furniture and the windows' light (stages 5, 6).
 	var floor1 := (base + 3) * plate + 1.2
 	await shoot_pic.call("inside", Vector3((lo.x + 3.5) * stud, floor1, (lo.z + 3.5) * stud),
@@ -7286,6 +7675,12 @@ func _run_buildings_gate() -> void:
 	ok = let > 0 and fell > 0
 	check.call(ok, "cut loose, it falls (%d pieces, %d bricks)" % [let, fell])
 	fails += 0 if ok else 1
+	if "--dig-all" in OS.get_cmdline_user_args():
+		# Let go by MineBuildings, not the survey (whose fitted ground floats
+		# big groups): no support at all is a topple straight down.
+		ok = MineBuildings.toppled == tipped0 + 1
+		check.call(ok, "nothing under it, it is let go whole by its own balance check")
+		fails += 0 if ok else 1
 	if not "--dig-all" in OS.get_cmdline_user_args():
 		ok = MineBuildings.toppled == tipped0 + 1
 		check.call(ok, "undermined past its middle, it tips (%d balance checks)" % MineBuildings.checks)
