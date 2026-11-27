@@ -34,7 +34,6 @@ extends RefCounted
 ##             client; the save restored into an empty world brings them back.
 ##   species   a deer herd jumps a 2-brick wall; a wolf pack hunts and bites a
 ##             pig; a boar hurt by the player charges and hits them.
-##   farm      a plot near a live herd has its abstract animal trouble off.
 ##   lava      lava poured is LAVA to the nav, and no body fits in it.
 ##   spawn     (section 12) the creative Spawn tab lists a spawn item for the
 ##             zombie and every animal; RMB with one through the builder makes
@@ -78,7 +77,7 @@ func run(host: Node) -> void:
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--only="):
 			only = arg.split("=")[1]
-	for part in ["zombie", "trample", "pig", "fence", "far", "death", "gate", "save", "species", "farm_flag", "lava", "spawn"]:
+	for part in ["zombie", "trample", "pig", "fence", "far", "death", "gate", "save", "species", "lava", "spawn"]:
 		if only == "" or only == part:
 			await call("_%s_checks" % part)
 	print("[mobs-gate] fields built %d, last %.1f ms; nav %s" % [m.fields_built, m.last_field_ms, m.nav.get_stats()])
@@ -607,23 +606,6 @@ func _species_checks() -> void:
 			charged and pawn.health.total_current() < 100.0)
 	w.set_survival(false)
 	pawn.health.reset()
-	await _kill_all()
-
-
-func _farm_flag_checks() -> void:
-	var f: MineFarming = w.farming
-	var b := _carrot(70, 84)
-	var pigs := m.spawn_herd(&"pig", _at(70, 78), 2)
-	pigs.blind = true
-	await w._frames(5)
-	m._next_farm = 0.0
-	await w._frames(3)
-	var plot := f.store.get_plot(b)
-	plot["open"] = true
-	var crop := FarmPlant.crop_of(plot)
-	var animals_rate: float = FarmPlant.hazards(plot, crop)[0] if not plot.is_empty() else -1.0
-	check("farm: a plot with a herd near has no abstract animal trouble (herds %s, rate %.6f)" % [plot.get("herds", false), animals_rate],
-			bool(plot.get("herds", false)) and animals_rate == 0.0)
 	await _kill_all()
 
 

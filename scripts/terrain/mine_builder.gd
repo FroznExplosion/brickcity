@@ -222,11 +222,11 @@ func on_mode_changed() -> void:
 # ---------------------------------------------------------------------------
 # Both hands and the quick slot (Docs/Inventory.md round four)
 
-## The off-hand is up with a block, device or chest in it (not a gun: that
-## one is MineHands').
+## The off-hand is up with a block, device or chest in it (not a gun or a
+## shield: those are MineHands').
 func offhand_builds() -> bool:
 	var o := inv.offhand()
-	return o != null and ItemCatalog.kind(o.id) != "gun"
+	return o != null and not ItemCatalog.kind(o.id) in ["gun", "shield"]
 
 
 ## Run `f` with the off-hand as the hand (`Inventory.using_off`): place_target
@@ -1203,9 +1203,11 @@ func _refresh_bar() -> void:
 	var what := ItemCatalog.label(inv.hand())
 	if inv.quick_out:
 		what = "[quick] " + what
+	# The off-hand last, after the main hand's details (a block's colour).
+	var off_txt := ""
 	var off := inv.offhands[inv.active_offhand] as ItemStack
 	if off != null:
-		what += "   |   off: %s%s" % [ItemCatalog.label(off),
+		off_txt = "   |   off: %s%s" % [ItemCatalog.label(off),
 				" (lowered)" if inv.offhand_lowered() else ("" if inv.offhand_up else " (down)")]
 	var keys := "1-9 / wheel hand  X bar  C off-hand  B quick  E items"
 	if hand_kind() == "block":
@@ -1220,7 +1222,7 @@ func _refresh_bar() -> void:
 		what += "  -  %s%s, %d cells" % [SHAPES[size_i][0], " turned" if turned and dd.x != dd.z else "",
 				dd.x * dd.y * dd.z]
 		keys = "Z shape  R turn  V colour  " + keys
-	_hud.caption = "%s%s   (%s)" % [what, "" if inv.creative else "  [survival]", keys]
+	_hud.caption = "%s%s%s   (%s)" % [what, off_txt, "" if inv.creative else "  [survival]", keys]
 	_hud.redraw()
 
 

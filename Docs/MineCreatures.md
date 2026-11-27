@@ -410,7 +410,6 @@ is not done.
 - Real models.
 - Deer, wolves, rabbits, boar.
 - Fence gates (a wiring door works as one).
-- Turning off the abstract animal trouble near real herds.
 
 ## 11. Built (2026-11-26): the rest of the list
 
@@ -514,10 +513,9 @@ opens.
 is now an obstacle to the nav and an open one is not (`_doors_step`, every
 0.5 s).
 
-**Farms.** A plot within 64 m of a live herd that eats crops gets `herds`.
-The abstract animal trouble is off for it, because the real herd eats it
-instead (`FarmPlant.hazards`, settled first). Without one, the abstract
-trouble runs as before. The flag is not saved: it is set again within 10 s.
+**Farms.** The abstract animal trouble is gone (Docs/MineFarming.md 23, the
+farming chat's): only real animals eat and trample crops. The `herds`
+flag that turned it off near herds went with it, and so did its gate check.
 
 **Tests.**
 
@@ -532,7 +530,6 @@ trouble runs as before. The flag is not saved: it is set again within 10 s.
   - a deer over a 2-brick wall;
   - wolves biting pigs;
   - a hurt boar charging the player;
-  - the farm flag;
   - lava read by the nav.
 - `--gate=mobs --only=<part>` runs one part after the arena.
 

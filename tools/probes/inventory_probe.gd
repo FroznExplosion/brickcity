@@ -55,6 +55,7 @@ func _init() -> void:
 	_backpacks()
 	_crafting()
 	_smelting()
+	_grid_crafting()
 	_wood_and_leaves()
 	_guns()
 	_placed_backpacks()
@@ -282,6 +283,14 @@ func _hands() -> void:
 	_ok("a pistol may go in the off-hand", inv.slot_accepts(A(&"offhand", 0),
 			ItemStack.make(ItemCatalog.gun_id(&"pistol"), 1)))
 	_ok("every two-handed gun is refused there, every other item taken", _offhand_rule_holds(inv))
+	var shd := ItemCatalog.get_def(&"shield")
+	_ok("a shield: an off-hand item that wears out", shd.get("kind", "") == "shield" and shd.get("hand", "") == "off"
+			and int(shd.get("durability", 0)) > 0 and inv.slot_accepts(A(&"offhand", 1), ItemStack.make(&"shield", 1)))
+	var made_shield := false
+	for r in RecipeBook.all():
+		if r.output == &"shield" and r.station == &"workbench":
+			made_shield = true
+	_ok("... made at a workbench", made_shield)
 	inv.cursor = ItemStack.make(&"stone", 1)
 	inv.left_click(A(&"offhand", 0))
 	_ok("a block does (round four)", inv.offhands[0] != null and inv.cursor == null)
@@ -533,6 +542,99 @@ func _smelting() -> void:
 	chests.free()
 	back.free()
 	drops.free()
+
+
+## Shaped crafting (Docs/Inventory.md 16): 2x2 / 3x3 / 4x4 grids, a cell may
+## need several of its item, what a cell lacks comes from what is carried,
+## the result onto the cursor, the book's fill, shapeless lists, the editor's
+## table written and read back.
+func _grid_crafting() -> void:
+	print("grid crafting")
+	RecipeBook.load_all(true)
+	var wb := RecipeBook.by_name("Workbench")
+	_ok("the workbench is a 2x2 shape of wood x12 (48 in all)", not (wb.shape as Dictionary).is_empty()
+			and int(wb.shape.w) == 2 and int(wb.shape.h) == 2 and int(wb.inputs[0].count) == 48 and int(wb.grid) == 2)
+	_ok("the chest needs a 3x3 grid", int(RecipeBook.by_name("Chest").grid) == 3)
+	var inv := Inventory.new()
+	inv.backpack = Inventory.make_backpack(&"large_backpack")
+	inv.main[0] = ItemStack.make(&"wood", 100)
+	for i in 4:
+		inv.craft_grid[i] = ItemStack.make(&"wood", 1)
+	var m := inv.grid_match()
+	_ok("1 wood in each 2x2 cell is the workbench's shape", not m.is_empty() and m.recipe.name == "Workbench")
+	_ok("... its counts made up from what is carried: nothing lacking", inv.grid_lack(m, []).is_empty())
+	var res := inv.craft_grid_now([], true)
+	_ok("a click: the workbench onto the cursor; the grid's 4 and 44 carried used",
+			res.made == 1 and inv.cursor != null and inv.cursor.id == &"workbench"
+			and inv.main[0] != null and inv.main[0].count == 56 and inv.craft_grid[0] == null)
+	inv.cursor = null
+	inv.main[0] = null
+	for i in 4:
+		inv.craft_grid[i] = ItemStack.make(&"wood", 1)
+	_ok("nothing carried: \"44 more Wood\"", inv.grid_lack(inv.grid_match(), []).has("44 more Wood"),
+			str(inv.grid_lack(inv.grid_match(), [])))
+	inv.clear_craft()
+	inv.set_craft_size(3)
+	inv.main[0] = ItemStack.make(&"wood", 200)
+	inv.craft_grid[4] = ItemStack.make(&"wood", 12)
+	inv.craft_grid[5] = ItemStack.make(&"wood", 12)
+	inv.craft_grid[7] = ItemStack.make(&"wood", 12)
+	inv.craft_grid[8] = ItemStack.make(&"wood", 12)
+	_ok("the 2x2 shape in the bottom right of a 3x3 grid is still the workbench",
+			inv.grid_match().get("recipe", {}).get("name", "") == "Workbench")
+	inv.clear_craft()
+	var fill := inv.fill_grid(RecipeBook.by_name("Chest"))
+	var ring := true
+	for i in 9:
+		var st: ItemStack = inv.craft_grid[i]
+		ring = ring and ((st == null) if i == 4 else (st != null and st.id == &"wood" and st.count == 12))
+	_ok("the book's fill lays the chest's ring, 12 wood a cell, from what is carried", fill.ok and ring
+			and (fill.ghosts as Dictionary).size() == 8)
+	var all := inv.craft_grid_now([&"workbench"], false, true)
+	_ok("Shift-click: as many chests as the wood makes (248 -> 2), the grid topped up between, and no compost bin from what is left",
+			all.made == 2 and inv.count_of({"id": &"chest", "tag": "", "count": 1}) == 2
+			and inv.count_of({"id": &"compost_bin", "tag": "", "count": 1}) == 0,
+			"made %d" % all.made)
+	inv.clear_craft()
+	inv.set_craft_size(2)
+	_ok("the chest's 3x3 cannot be laid in a 2x2 grid", not inv.fill_grid(RecipeBook.by_name("Chest")).ok)
+	inv.craft_grid[3] = ItemStack.make(&"lava_source", 1)
+	inv.craft_grid[0] = ItemStack.make(&"water_source", 1)
+	_ok("shapeless: lava and water in any cells is obsidian",
+			inv.grid_match().get("recipe", {}).get("name", "") == "Obsidian")
+	inv.craft_grid[1] = ItemStack.make(&"sand", 1)
+	_ok("... with something else in the grid, nothing", inv.grid_match().is_empty())
+	inv.clear_craft()
+	inv.cursor = ItemStack.make(&"stone", 5)
+	inv.craft_grid[0] = ItemStack.make(&"stone", 12)
+	_ok("onto a held stack of another kind: nothing made", inv.craft_grid_now([], true).made == 0)
+	inv.cursor = null
+	inv.clear_craft()
+	# The editor's side: a recipe to our JSON and back; the table on disk.
+	var pk := RecipeBook.by_name("Pickaxe")
+	var back := RecipeBook.parse(RecipeBook.to_raw(pk))
+	_ok("a recipe written as a table entry reads back the same shape (%s)" % pk.shape.signature,
+			not back.is_empty() and back.shape.signature == pk.shape.signature and back.station == pk.station)
+	var path := UserPaths.DEV + "probe_recipes.json"
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+	RecipeBook.custom_path_override = path
+	var mine := {"name": "Probe torch", "inputs": [], "station": &"", "output": &"coal_ore", "count": 4,
+			"category": "items", "keep_contents": false,
+			"shape": RecipeBook.trim_shape(2, 2, [{"id": &"coal_ore", "tag": "", "count": 1}, null,
+					{"id": &"wood", "tag": "", "count": 2}, null])}
+	_ok("the editor saves a new shape (2 wood in one cell under 1 coal)", RecipeBook.save_custom(mine).is_empty())
+	var taken := mine.duplicate()
+	taken.name = "Copy of the workbench"
+	taken.shape = wb.shape
+	_ok("... and refuses a shape another recipe has", not RecipeBook.save_custom(taken).is_empty())
+	var table = JSON.parse_string(FileAccess.get_file_as_string(path))
+	var entry: Dictionary = table.recipes[0] if table is Dictionary and table.recipes.size() > 0 else {}
+	var reread := RecipeBook.parse(entry)
+	_ok("the saved entry reads back: 1x2, wood x2 under coal", not reread.is_empty()
+			and reread.shape.signature == "1x2:coal_ore*1,wood*2", str(entry))
+	RecipeBook.custom_path_override = ""
+	DirAccess.remove_absolute(path)
 
 
 func _crafting() -> void:

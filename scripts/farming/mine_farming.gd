@@ -134,7 +134,8 @@ func setup(p_host: Node) -> void:
 	draw = FarmDraw.new()
 	draw.name = "Crops"
 	add_child(draw)
-	draw.setup()
+	# Crops lit like the cave they are in when the world draws sky light.
+	draw.setup(host.get("sky_lit") != null)
 	FarmCrops.load_all()
 
 
@@ -192,7 +193,7 @@ func step(delta: float, eye: Vector3) -> void:
 				var t0 := Time.get_ticks_usec()
 				refresh(b)
 				worst_refresh_us = maxi(worst_refresh_us, Time.get_ticks_usec() - t0)
-	fields.step(delta, store, eye, _stud, _apply_field)
+	fields.step(delta, store, _apply_field)
 	if _draw_dirty or _drawn_eye == Vector3.INF or Vector2(eye.x - _drawn_eye.x, eye.z - _drawn_eye.z).length() > 8.0:
 		_draw_dirty = false
 		_drawn_eye = eye
@@ -228,19 +229,19 @@ func settle_all() -> void:
 # ---------------------------------------------------------------------------
 # Trouble (stage 5, Docs/MineFarming.md 9)
 
-## A field's answer is in: its plots open to animals or not, one-crop or not
-## -- each settled first, so what grew before grew under the old flags.
+## A field worked out again: its plots one-crop or not -- each settled first,
+## so what grew before grew under the old flag. (`open` is no longer set:
+## real animals decide for themselves, section 23; an old save's is cleared.)
 func _apply_field(f: Dictionary) -> void:
 	var t := now()
 	for b in f.plots:
 		var plot := store.get_plot(b)
 		if plot.is_empty():
 			continue
-		var open := bool(f.open)
 		var mono: bool = f.mono != &"" and plot.crop == f.mono
-		if open != bool(plot.get("open", false)) or mono != bool(plot.get("mono", false)):
+		if mono != bool(plot.get("mono", false)) or bool(plot.get("open", false)):
 			FarmPlant.settle(plot, t)
-			plot.open = open
+			plot.open = false
 			plot.mono = mono
 			store.touch(b)
 
@@ -248,7 +249,6 @@ func _apply_field(f: Dictionary) -> void:
 ## The ground near the farms changed (MineWorld.terrain_edited): fields are
 ## looked at again (a wall built or broken).
 func terrain_changed() -> void:
-	fields.dirty = true
 	_terrain_ver += 1
 
 
@@ -264,13 +264,27 @@ func _packed(plot: Dictionary) -> void:
 ## Is a scarecrow standing within SCARE_M of the plot? (From the list
 ## gathered once a second: the chests were walked for every plot.)
 func _scared(b: Vector3i) -> bool:
-	if host.chests != null and host.chests.count() != _scare_count:
-		_gather_scarecrows()     # one put down or taken away just now
+	_ensure_gathered()
 	var at := _top_middle(b)
 	for sc in _scarecrows:
 		if sc.distance_to(at) <= SCARE_M:
 			return true
 	return false
+
+
+## The scarecrows, sprinklers and collectors gathered again once a frame (a
+## few chests walked) and whenever the number of placed things changed (one
+## put down this frame). Only on the count it missed a swap: a floating
+## station broken and a collector put down kept the count, and the collector
+## was never seen (--gate=farm, 2026-11-27).
+var _gather_frame := -1
+
+
+func _ensure_gathered() -> void:
+	var fr := Engine.get_process_frames()
+	if fr != _gather_frame or (host.chests != null and host.chests.count() != _scare_count):
+		_gather_frame = fr
+		_gather_scarecrows()
 
 
 func _gather_scarecrows() -> void:
@@ -298,8 +312,7 @@ func _in_reach(block: Vector3i, b: Vector3i, plots: int) -> bool:
 
 ## A sprinkler within reach of plot `b`?
 func _sprinkled(b: Vector3i) -> bool:
-	if host.chests != null and host.chests.count() != _scare_count:
-		_gather_scarecrows()
+	_ensure_gathered()
 	for sp in _sprinklers:
 		if _in_reach(sp, b, SPRINKLER_PLOTS):
 			return true
@@ -308,6 +321,7 @@ func _sprinkled(b: Vector3i) -> bool:
 
 ## The key of a collector with plot `b` in reach, or "".
 func _collector_for(b: Vector3i) -> String:
+	_ensure_gathered()
 	for c in _collectors:
 		if _in_reach(c[0], b, COLLECTOR_PLOTS):
 			return str(c[1])
@@ -531,6 +545,7 @@ func till(target: Dictionary) -> bool:
 	var n: Vector3i = target.get("normal", Vector3i.ZERO)
 	if n != Vector3i.UP:
 		log_lines.append("till refused: not a top face")
+		refuse("Hoe: the top of soil, not its side")
 		return false
 	var cell: Vector3i = target.cell
 	if not plot_at_cell(cell).is_empty():
@@ -548,16 +563,19 @@ func till(target: Dictionary) -> bool:
 			for yy in range(ytop + 1, ytop + 4):
 				if BrickTerrain.solid_at(x, yy, z) != 0:
 					log_lines.append("till refused: something on it")
+					refuse("Hoe: clear what stands on it first")
 					return false
 			var m := BrickTerrain.solid_at(x, top, z)
 			for yy in range(top + 1, ytop + 1):
 				m = BrickTerrain.solid_at(x, yy, z) if BrickTerrain.solid_at(x, yy, z) != 0 else m
 			if not _soil.has(m):
 				log_lines.append("till refused: not soil (%d)" % m)
+				refuse("Hoe: only grass, dirt or podzol can be tilled")
 				return false
 			for yy in range(c * 3, top + 1):
 				if BrickTerrain.solid_at(x, yy, z) == 0 and yy < top:
 					log_lines.append("till refused: not flat")
+					refuse("Hoe: the 2x2 under it must be flat")
 					return false
 			fert += float(_soil[m])
 			count += 1
@@ -595,15 +613,19 @@ func plant(target: Dictionary, item: StringName, data := {}) -> bool:
 	var cdef := FarmCrops.get_crop(crop)
 	if plot.is_empty() and str(cdef.ground) == "soil":
 		plot = _soil_plot(target)
+	if plot.is_empty() and str(cdef.ground) == "farm":
+		refuse("%s go on tilled soil: use a hoe first" % ItemCatalog.get_def(item).get("name", "Seeds"))
+		return false
 	if plot.is_empty() or plot.crop != &"":
 		return false
 	# A crop wants tilled soil: a sapling's plain-soil plot takes only saplings.
 	if str(cdef.ground) == "farm" and str(plot.get("ground", "farm")) != "farm":
+		refuse("%s go on tilled soil: use a hoe first" % ItemCatalog.get_def(item).get("name", "Seeds"))
 		return false
 	# A biome crop grows only in its biomes (stage 6).
 	if not grows_here(cdef, int(plot.biome)):
 		log_lines.append("%s refused at %s: only in %s" % [crop, plot.b, ", ".join(cdef.only)])
-		last_refusal = "%s only grows in %s" % [cdef.name, ", ".join(cdef.only)]
+		refuse("%s only grows in %s" % [cdef.name, ", ".join(cdef.only)])
 		return false
 	FarmPlant.plant(plot, crop, now(), FarmPlant.traits_of(data))
 	store.touch(plot.b)
@@ -661,8 +683,25 @@ func _replant(plot: Dictionary, got: Dictionary) -> void:
 # ---------------------------------------------------------------------------
 # Depth (stage 6, Docs/MineFarming.md 20)
 
-## The last thing planting refused, for the HUD (a biome crop elsewhere).
+## The last thing tilling or planting refused, and when (ms), for the HUD:
+## shown over the hotbar for REFUSAL_MS (Docs/MineFarming.md 22).
 var last_refusal := ""
+var _refusal_at := -100000
+const REFUSAL_MS := 3000
+
+
+func refuse(why: String) -> void:
+	last_refusal = why
+	_refusal_at = Time.get_ticks_msec()
+
+
+## The line over the hotbar: why the last till or plant was refused (for a
+## few seconds), then the plot or crop looked at.
+func hud_text(target: Dictionary) -> String:
+	var look := look_text(target)
+	if last_refusal != "" and Time.get_ticks_msec() - _refusal_at < REFUSAL_MS:
+		return last_refusal + ("\n" + look if look != "" else "")
+	return look
 
 
 ## Does crop `c` grow in biome `biome` at all? (Its `only` list; empty: anywhere.)
@@ -1068,6 +1107,9 @@ func animal_eat(b: Vector3i) -> bool:
 	var plot := store.get_plot(b)
 	if plot.is_empty() or plot.crop == &"":
 		return false
+	# A giant is past trouble (Docs/MineFarming.md 20): animals leave it.
+	if int(plot.get("giant", 0)) != 0:
+		return false
 	FarmPlant.settle(plot, now())
 	if int(plot.stage) <= 0:
 		plot.crop = &""
@@ -1190,6 +1232,7 @@ func refresh(b: Vector3i) -> void:
 	plot.scared = scared
 	if changed:
 		store.touch(b)
+		_draw_dirty = true            # its light is drawn on it (FarmDraw)
 	var u6 := Time.get_ticks_usec()
 	_set_soil(plot, t)
 	_prof("soil swap", Time.get_ticks_usec() - u6)

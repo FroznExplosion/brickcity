@@ -12,36 +12,89 @@ extends Node3D
 ## changed, a plot came or went, or the eye moved far.
 
 const DRAW_M := 96.0
+## Past DRAW_M a plot is a low patch in its crop's colour out to this far
+## (Docs/MineFarming.md 22): a field does not vanish at 96 m.
+const FAR_M := 512.0
 
 var _stud := 0.35
 var _plate := 0.14
 var _meshes := {}
 ## key "crop:stage" -> MultiMeshInstance3D
 var _mmis := {}
-var _mat: StandardMaterial3D
-## Instances drawn at the last rebuild (the gate reads it).
+var _mat: Material
+## The far patches: one MultiMesh of boxes, coloured per instance.
+var _far: MultiMeshInstance3D
+var _far_mat: Material
+## Drawn with the mine world's sky light (crops in a cave as dark as the
+## cave): each instance's levels in its custom data -- the plot's own cached
+## sky and lamp light (Docs/MineFarming.md 22).
+var sky_lit := false
+## Instances drawn at the last rebuild (the gate reads them).
 var drawn := 0
+var far_drawn := 0
 
 
-func setup() -> void:
+func setup(p_sky_lit := false) -> void:
 	_stud = BrickWorld.get_stud_metres()
 	_plate = BrickWorld.get_plate_metres()
-	_mat = StandardMaterial3D.new()
-	_mat.vertex_color_use_as_albedo = true
-	_mat.roughness = 0.42
-	_mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
-	_mat.cull_mode = BaseMaterial3D.CULL_DISABLED      # the leaf plates are seen from both sides
+	sky_lit = p_sky_lit
+	if sky_lit:
+		# The falling sand's sky-lit item shader: COLOR (the crop meshes'
+		# vertex colours, the patches' instance colours) times its light.
+		var m := MineSkyLit.sand_material().duplicate() as ShaderMaterial
+		m.set_shader_parameter("roughness", 0.45)
+		_mat = m
+		_far_mat = m
+	else:
+		var std := StandardMaterial3D.new()
+		std.vertex_color_use_as_albedo = true
+		std.roughness = 0.42
+		std.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+		std.cull_mode = BaseMaterial3D.CULL_DISABLED      # the leaf plates are seen from both sides
+		_mat = std
+		_far_mat = std
+	_far = MultiMeshInstance3D.new()
+	_far.name = "FarFields"
+	var fm := MultiMesh.new()
+	fm.transform_format = MultiMesh.TRANSFORM_3D
+	fm.use_colors = true
+	fm.use_custom_data = true
+	var box := BoxMesh.new()
+	box.size = Vector3.ONE
+	fm.mesh = box
+	_far.multimesh = fm
+	_far.material_override = _far_mat
+	_far.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_far)
+
+
+## A colour as the material wants it: the sky-lit item shader takes COLOR as
+## linear (its own albedo is a source_color uniform), so sRGB colours are
+## converted -- unconverted, the crops came out washed out (ripe carrots tan).
+func _c(col: Color) -> Color:
+	return col.srgb_to_linear() if sky_lit else col
+
+
+## A plot's light for the sky-lit shader (custom data: r sky, g lamp, 0..1).
+static func _light(plot: Dictionary) -> Color:
+	return Color(clampf(float(plot.get("sky", 1.0)), 0.0, 1.0), clampf(float(plot.get("lamp", 0.0)), 0.0, 1.0), 0.0, 0.0)
 
 
 func rebuild(plots: Dictionary, eye: Vector3) -> void:
 	var by := {}
+	var far: Array = []
 	var r2 := DRAW_M * DRAW_M
+	var f2 := FAR_M * FAR_M
 	for b in plots:
 		var plot: Dictionary = plots[b]
 		if plot.crop == &"":
 			continue
 		var at := Vector3((b.x * 2 + 1) * _stud, (b.y + 1) * _plate, (b.z * 2 + 1) * _stud)
-		if Vector2(at.x - eye.x, at.z - eye.z).length_squared() > r2:
+		var d2 := Vector2(at.x - eye.x, at.z - eye.z).length_squared()
+		if d2 > f2:
+			continue
+		if d2 > r2:
+			far.append(plot)
 			continue
 		var giant := int(plot.get("giant", 0))
 		if giant == 2:
@@ -56,7 +109,7 @@ func rebuild(plots: Dictionary, eye: Vector3) -> void:
 		var seed := int(plot.seed)
 		var turn := Basis(Vector3.UP, (seed & 3) * PI * 0.5)
 		var s := 0.92 + 0.16 * float((seed >> 4) & 255) / 255.0
-		by[key].append(Transform3D(turn.scaled(Vector3(s, s, s)), at))
+		by[key].append([Transform3D(turn.scaled(Vector3(s, s, s)), at), _light(plot)])
 	drawn = 0
 	for key in _mmis.keys():
 		if not by.has(key):
@@ -73,6 +126,7 @@ func rebuild(plots: Dictionary, eye: Vector3) -> void:
 			mmi.name = "Crop_" + key.replace(":", "_")
 			var mm := MultiMesh.new()
 			mm.transform_format = MultiMesh.TRANSFORM_3D
+			mm.use_custom_data = true
 			mm.mesh = mesh
 			mmi.multimesh = mm
 			mmi.material_override = _mat
@@ -81,8 +135,34 @@ func rebuild(plots: Dictionary, eye: Vector3) -> void:
 		var xs: Array = by[key]
 		mmi.multimesh.instance_count = xs.size()
 		for i in xs.size():
-			mmi.multimesh.set_instance_transform(i, xs[i])
+			mmi.multimesh.set_instance_transform(i, xs[i][0])
+			mmi.multimesh.set_instance_custom_data(i, xs[i][1])
 		drawn += xs.size()
+	_rebuild_far(far)
+
+
+## The far patches: a 2 x 2-stud box on each plot, as tall as its crop has
+## grown (a plate to about two bricks), in its leaf colour turning to its ripe
+## colour. The stage is the plot's own as last settled: a plot out of reach is
+## not touched (settled when the player comes back), so a far field shows how
+## it stood then.
+func _rebuild_far(far: Array) -> void:
+	var fm := _far.multimesh
+	fm.instance_count = far.size()
+	far_drawn = far.size()
+	for i in far.size():
+		var plot: Dictionary = far[i]
+		var b: Vector3i = plot.b
+		var crop := FarmCrops.get_crop(plot.crop)
+		var last := maxi(int(crop.get("stages", 2)) - 1, 1)
+		var k := clampf(float(plot.stage) / last, 0.0, 1.0)
+		var h := lerpf(_plate, _plate * 3.0 * 2.0, k)
+		var col: Color = (crop.get("leaf", Color(0.3, 0.6, 0.25)) as Color).lerp(
+				crop.get("ripe", Color(0.85, 0.7, 0.3)) as Color, k * k)
+		var at := Vector3((b.x * 2 + 1) * _stud, (b.y + 1) * _plate + h * 0.5, (b.z * 2 + 1) * _stud)
+		fm.set_instance_transform(i, Transform3D(Basis.from_scale(Vector3(2.0 * _stud * 0.9, h, 2.0 * _stud * 0.9)), at))
+		fm.set_instance_color(i, _c(col))
+		fm.set_instance_custom_data(i, _light(plot))
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +345,7 @@ func _box(st: SurfaceTool, c: Vector3, size: Vector3, col: Color) -> void:
 	var corners := [Vector3(-1, -1, -1), Vector3(1, -1, -1), Vector3(1, 1, -1), Vector3(-1, 1, -1),
 			Vector3(-1, -1, 1), Vector3(1, -1, 1), Vector3(1, 1, 1), Vector3(-1, 1, 1)]
 	var faces := [[0, 3, 2, 1], [4, 5, 6, 7], [0, 4, 7, 3], [1, 2, 6, 5], [3, 7, 6, 2], [0, 1, 5, 4]]
-	st.set_color(col)
+	st.set_color(_c(col))
 	for f in faces:
 		var q: Array = []
 		for i in f:
@@ -286,7 +366,7 @@ func _quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> v
 
 ## An upright cylinder standing on `base`, with a top cap.
 func _cyl(st: SurfaceTool, base: Vector3, r: float, h: float, col: Color, seg := 8) -> void:
-	st.set_color(col)
+	st.set_color(_c(col))
 	for i in seg:
 		var a0 := TAU * float(i) / seg
 		var a1 := TAU * float(i + 1) / seg
@@ -312,7 +392,7 @@ func _leaf(st: SurfaceTool, c: Vector3, dir: Vector3, length: float, col: Color)
 	var side := d.cross(Vector3.UP).normalized() * _stud * 0.16
 	var tip := c + d * length * 0.55 + Vector3(0, length * 0.75, 0)
 	var t := Vector3(0, _plate * 0.12, 0)
-	st.set_color(col)
+	st.set_color(_c(col))
 	# Both faces, so it reads from either side.
 	_quad(st, c - side, c + side, tip + side * 0.4, tip - side * 0.4)
 	_quad(st, c + side + t, c - side + t, tip - side * 0.4 + t, tip + side * 0.4 + t)

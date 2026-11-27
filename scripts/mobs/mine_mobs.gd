@@ -51,8 +51,6 @@ const WIND_TURN := 0.05           # rad/s at most
 ## Tree cells whose trunks the nav is told about (TerrainTrees' trunks are
 ## physics boxes, not terrain: without this a zombie walks into them).
 const TREES_NEAR := 100.0
-## Real herds within this of a field turn its abstract animal trouble off.
-const HERDS_NEAR := 64.0
 ## Which wild group comes next, by weight.
 const WILD_KINDS := {&"pig": 3, &"deer": 3, &"rabbit": 2, &"boar": 1, &"wolf": 1}
 
@@ -101,7 +99,6 @@ var _door_groups := {}   # device cell -> obstacle group
 var _next_group := 1
 var _next_trees := 0.0
 var _next_doors := 0.0
-var _next_farm := 0.0
 var _next_fluid := 0.0
 var _pending := {}
 var _pen_job := -1
@@ -483,7 +480,6 @@ func step(delta: float) -> void:
 	_fluid_step()
 	_field_step(f)
 	_pen_step()
-	_farm_step()
 	_herd_t += delta
 	if _herd_t >= 1.0 / Herd.HZ:
 		for h in herds:
@@ -872,31 +868,6 @@ func _fluid_step() -> void:
 	# is in read their fluid again -- the sea and rain change cells all the
 	# time, and reading every section's water again cost a field 2 s.
 	nav.update_fluid()
-
-
-## Real herds near a field turn its abstract animal trouble off
-## (Docs/MineFarming.md 18): settled first, so the time before keeps its rule.
-func _farm_step() -> void:
-	var t := now()
-	var farming = host.get("farming")
-	if farming == null or t < _next_farm:
-		return
-	_next_farm = t + 10.0
-	var centres := []
-	for h in herds:
-		if not ((h as Herd).def.likes as Array).is_empty() and not (h as Herd).alive().is_empty():
-			centres.append((h as Herd).centre())
-	for b in farming.store.plots:
-		var plot: Dictionary = farming.store.plots[b]
-		var top: Vector3 = farming._top_middle(b)
-		var near := false
-		for c in centres:
-			if (c as Vector3).distance_to(top) < HERDS_NEAR:
-				near = true
-				break
-		if bool(plot.get("herds", false)) != near:
-			FarmPlant.settle(plot, farming.now())
-			plot["herds"] = near
 
 
 # ---------------------------------------------------------------------------
