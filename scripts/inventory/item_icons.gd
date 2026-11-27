@@ -156,6 +156,30 @@ static func _cyl(top: float, bottom: float, h: float, seg := 20) -> CylinderMesh
 	return c
 
 
+## A brick shield, fitted to about 1.0 tall, its face toward -Z, its handle
+## behind (+Z) at `SHIELD_GRIP`: a board of the item's colour, a grey rim and
+## a boss -- the icon's model and the one the off-hand holds (MineHands).
+const SHIELD_GRIP := Vector3(0.0, 0.0, 0.16)
+static func make_shield(col: Color) -> Node3D:
+	var n := Node3D.new()
+	n.name = "Shield"
+	_shield_parts(n, col)
+	return n
+
+
+## The shield's parts, each a MeshInstance3D straight under `n` (the icon fit
+## measures direct children).
+static func _shield_parts(n: Node3D, col: Color) -> void:
+	var rim := _mat(Color(0.55, 0.56, 0.6), 0.3)
+	_part(n, _box(Vector3(0.72, 0.96, 0.1)), _mat(col, 0.6), Vector3.ZERO)
+	_part(n, _box(Vector3(0.8, 0.08, 0.14)), rim, Vector3(0, 0.48, 0))
+	_part(n, _box(Vector3(0.8, 0.08, 0.14)), rim, Vector3(0, -0.48, 0))
+	_part(n, _box(Vector3(0.08, 1.04, 0.14)), rim, Vector3(0.38, 0, 0))
+	_part(n, _box(Vector3(0.08, 1.04, 0.14)), rim, Vector3(-0.38, 0, 0))
+	_part(n, _cyl(0.12, 0.16, 0.08), rim, Vector3(0, 0, -0.08), Basis(Vector3.RIGHT, PI / 2))
+	_part(n, _box(Vector3(0.06, 0.3, 0.06)), rim, SHIELD_GRIP)
+
+
 static func _model(d: Dictionary) -> Node3D:
 	var inner := Node3D.new()
 	var col: Color = d.get("colour", Color(0.8, 0.8, 0.8))
@@ -170,6 +194,8 @@ static func _model(d: Dictionary) -> Node3D:
 	elif str(d.get("model", "")) == "ingot":
 		kind = "ingot"
 	match kind:
+		"shield":
+			_shield_parts(inner, col)
 		"ingot":
 			# A bar, narrower on top (Minecraft's ingot, in bricks).
 			_part(inner, _box(Vector3(1.0, 0.24, 0.5)), _mat(col, 0.25), Vector3(0, 0.12, 0))

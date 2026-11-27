@@ -413,12 +413,23 @@ a layout, not a rule.
 - **Never by themselves**: pickups, crafting, shift-click and the cursor
   going back never put an item into an empty off-hand slot (a stack of the
   same kind there is topped up by a pickup).
-- Shields: an `off` item needs blocking, which does not exist yet -- later.
+- **Shields** (2026-11-26): the Brick Shield (`shield`, kind `shield`,
+  hand `off`, `durability` 336; workbench: 72 wood + 1 iron ingot). In the
+  off-hand, up: drawn low on the left, the left arm on its handle; RMB held
+  raises it (MineHands.blocking, 0.12 s). Raised, it is the pawn's
+  `HealthPool.guard` (a hook in DamageSystem, one funnel for every hit): a
+  hit from within 60 degrees of the view -- where its source is, or its
+  point -- is blocked whole (`DamageResult.blocked`, no damage, no status)
+  and wears the shield by its damage (`data.wear`, shown as "Brick Shield
+  83%"); worn out it breaks and is gone. Hits from the side or behind land.
+  Not done: slower walking while it is up, a block sound, armour (section 16).
 - Tests: inventory_probe (the off-hand rules, pickups never into it, the
   quick slot and up flag saved); `--gate=inventory` 4a (stone laid from the
   off-hand with C and RMB), 4b (the off-hand pistol fires on RMB taps, a
-  rifle lowers it, it comes back), 4c (B, X, the wheel, 3; saved).
-  2026-11-26: probe 141 ok, gate PASS (109 checks).
+  rifle lowers it, it comes back), 4c (B, X, the wheel, 3; saved), 4d
+  (the shield: raised by RMB, a hit from in front blocked and worn, one
+  from behind lands, let go it lands, worn out it breaks).
+  2026-11-26: probe 147 ok, gate PASS (115 checks).
 
 ## 5. Tests
 

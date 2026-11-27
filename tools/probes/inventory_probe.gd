@@ -283,6 +283,14 @@ func _hands() -> void:
 	_ok("a pistol may go in the off-hand", inv.slot_accepts(A(&"offhand", 0),
 			ItemStack.make(ItemCatalog.gun_id(&"pistol"), 1)))
 	_ok("every two-handed gun is refused there, every other item taken", _offhand_rule_holds(inv))
+	var shd := ItemCatalog.get_def(&"shield")
+	_ok("a shield: an off-hand item that wears out", shd.get("kind", "") == "shield" and shd.get("hand", "") == "off"
+			and int(shd.get("durability", 0)) > 0 and inv.slot_accepts(A(&"offhand", 1), ItemStack.make(&"shield", 1)))
+	var made_shield := false
+	for r in RecipeBook.all():
+		if r.output == &"shield" and r.station == &"workbench":
+			made_shield = true
+	_ok("... made at a workbench", made_shield)
 	inv.cursor = ItemStack.make(&"stone", 1)
 	inv.left_click(A(&"offhand", 0))
 	_ok("a block does (round four)", inv.offhands[0] != null and inv.cursor == null)

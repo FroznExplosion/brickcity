@@ -205,11 +205,12 @@ var _outgoing_home: Node3D
 var swaps_done := 0
 ## The left hand off the gun (0 on it, 1 free), and its stride.
 var _left_free := 0.0
-## A gun held in the LEFT hand, apart from the rig (the mine world's off-hand
-## pistol, MineHands; Docs/Inventory.md round four), or null. Set, the left
-## hand's C goes round its grip (`view_holds`, from holds_for) instead of
-## steadying the gun in the right -- with or without one there.
-var off_held: GunInstance = null
+## What the LEFT hand holds apart from the rig -- the mine world's off-hand
+## pistol or shield (MineHands; Docs/Inventory.md round four) -- or null. Set,
+## the left hand's C goes round its grip (meta `view_holds.grip`, its own
+## frame: holds_for for a gun) instead of steadying the gun in the right --
+## with or without one there.
+var off_held: Node3D = null
 ## A grenade throw under way, 0..1 (-1 none), what to call when the grenade
 ## leaves the hand, and the grenade shown in it.
 var _throw := -1.0

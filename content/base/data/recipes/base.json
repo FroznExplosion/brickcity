@@ -25,6 +25,8 @@
 				"W": { "item": "wood", "count": 12 } } },
 		{ "name": "Bucket", "station": "workbench", "output": "bucket",
 			"pattern": ["I I"], "key": { "I": { "item": "iron_ingot", "count": 1 } } },
+		{ "name": "Brick Shield", "station": "workbench", "output": "shield",
+			"pattern": ["WIW", "WWW", " W "], "key": { "W": { "item": "wood", "count": 12 }, "I": { "item": "iron_ingot", "count": 1 } } },
 		{ "name": "Source bucket", "station": "workbench", "output": "source_bucket",
 			"pattern": ["G", "B"], "key": { "G": { "item": "gold_ingot", "count": 1 }, "B": { "item": "bucket", "count": 1 } } },
 		{ "name": "Mega Pickaxe", "station": "workbench", "output": "mega_pickaxe",
