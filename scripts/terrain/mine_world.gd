@@ -6531,7 +6531,9 @@ func _run_sea_gate() -> void:
 					inside.x, inside.y, inside.distance_to(Vector2(rm.x, rm.z))])
 			rm = Vector3(inside.x, level, inside.y)
 		else:
-			print("[sea-gate] no point inside the river with no open water in 16 m (measured at the mouth)")
+			# Open water within 16 m everywhere up it: a bend of the coast
+			# the search took for a river (the default seed's), not a river.
+			print("[sea-gate] no point inside it with no open water in 16 m: a coast, not a river (its swing below is the sea's)")
 		var rlo := INF
 		var rhi := -INF
 		var slo := INF
