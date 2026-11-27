@@ -248,9 +248,39 @@ func wet_near(at: Vector3, radius: float) -> bool:
 	return false
 
 
+## Back faces culled on the tiers while the eye is over every crest (the
+## waves' amplitudes summed, the material's own uniform, plus this); under
+## it, both sides drawn (from below, a piece's top is seen through its open
+## underside).
+const CULL_MARGIN_M := 1.0
+var _culled := false
+
+
+## The highest a crest can reach over the sea level, metres: the amplitudes
+## the tiers were given (gain baked in), summed. CPU-side values.
+func _crest() -> float:
+	var w = near._mat.get_shader_parameter("waves") if near != null and near._mat != null else null
+	var a := 0.0
+	if w != null:
+		for i in range(0, w.size(), 2):
+			a += absf(float(w[i].x))
+	return a
+
+
+func _cull_for(camera: Vector3) -> void:
+	var above := camera.y > BrickWave.get_sea_level() + _crest() + CULL_MARGIN_M
+	if above == _culled:
+		return
+	_culled = above
+	for tier in [near, mid, sheet]:
+		if tier != null:
+			WaterShaders.set_cull_back(tier._mat, "res://shaders/water.gdshader", see_through, above)
+
+
 func follow(camera: Vector3, delta: float) -> void:
 	if near == null:
 		return
+	_cull_for(camera)
 	var xz := Vector2(camera.x, camera.z)
 	# The sheet is flat rings and cheap; the brick tiers are not, and are shown
 	# only where there is water inside their reach.
