@@ -7310,6 +7310,17 @@ func _run_buildings_gate() -> void:
 		get_viewport().get_texture().get_image().save_png(dev + "mine_building_%s.png" % tag)
 	var look := centre + Vector3(0, height * 0.45, 0)
 	await shoot_pic.call("near", centre + Vector3(-12.0, 1.8, -9.0), centre + Vector3(0, 3.0, 0))
+	# 5b: near, its glass is drawn blended on a node of its own (split out
+	# of the opaque mesh), casting no shadow.
+	var glass_nodes := 0
+	for n: Node in _streamer.find_children("SurfaceGlass", "MeshInstance3D", true, false):
+		var gmi := n as MeshInstance3D
+		if gmi.material_override == TerrainTile.glass_material() and gmi.mesh != null \
+				and gmi.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF:
+			glass_nodes += 1
+	ok = glass_nodes > 0
+	check.call(ok, "its glass is drawn blended (%d glass surfaces)" % glass_nodes)
+	fails += 0 if ok else 1
 	await shoot_pic.call("mid", centre + Vector3(-40.0, 6.0, -22.0), look)
 	await shoot_pic.call("far", centre + Vector3(-110.0, 25.0, -60.0), look)
 	# Stage 7, the far view: from well past the near tiles the coarse tier

@@ -4477,16 +4477,15 @@ static void exposed_brick_cells(const TileSample &s, bool tops, std::vector<uint
     }
 }
 
-/// Every BEHIND_FACE triangle moved out of `m` into mesh arrays of its own
-/// (build_tile's "behind_mesh"): drawn by a node of its own with a short
-/// visibility range, so a far tile's are not processed at all. Empty: none.
-static Array split_behind(MeshBuf &m) {
+/// Every vertex whose CUSTOM0 byte `byte` is `value` (and its triangles)
+/// moved out of `m` into mesh arrays of its own. Empty: none.
+static Array split_faces(MeshBuf &m, int byte, uint8_t value) {
     const int nv = m.verts.size();
     const uint8_t *cu = m.custom0.ptr();
     std::vector<uint8_t> which((size_t)nv, 0);
     bool any = false;
     for (int i = 0; i < nv; ++i) {
-        which[(size_t)i] = cu[(size_t)i * 4 + 2] == BEHIND_FACE ? 1 : 0;
+        which[(size_t)i] = cu[(size_t)i * 4 + byte] == value ? 1 : 0;
         any = any || which[(size_t)i] != 0;
     }
     if (!any) {
@@ -4534,6 +4533,22 @@ static Array split_behind(MeshBuf &m) {
     mesh[Mesh::ARRAY_INDEX] = b.indices;
     mesh[Mesh::ARRAY_CUSTOM0] = b.custom0;
     return mesh;
+}
+
+/// Every BEHIND_FACE triangle moved out of `m` into mesh arrays of its own
+/// (build_tile's "behind_mesh"): drawn by a node of its own with a short
+/// visibility range, so a far tile's are not processed at all. Empty: none.
+static Array split_behind(MeshBuf &m) {
+    return split_faces(m, 2, BEHIND_FACE);
+}
+
+/// Every GLASS face (material byte MAT_GLASS, stamped by the near mesher)
+/// moved out of `m` (build_tile's "glass_mesh", Docs/TerrainBuildings.md 5b):
+/// the terrain is one opaque pass, so TerrainTile draws these with a
+/// blended material of their own. Before split_behind: a glass face never
+/// lands in the behind mesh. Empty: none.
+static Array split_glass(MeshBuf &m) {
+    return split_faces(m, 0, (uint8_t)MAT_GLASS);
 }
 
 /// The behind pass (BEHIND_FACE): into `m`, after the main pass; `cells`
@@ -7304,6 +7319,7 @@ Dictionary BrickTerrain::build_section(int tx, int sy, int tz) {
         cave_boxes = add_cave_boxes(s, boxes, true, nullptr);
         sky_light_pass(m, s, false, out, &studs);
         t_behind = nullptr;
+        out["glass_mesh"] = split_glass(m);
         out["behind_mesh"] = split_behind(m);
         out["own_lo"] = s.own_lo;
         out["own_hi"] = s.own_hi;
@@ -8415,6 +8431,7 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
     Dictionary sky;
     sky_light_pass(m, s, true, sky, &studs);
     t_behind = nullptr;
+    const Array glass_mesh = split_glass(m);
     const Array behind_mesh = split_behind(m);
 
     // No edge skirt on the detail tiles (19.18): the detail square always
@@ -8435,6 +8452,7 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
 
     Dictionary out = sky;
     out["mesh"] = mesh;
+    out["glass_mesh"] = glass_mesh;
     out["behind_mesh"] = behind_mesh;
     out["behind_baked"] = behind_baked;
     out["behind_cells_ms"] = t_behind_cells_ms;
