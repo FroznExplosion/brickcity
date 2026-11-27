@@ -50,6 +50,10 @@ extends RefCounted
 ##             a collector given seeds harvests ripe crops in reach into its
 ##             slots and replants from them (then it is taken away, so the
 ##             'away' check below sees plain growth).
+##   gaps      (Docs/MineFarming.md 22) seeds on plain grass say why over
+##             the hotbar; crops are drawn sky-lit (the cave's light, per
+##             instance); from 150 m the field is far patches, not bare soil
+##             (user://dev/farm_far.png).
 ##   save      the world generated again (saved, loaded): the plots, their
 ##             state and the clock come back.
 ##   pictures  user://dev/farm_field.png, farm_guide.png.
@@ -583,6 +587,33 @@ func run(host: Node) -> void:
 			creplanted += 1
 	check("and replants them from its seeds (%d creplanted)" % creplanted, creplanted > 0)
 	w.chests.break_chest(ckey, false)
+
+	# --- the gaps: a refusal said, crops sky-lit, far fields drawn
+	f.plant({"cell": Vector3i((bx0 + 4) * 2, top, (bz0 + 4) * 2), "normal": Vector3i.UP}, &"wheat_seeds")
+	var said := f.hud_text({})
+	check("seeds on plain grass say why: \"%s\"" % said, said.contains("tilled soil") and said.contains("hoe"))
+	var lit_mat: bool = f.draw._mat is ShaderMaterial
+	var custom_ok := false
+	for k in f.draw._mmis:
+		var mm: MultiMesh = (f.draw._mmis[k] as MultiMeshInstance3D).multimesh
+		if mm.instance_count > 0:
+			custom_ok = mm.use_custom_data and mm.get_instance_custom_data(0).r > 0.0
+			break
+	check("crops are drawn sky-lit (shader: %s, light per instance: %s)" % [lit_mat, custom_ok],
+			f.draw.sky_lit == (w.get("sky_lit") != null) and (not f.draw.sky_lit or (lit_mat and custom_ok)))
+	var fmid: Vector3 = f._top_middle(field[4])
+	var fcam := fmid + Vector3(150.0, 45.0, 20.0)
+	var fd := (fmid - fcam).normalized()
+	w._fly_to(fcam - Vector3(0, 1.6, 0), Vector3(fd.x, 0, fd.z))
+	w.walker.pitch = asin(clampf(fd.y, -1.0, 1.0))
+	if w._hud_layer != null:
+		w._hud_layer.visible = false
+	await w._frames(60)
+	check("from 150 m the field is far patches (%d far, %d near)" % [f.draw.far_drawn, f.draw.drawn],
+			f.draw.far_drawn >= 8 and f.draw.drawn == 0)
+	await w._shot(UserPaths.DEV + "farm_far.png")
+	if w._hud_layer != null:
+		w._hud_layer.visible = true
 
 	# --- away: out of reach, the clock runs, the plot is not touched; back, it
 	# is where one settle puts it
