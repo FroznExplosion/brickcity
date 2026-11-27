@@ -606,22 +606,22 @@ static func show(w, _c: Vector3i, d: Dictionary, node: Node3D) -> void:
 				mz.basis = Basis.looking_at(dir, Vector3.UP)
 			var g := node.get_node_or_null("Turn/Glow") as MeshInstance3D
 			if g != null:
-				(g.material_override as StandardMaterial3D).emission_energy_multiplier = 3.0 if int(d.prev) > 0 else 0.0
+				w.set_glow(g, 3.0 if int(d.prev) > 0 else 0.0)
 		"release":
 			var gh := node.get_node_or_null("Ghost") as Node3D
 			if gh != null:
 				gh.visible = bool(d.on)
 			var st := node.get_node_or_null("Stripe") as MeshInstance3D
 			if st != null:
-				(st.material_override as StandardMaterial3D).emission_energy_multiplier = 2.5 if bool(d.on) else 0.0
+				w.set_glow(st, 2.5 if bool(d.on) else 0.0)
 		"alarm":
 			var on := bool(d.on)
 			var dome := node.get_node_or_null("Dome") as MeshInstance3D
 			if dome != null:
-				(dome.material_override as StandardMaterial3D).emission_energy_multiplier = 2.0 if on else 0.0
+				w.set_glow(dome, 2.0 if on else 0.0)
 			var bar := node.get_node_or_null("Spin/Bar") as MeshInstance3D
 			if bar != null:
-				(bar.material_override as StandardMaterial3D).emission_energy_multiplier = 4.0 if on else 0.0
+				w.set_glow(bar, 4.0 if on else 0.0)
 			var light := node.get_node_or_null("Spin/Light") as OmniLight3D
 			if light != null:
 				light.visible = on

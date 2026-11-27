@@ -54,6 +54,8 @@ extends RefCounted
 ##   pictures  user://dev/wiring_pistons.png.
 ## Stages 5-6 (Docs/MineWiring.md 19): the traps kit, its own file
 ## (wiring_traps_gate.gd), at the end; `-- --gate=wiring --traps` runs it alone.
+## The gaps after stage 4 (Docs/MineWiring.md 20-26): wiring_gaps_gate.gd,
+## before the kit; `--gaps` runs it alone.
 ## Preloaded by mine_world.gd (`--gate=wiring`).
 
 var w: Node = null
@@ -77,6 +79,10 @@ func run(host: Node) -> void:
 	w.builder.aim_trees = false
 	if "--traps" in OS.get_cmdline_user_args():
 		await _traps()   # the traps kit alone (Docs/MineWiring.md 19)
+		_finish()
+		return
+	if "--gaps" in OS.get_cmdline_user_args():
+		await _gaps()   # the gaps fixed after stage 4 alone (Docs/MineWiring.md 20-26)
 		_finish()
 		return
 
@@ -513,8 +519,15 @@ func run(host: Node) -> void:
 			wr.devices.has(pu) and int(wr.devices[pu].facing) == up and wr.devices.has(p6)
 			and _is_brick(p5 + Vector3i(2, 0, 0), 2, 1) and _is_brick(p6 + Vector3i(1, 0, 0), 1, 1))
 
+	await _gaps()
 	await _traps()
 	_finish()
+
+
+## The gaps fixed after stage 4 (Docs/MineWiring.md 20-26):
+## scripts/wiring/wiring_gaps_gate.gd.
+func _gaps() -> void:
+	await preload("res://scripts/wiring/wiring_gaps_gate.gd").new().run(self)
 
 
 ## Stages 5-6, the traps kit: scripts/wiring/wiring_traps_gate.gd.
