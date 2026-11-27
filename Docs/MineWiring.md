@@ -976,7 +976,9 @@ world and only with sky light on (`MineSkyLit` exists).
   mesh whose glow or see-through changes (a lamp's glass, a gate's light, a
   gate tile, the kit's glows) gets a copy of its own, and those changes now go
   through `set_glow` / `set_alpha`, which work on either material
-  (`wiring_traps.gd` calls them through its `w`: it never names MineWiring).
+  (`wiring_traps.gd` calls them through its `w`: it never names MineWiring),
+  and a stage 7 link's antenna colours go through `set_colour` (its antennas
+  get copies of their own too).
 - Without a MineSkyLit (other scenes, `--no-sky-light`, the probe's
   wirings) nothing changes.
 
@@ -1106,8 +1108,9 @@ Tests: `--gate=wiring` (gaps): a real push's stand-in is the bevelled box
 with the brick material; a 2 x 2 brick dropped from 5 courses lands as a
 piece in front of a piston, and the head going out wakes and moves it.
 
-**All seven (21-27), 2026-11-27:** `wiring_probe` 177 ok, `wiring_traps_probe`
-49 ok, `inventory_probe` 164 ok, `-- --gate=wiring` 129 ok (its gaps section,
+**All seven (21-27), 2026-11-27:** with stage 7 merged in, `wiring_probe` 196
+ok, `wiring_traps_probe` 49 ok, `inventory_probe` 164 ok, `-- --gate=wiring`
+143 ok (its gaps section,
 `scripts/wiring/wiring_gaps_gate.gd`, runs before the traps kit; `--gaps`
 alone). The gaps section starts flying (the save section before it ends on
 foot) on a patch of its own 60 studs west of the eye.
