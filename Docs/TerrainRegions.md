@@ -856,3 +856,67 @@ robust on the way (two samples, damped steps, a shape's scaling kept within
 
 `mine_world_probe --fitted` now PASSES (cold 2 x 2 bake 80 and 113 ms, 120
 allowed); bricks, audit, collapse, fluid probes pass on and off.
+
+## 13. The pattern library (2026-11-27; replaces the region fit's picking)
+
+The plan in Docs/HandoffBrickPatterns.md, built (`terrain-patterns`). The
+region fit (sections 12.x) stays as the library's FILLER only; its lookup,
+region cache and kept cell blocks are deleted.
+
+- **The library** (`build_library`, terrain_fit.cpp): at world set-up (when
+  `TerrainFit.set_enabled` is on) the Fitter fills SOLID 16 x 16 regions one
+  layer (3 courses) deep, 8 x 8 of them a depth band and layer parity (an odd
+  layer's middle course is shifted the other way): 2 bands x 2 parities x 64
+  = 256 patterns, ~60 ms, ~200 KB. Stagger scored within the layer, as the
+  fit's. `cross` and the caves' stagger have nothing to act on (solid
+  ground, no tile edges): the cave stagger knob is gone with the fit.
+- **A cell's brick** (`brick::PatternView::brick`): its region (square of its
+  course, odd courses shifted 7) picks a pattern by hash; the band from the
+  region's middle column's GENERATED top. No generated cells read, nothing
+  kept. Bricks cross tile edges and deep-section boundaries freely.
+- **Cut bricks** (`PatternView::rect` / `split`): where the ground cuts a
+  pattern brick (air, the top course, sand and gravel, a placed brick, a
+  hole) that brick alone is tiled again from its own cells, course by
+  course, with listed shapes: a small search (largest shapes first, 400
+  nodes) for the fewest 1x1s, then the fewest pieces. Medium ground: no
+  piece over `medium_max` cells. Every cell of the brick reads the same
+  cells, so all agree (tiles, the mesher, find_brick, the collapse).
+- **Ground built by edits** (`built_cell`: a solid edit in the cell -- a
+  fill, a landed pile) takes the OLD pattern among its own cells, as the
+  region fit's fallback did; to the patterns it is a cut. Without it a
+  2-course arm built in the air stacked seams and broke at the stud
+  strength the old bond holds it at (terrain_collapse_probe's arm).
+- **Calibration**: as 12.5, now through the library (fit the samples with
+  the patterns, scale the shares, 3 steps); ~0.8 s once at world set-up.
+- The overlay keys a bond brick by its own bottom course (a tall brick over
+  partly solid cells was listed twice).
+
+Measured (region_fit_probe, the shipped settings, 3 areas):
+
+| | stacked seams / 1000 joints | 1x1 % (visible) | 2x2 % | tall2/3 % |
+|---|---|---|---|---|
+| old pattern | 4 | 4 (18) | 11 | 0 |
+| region fit | 445 | 15 (18) | 16 | 5.1 / 1.0 |
+| patterns | 448 | 16 (19) | 14 | 4.7 / 0.9 |
+
+Shares: 2x2 (14 for 20) and 1x1 (16 for 10) are a point past the +-5 line;
+the cuts at cave walls make the extra 1x1s. Six calibration steps bring 2x2
+to 19 but stack more seams (502 / 1000) and lose 3x5 / 3x6: kept at three.
+
+**Speed (2026-11-27, editor closed, nothing else running, under 90 C):**
+
+| | old pattern | region fit (12.6-12.7) | patterns |
+|---|---|---|---|
+| new tile, streaming bench (98 tiles, `terrain_stream_bench_probe`) | 13.1 / 16.2 ms | ~57 ms (other bench) | 13.0 / 11.5 ms |
+| `--gate=breaklag --burst` trigger to hole | mean 34, worst 40 | 33 / 36 | 32 / 36 |
+| `--gate=flight`: worst frame, over 33 ms, tiles in after slowing | 38, 1, 192 | 27, 0, 102 | 39, 1, 192 |
+| `--gate=deep`: frames to load | 200 | 292-383 | 205 |
+| world set-up | 0 | ~0.4 s | ~0.7-0.9 s (calibration + library) |
+
+As fast as the old pattern, so **on by default** (`DEFAULT_BRICKS.fitted`
+true; the M menu's "Use these bricks in the game"). `--gate=bricks` PASS.
+
+Checks (headless, fit off and `--fitted`): terrain_bricks, terrain_audit,
+terrain_collapse, mine_world (cold bake ~19 ms a tile with patterns),
+fluid (79) all PASS; region_fit_probe `--lookup`: every cell of ~17,000
+pattern bricks names the same brick (surface and 200 courses down).

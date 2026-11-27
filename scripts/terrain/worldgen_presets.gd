@@ -45,15 +45,16 @@ const DEFAULT_BRICKS := {
 	## laid lands near what is asked (TerrainFit calibrate, Docs/TerrainRegions.md 12.5).
 	"calibrate": true,
 	"stagger": 0.0, "cave_stagger": 0.35,
-	## The stagger scored within each layer of 3 courses, not across layers:
-	## the same seams over seams (445 a thousand joints against 448) and each
-	## region fitted from its own cells (a tile 57 ms, not 92). Docs/TerrainRegions.md 12.7.
+	## The stagger scored within each layer of 3 courses, not across layers
+	## (Docs/TerrainRegions.md 12.7); the game's bricks come from a library of
+	## solid regions fitted this way (section 13).
 	"stagger_layers": false,
 	"cross": 1.0,
 	"mixed": true,
-	## The game draws, breaks and holds these bricks (off: the old 2x4
-	## pattern). Off until the gates pass on it (Docs/TerrainRegions.md 12).
-	"fitted": false,
+	## The game draws, breaks and holds these bricks, picked from the pattern
+	## library (Docs/TerrainRegions.md 13; off: the old 2x4 pattern). On since
+	## 2026-11-27: a new tile bakes as fast as with the old pattern.
+	"fitted": true,
 	## A connected group of ground this many cells or more, let go, floats
 	## instead of falling (0: never). Building materials still fall.
 	"float_cells": 500,
@@ -179,7 +180,7 @@ static func apply_fitted_flag() -> void:
 	if "--fitted" in OS.get_cmdline_user_args():
 		TerrainFit.configure(complete_bricks({}))
 		TerrainFit.set_enabled(true)
-		print("[fitted] the ground's bricks from the region fit")
+		print("[fitted] the ground's bricks from the pattern library")
 
 
 static func complete_bricks(b: Dictionary) -> Dictionary:
