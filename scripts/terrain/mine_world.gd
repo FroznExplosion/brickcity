@@ -4490,8 +4490,28 @@ func _run_gpu_gate() -> void:
 	_time = 0.42
 	var menu_settings := get_node_or_null(^"/root/MenuSettings")
 	if menu_settings != null:
+		# -- --gpu-user-settings: the player's own video settings (render
+		# scale, anti-aliasing, shadows, near detail ...) read from their
+		# settings.cfg, in memory only -- never saved. Not the window or the
+		# frame cap: the pass runs flat out at --gpu-size.
+		if "--gpu-user-settings" in OS.get_cmdline_user_args():
+			var cfg := ConfigFile.new()
+			if cfg.load("user://settings.cfg") == OK and cfg.has_section("video"):
+				var used := PackedStringArray()
+				for key in cfg.get_section_keys("video"):
+					if key in ["display_mode", "resolution", "monitor", "vsync", "max_fps"]:
+						continue
+					menu_settings.set_value(StringName(key), cfg.get_value("video", key), false)
+					used.append("%s=%s" % [key, str(cfg.get_value("video", key))])
+				print("[gpu] the player's video settings: %s" % ", ".join(used))
 		menu_settings.set_value(&"vsync", 0, false)      # in memory: never saved
 		menu_settings.set_value(&"max_fps", 0, false)
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--gpu-size="):
+			var wh := arg.get_slice("=", 1).split("x")
+			if wh.size() == 2:
+				get_window().size = Vector2i(int(wh[0]), int(wh[1]))
+				await _frames(30)
 	var vp := get_viewport()
 	var size := vp.get_visible_rect().size
 	print("[gpu] trees: real bricks to %.0f m, cards past it" % _trees.near_m)
