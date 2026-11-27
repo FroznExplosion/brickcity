@@ -6,7 +6,8 @@ extends RefCounted
 ## What each check is for:
 ##   creatures  a zombie standing on a pressure tile lights its lamp: enemies
 ##              spring traps, not only the player (20).
-##   cave light a wire and a lamp in a closed stone room take its dark (sky
+##   cave light a wire and a lamp in a closed room (stone walls, a placed
+##              brick for its roof) take its dark (sky
 ##              level 2 or less), a wire outside it the open sky's 15 (21).
 ##   lamps      12 lamps lit by one lever: only the cap's worth (Options >
 ##              Video > Lamp Lights x 2; 8 at the test window's defaults)
@@ -42,6 +43,10 @@ func run(gate) -> void:
 	wr = w.wiring
 	stud = BrickWorld.get_stud_metres()
 	plate = BrickWorld.get_plate_metres()
+	# Flying (the main gate's save section ends on foot; its eye would stay
+	# where the pawn is while the walker is moved).
+	w.set_on_foot(false)
+	await w._frames(10)
 	_patch()
 	await w._frames(20)
 	await _creatures()
@@ -53,12 +58,13 @@ func run(gate) -> void:
 	await _pistons()
 
 
-## A flat patch of stone off the spawn, its own (the main gate's patches are
-## east of the eye; this one is west): 24 x 16 studs, a course's top.
+## A flat patch of stone of its own, 24 x 16 studs, a course's top: well
+## away from the main gate's patches (east of where the eye began; the eye
+## has moved by the time this runs) and their lamps.
 func _patch() -> void:
 	var eye: Vector3 = w._eye()
-	x0 = floori(eye.x / stud) - 34
-	z0 = floori(eye.z / stud) - 8
+	x0 = floori(eye.x / stud) - 60
+	z0 = floori(eye.z / stud) - 30
 	var s0 := BrickTerrain.surface_plate(x0, z0)
 	top = floori(float(s0 + 1) / 3.0) * 3 - 1
 	for res in [BrickTerrain.fill_box(Vector3i(x0 - 2, top + 1, z0 - 2), Vector3i(x0 + 25, top + 60, z0 + 17), 0, false),
@@ -99,18 +105,36 @@ func _cave_light() -> void:
 	if w.sky_lit == null:
 		g.check("gaps: sky light is on in the gate world", false)
 		return
-	# A closed stone room 5 x 5 studs, 2 courses inside, roof a course thick.
+	# A closed room on the patch: walls of stone a stud thick and 2 courses
+	# tall round 4 x 4 studs, and for a roof ONE 6 x 6 placed brick resting on
+	# them (a roof course of loose stone over the room fell to the collapse --
+	# a course is held through studs, not by its sides -- and a pocket dug in
+	# the ground filled with the gravel over it).
 	var rx := x0 + 10
 	var rz := z0 + 2
-	w.terrain_edited(BrickTerrain.fill_box(Vector3i(rx - 1, y, rz - 1), Vector3i(rx + 5, y + 8, rz + 5), BrickTerrain.MAT_STONE, false))
-	w.terrain_edited(BrickTerrain.fill_box(Vector3i(rx, y, rz), Vector3i(rx + 4, y + 5, rz + 4), 0, false))
-	await w._frames(10)
-	var inside := Vector3i(rx + 1, y, rz + 2)
+	var fy := y   # the room's floor cells
+	w.terrain_edited(BrickTerrain.fill_box(Vector3i(rx - 1, fy, rz - 1), Vector3i(rx + 4, fy + 5, rz + 4), BrickTerrain.MAT_STONE, false))
+	w.terrain_edited(BrickTerrain.fill_box(Vector3i(rx, fy, rz), Vector3i(rx + 3, fy + 5, rz + 3), 0, false))
+	g._lay_brick(Vector3i(rx - 1, fy + 6, rz - 1), 6, 6, BrickTerrain.MAT_STONE)
+	# The sky level reads the tiles' baked tops: the tile rebuilt first (and
+	# the collapse has looked at the new roof).
+	await w._frames(90)
+	var sealed := true
+	for k in [Vector3i(rx - 1, fy + 2, rz + 1), Vector3i(rx + 4, fy + 2, rz + 1), Vector3i(rx + 1, fy + 2, rz - 1),
+			Vector3i(rx + 1, fy + 2, rz + 4), Vector3i(rx + 1, fy + 6, rz + 1), Vector3i(rx + 2, fy + 8, rz + 2),
+			Vector3i(rx + 1, fy - 1, rz + 1)]:
+		sealed = sealed and BrickTerrain.solid_at(k.x, k.y, k.z) != 0
+	var open_in := BrickTerrain.solid_at(rx + 1, fy, rz + 1) == 0 and BrickTerrain.solid_at(rx + 2, fy + 4, rz + 2) == 0
+	g.check("gaps: the room is closed (walls, floor and roof solid, air inside)", sealed and open_in)
+	var inside := Vector3i(rx + 1, fy, rz + 1)
 	var outside := Vector3i(rx - 3, y, rz + 2)
-	var lamp := Vector3i(rx + 3, y, rz + 2)
-	wr.place_cable(inside)
-	wr.place_cable(outside)
-	wr.place_device(lamp, &"lamp")
+	var lamp := Vector3i(rx + 2, fy, rz + 2)
+	var placed := [wr.place_cable(inside), wr.place_cable(outside), wr.place_device(lamp, &"lamp")]
+	g.check("gaps: a wire and a lamp laid in the room, a wire outside (%s; under the lamp %d, in it %d)" % [str(placed),
+			BrickTerrain.solid_at(lamp.x, lamp.y - 1, lamp.z), BrickTerrain.solid_at(lamp.x, lamp.y, lamp.z)],
+			placed.all(func(v): return v))
+	if not placed.all(func(v): return v):
+		return
 	await w._frames(30)
 	var lin: Vector2 = wr.cell_light.get(inside, Vector2(-1, -1))
 	var lout: Vector2 = wr.cell_light.get(outside, Vector2(-1, -1))
@@ -124,7 +148,7 @@ func _cave_light() -> void:
 	wr.remove_cable(inside, false)
 	wr.remove_cable(outside, false)
 	wr.remove_device(lamp, false)
-	w.terrain_edited(BrickTerrain.fill_box(Vector3i(rx - 1, y, rz - 1), Vector3i(rx + 5, y + 8, rz + 5), 0, false))
+	w.terrain_edited(BrickTerrain.fill_box(Vector3i(rx - 1, fy, rz - 1), Vector3i(rx + 4, fy + 8, rz + 4), 0, false))
 	await w._frames(4)
 
 
@@ -148,18 +172,23 @@ func _lamps() -> void:
 		if c is OmniLight3D and (c as OmniLight3D).visible and str(c.name).begins_with("LampLight"):
 			shown += 1
 	var lit := lamps.filter(func(c): return wr.is_lit(c)).size()
+	# Other sections' lamps may be lit too (far off): the lights must be on
+	# the cap's worth of this row nearest the camera, and no more lights out
+	# than the cap.
 	var near_ok := true
 	for k in mini(cap, 12):
 		near_ok = near_ok and wr.lamp_light_of.has(lamps[11 - k])
-	g.check("gaps: 12 lamps lit, %d real lights (cap %d), on the nearest" % [shown, cap],
-			lit == 12 and shown == mini(cap, 12) and near_ok)
+	var mine := lamps.filter(func(c): return wr.lamp_light_of.has(c)).size()
+	g.check("gaps: 12 lamps lit, %d real lights in all (cap %d), %d on this row's nearest" % [shown, cap, mine],
+			lit == 12 and shown == cap and near_ok and mine == mini(cap, 12))
 	for l in lamps:
 		wr.remove_device(l, false)
 	for x in range(x0, x0 + 12):
 		wr.remove_cable(Vector3i(x, y, lz), false)
 	wr.remove_device(lev, false)
 	await w._frames(4)
-	g.check("gaps: the lamps gone, no light shows", wr.lamp_light_of.is_empty())
+	g.check("gaps: the lamps gone, none of them has a light; lights out %d (cap %d)" % [wr.lamp_light_of.size(), cap],
+			lamps.all(func(c): return not wr.lamp_light_of.has(c)) and wr.lamp_light_of.size() <= cap)
 
 
 # --- 4. gate tiles fall (Docs/MineWiring.md 23)
@@ -234,7 +263,7 @@ func _sequencer() -> void:
 	await w._frames(2)
 	await w._key(KEY_ESCAPE)
 	await w._frames(2)
-	g.check("gaps: a real Escape closes the panel, not into the pause menu", not p.is_open()
+	g.check("gaps: a real Escape closes the panel, not into the pause menu", (not is_instance_valid(p) or not p.is_open())
 			and w.seq_panel == null and not w.inventory_open() and not w.get_tree().paused)
 	w.builder.set_active(false)
 	wr.use_device(lev)

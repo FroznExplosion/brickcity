@@ -225,6 +225,10 @@ var _light_todo: Array[Vector3i] = []
 var _light_queued := {}
 var _light_dirty := false
 var lights_asked := 0
+## The sky level reads the tiles' baked tops, which lag an edit until the tile
+## is rebuilt: the wires near an edit are asked again this long after it (s).
+const LIGHT_AGAIN := 0.6
+var _light_again: Array = []   # [time left, lo, hi]
 
 ## LAMP LIGHTS (Docs/MineWiring.md 22): only the lit lamps nearest the eye
 ## hang a real light (an OmniLight3D from a pool, 4.5 m, no shadow); the rest
@@ -285,6 +289,18 @@ static func wire_shader(sky: bool) -> Shader:
 		var src: Shader = load("res://shaders/wiring.gdshader")
 		_wire_shaders[i] = MineSkyLit._with_define(src, "SKY_LIT") if sky else src
 	return _wire_shaders[i]
+
+
+## Light reaches 15 cells: the wires within 16 studs and 16 courses of an
+## edit's box take their levels again (MineSkyLit.REACH).
+func _relight(lo: Vector3i, hi: Vector3i) -> void:
+	var r := Vector3i(16, 16 * COURSE, 16)
+	for c in cables:
+		if lo.x == -WHOLE or _inside(c, lo - r, hi + r):
+			_queue_light(c)
+	for c in pairs:
+		if lo.x == -WHOLE or _inside(c, lo - r, hi + r):
+			_queue_light(c)
 
 
 func _queue_light(c: Vector3i) -> void:
@@ -350,6 +366,15 @@ func set_hud(layer: CanvasLayer) -> void:
 func _process(delta: float) -> void:
 	if not _moves.is_empty():
 		_step_moves(delta)
+	if not _light_again.is_empty():
+		for k in range(_light_again.size() - 1, -1, -1):
+			var e: Array = _light_again[k]
+			e[0] = float(e[0]) - delta
+			if float(e[0]) <= 0.0:
+				_light_again.remove_at(k)
+				_relight(e[1], e[2])
+				if _sky != null:
+					_sky.dirty_box(e[1], e[2])   # the devices (and chests) too
 	if not _light_todo.is_empty():
 		ask_lights()
 	if _light_dirty:
@@ -865,15 +890,9 @@ func check(lo := Vector3i(-WHOLE, -WHOLE, -WHOLE), hi := Vector3i(WHOLE, WHOLE, 
 			gone += 1
 	gone += drop_unheld_gatetiles(riding)
 	if light_fn.is_valid():
-		# Light reaches 15 cells: the wires within 16 studs and 16 courses of
-		# the edit take their levels again (MineSkyLit.REACH).
-		var r := Vector3i(16, 16 * COURSE, 16)
-		for c in cables:
-			if lo.x == -WHOLE or _inside(c, lo - r, hi + r):
-				_queue_light(c)
-		for c in pairs:
-			if lo.x == -WHOLE or _inside(c, lo - r, hi + r):
-				_queue_light(c)
+		_relight(lo, hi)
+		if lo.x != -WHOLE:
+			_light_again.append([LIGHT_AGAIN, lo, hi])
 	_pairs_dirty = true
 	# The ground changed in the box: observers watching it pulse (not for a
 	# whole check, which is not a change).
@@ -2774,11 +2793,15 @@ func lamp_light_cap() -> int:
 	return lamp_lights if lamp_lights >= 0 else BrickGridLight.near_max * 2
 
 
-## The eye (terrain frame): view_fn's, else the camera's, else the player's
-## feet, else the origin.
+## The eye (terrain frame): view_fn's, else the mine world's `_eye`, else the
+## viewport's camera, else the player's feet, else the origin.
 func _view_point() -> Vector3:
 	if view_fn.is_valid():
 		return view_fn.call()
+	# The mine world's eye: the camera drawn from, walking or flying (the
+	# viewport's current camera need not be it).
+	if host != null and host.has_method("_eye") and host.is_inside_tree():
+		return host._eye()
 	var vp := get_viewport() if is_inside_tree() else null
 	var cam := vp.get_camera_3d() if vp != null else null
 	if cam != null:

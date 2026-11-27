@@ -896,7 +896,11 @@ world and only with sky light on (`MineSkyLit` exists).
 - **Asking**: `cell_light` keeps each wire cell's levels, asked through
   `light_fn` (MineSkyLit `levels_at`, its frame budget) when a wire is laid,
   and again for every wire within 16 studs and 16 courses of a ground edit
-  (`check`'s box: light reaches 15). Not asked yet: drawn at the eye's level.
+  (`check`'s box: light reaches 15), and once more 0.6 s later
+  (`LIGHT_AGAIN`), with MineSkyLit's `dirty_box` for the devices: the sky
+  level reads the tiles' baked tops, which lag an edit until the tile is
+  rebuilt (the gate's first run read a fresh closed room as open sky). Not
+  asked yet: drawn at the eye's level.
   A level that changed redraws on the next tick. The lava's own relighting
   (`lava_relit`) does not reach the wires (only an edit does): small.
 - **Devices** are tracked by MineSkyLit like chests (`_light_device`): their
@@ -911,8 +915,12 @@ world and only with sky light on (`MineSkyLit` exists).
 Tests: `wiring_probe`: wires laid with a light source of the probe's own take
 its levels (15 open, 0 roofed), draw with the SKY_LIT shader and per-instance
 data, and an edit asks the cells near it again; `set_glow` and `set_alpha` on
-both materials. `--gate=wiring`: in a closed stone room a wire and a lamp
-are at sky level 2 or less, a wire outside at 14 or more.
+both materials. `--gate=wiring`: in a closed room (stone walls on the
+patch, one 6 x 6 placed brick for its roof) a wire and a lamp are at sky
+level 0, a wire outside at 15 (2026-11-27). The room took three tries: a
+roof course of loose stone over it fell to the collapse (a course is held
+through studs, not by its sides), and a pocket dug in the ground filled with
+the gravel over it.
 
 ## 22. Lamp lights: the nearest few, the rest glow (2026-11-27)
 
@@ -929,8 +937,9 @@ Lamp Lights (`BrickGridLight.near_max`: Off, 2, 4, 8) times two: 8 by
 default, none with the option Off. The lighting rig's near lamps (Docs/
 Lighting.md 6.5) work on the city's brick grid, which the mine world does not
 have, so this is the same idea (the nearest N real, the rest a cheaper look)
-on the setting the player already has. Not measured: the editor was open /
-other chats' runs were going, and the change only takes lights away.
+on the setting the player already has. The eye is the mine world's `_eye`
+(walking or flying). No frame times taken: the change only takes lights
+away.
 
 Tests: `wiring_probe`: of 12 lit lamps only the 4 nearest a probe eye (cap 4)
 have lights, the eye moved moves them, all dark shows none, Off hangs none,
@@ -1028,6 +1037,12 @@ Section 18's two "not yet"s that were small:
 Tests: `--gate=wiring` (gaps): a real push's stand-in is the bevelled box
 with the brick material; a 2 x 2 brick dropped from 5 courses lands as a
 piece in front of a piston, and the head going out wakes and moves it.
+
+**All seven (20-26), 2026-11-27:** `wiring_probe` 177 ok, `wiring_traps_probe`
+49 ok, `inventory_probe` 164 ok, `-- --gate=wiring` 129 ok (its gaps section,
+`scripts/wiring/wiring_gaps_gate.gd`, runs before the traps kit; `--gaps`
+alone). The gaps section starts flying (the save section before it ends on
+foot) on a patch of its own 60 studs west of the eye.
 
 ## Sources
 
