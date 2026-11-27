@@ -46,6 +46,9 @@
 			"description": "Smelted from gold ore in a furnace (one brick of ore each)." },
 		"grenade": { "name": "Grenade", "kind": "grenade", "max_stack": 16, "hand": "right", "colour": "#556b2f", "glyph": "*",
 			"description": "G (or LMB with it in the hand): thrown where you aim. Its blast breaks the bricks round it and hurts whoever is near." },
+		"shield": { "name": "Brick Shield", "kind": "shield", "max_stack": 1, "hand": "off", "colour": "#8a5a2b", "glyph": "U",
+			"durability": 336,
+			"description": "In the off-hand, up (C): hold right-click to raise it. Blocks every hit from in front; each blocked hit wears it, and it breaks when worn out." },
 		"chest": { "name": "Chest", "kind": "chest", "hand": "any", "colour": "#8a5a2b", "glyph": "C",
 			"description": "Holds 27 stacks. Place it, then right-click it to open." }
 	}

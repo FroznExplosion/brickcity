@@ -13,6 +13,7 @@
 			"output": "large_backpack", "keep_contents": true },
 		{ "name": "Pickaxe", "inputs": { "wood": 12, "#stone": 24, "iron_ingot": 1 }, "station": "workbench", "output": "pickaxe" },
 		{ "name": "Bucket", "inputs": { "iron_ingot": 2 }, "station": "workbench", "output": "bucket" },
+		{ "name": "Brick Shield", "inputs": { "wood": 72, "iron_ingot": 1 }, "station": "workbench", "output": "shield" },
 		{ "name": "Source bucket", "inputs": { "bucket": 1, "gold_ingot": 1 }, "station": "workbench", "output": "source_bucket" },
 		{ "name": "Mega Pickaxe", "inputs": { "pickaxe": 1, "diamond_ore": 36 }, "station": "workbench", "output": "mega_pickaxe" },
 		{ "name": "Grenades", "inputs": { "coal_ore": 12, "iron_ingot": 1 }, "station": "workbench", "output": "grenade", "count": 4 },

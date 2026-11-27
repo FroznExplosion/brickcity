@@ -2655,6 +2655,70 @@ func _offhand_gun_checks(check: Callable, rifle: ItemStack) -> void:
 	await _frames(10)
 
 
+## Round four's shield in --gate=inventory (Docs/Inventory.md): in the
+## off-hand, up, held by the left arm; RMB held raises it; a hit from in front
+## is blocked whole and wears it, one from behind lands; let go, a hit from in
+## front lands; worn out, the next blocked hit breaks it. Real DamagePackets
+## through DamageSystem; health and the hands put back after.
+func _shield_checks(check: Callable) -> void:
+	var inv: Inventory = builder.inv
+	var pool: HealthPool = pawn.health
+	var was_invulnerable := pool.invulnerable
+	pool.invulnerable = false
+	pool.reset()
+	var sh := ItemStack.make(&"shield", 1)
+	inv.offhands[0] = sh
+	inv.active_offhand = 0
+	inv.offhand_up = true
+	inv.changed.emit()
+	await _frames(10)
+	check.call("4d: a shield up in the off-hand is held, not raised; the sights rest", hands.shield_held == sh
+			and not hands.blocking and player.hold_aim and view.off_held != null)
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_RIGHT
+	press.pressed = true
+	press.button_mask = MOUSE_BUTTON_MASK_RIGHT
+	Input.parse_input_event(press)
+	await _frames(15)
+	check.call("4d: RMB held raises it (the pawn's guard set)", hands.blocking and pool.guard.is_valid())
+	await _shot(UserPaths.DEV + "inv_shield.png")
+	var src := Node3D.new()
+	add_child(src)
+	var c: Camera3D = gun.aim as Camera3D
+	src.global_position = c.global_position - c.global_transform.basis.z * 5.0
+	var before := pool.total_current()
+	var r := DamageSystem.resolve(DamagePacket.new(20.0, null, src), pool)
+	check.call("4d: a hit from in front is blocked whole (dealt %.1f, wear %s)" % [r.dealt, str(sh.data.get("wear", 0))],
+			r.blocked and pool.total_current() == before and int(sh.data.get("wear", 0)) == 20)
+	src.global_position = c.global_position + c.global_transform.basis.z * 5.0
+	r = DamageSystem.resolve(DamagePacket.new(20.0, null, src), pool)
+	check.call("4d: a hit from behind lands (dealt %.1f)" % r.dealt, not r.blocked and r.dealt > 0.0)
+	var up := press.duplicate()
+	up.pressed = false
+	up.button_mask = 0
+	Input.parse_input_event(up)
+	await _frames(10)
+	src.global_position = c.global_position - c.global_transform.basis.z * 5.0
+	r = DamageSystem.resolve(DamagePacket.new(20.0, null, src), pool)
+	check.call("4d: let go, a hit from in front lands (dealt %.1f)" % r.dealt, not hands.blocking
+			and not pool.guard.is_valid() and r.dealt > 0.0)
+	sh.data["wear"] = int(ItemCatalog.get_def(&"shield").get("durability", 336)) - 5
+	Input.parse_input_event(press)
+	await _frames(15)
+	r = DamageSystem.resolve(DamagePacket.new(20.0, null, src), pool)
+	await _frames(5)
+	check.call("4d: worn out, the blocked hit breaks it: gone from the off-hand", r.blocked
+			and inv.offhands[0] == null and hands.shield_held == null)
+	Input.parse_input_event(up)
+	await _frames(5)
+	src.queue_free()
+	inv.offhand_up = false
+	inv.changed.emit()
+	pool.reset()
+	pool.invulnerable = was_invulnerable
+	await _frames(5)
+
+
 ## A mouse button pressed for `frames` and let go, through the engine's input.
 func _mouse_tap(button: MouseButton, frames: int) -> void:
 	var press := InputEventMouseButton.new()
@@ -2941,6 +3005,7 @@ func _run_inventory_gate() -> void:
 	check.call("... its rounds went back into its stack (%s)" % str(gun_stack.data.get("ammo", "?")),
 			int(gun_stack.data.get("ammo", -1)) == rounds1)
 	await _offhand_gun_checks(check, gun_stack)
+	await _shield_checks(check)
 	inv.swap_with_hotbar(Inventory.addr(&"main", 26), 6)
 	set_on_foot(false)
 	_fly_to(_eye() + Vector3(0, 0.8, 0), Vector3(0, 0, -1))
