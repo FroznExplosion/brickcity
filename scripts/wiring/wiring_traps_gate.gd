@@ -4,12 +4,17 @@ extends RefCounted
 ## alone with `-- --gate=wiring --traps`.
 ##
 ## What each check is for:
-##   dispenser laid with the builder facing away from the camera; RMB opens
+##   shooter   (id dispenser) laid with the builder facing away from the camera; RMB opens
 ##             its 9 slots in the chest screen.
-##   gun wall  a pressure tile behind a dispenser with a gun in it: the player
+##   gun wall  a pressure tile behind a shooter with a gun in it: the player
 ##             steps on the tile, ONE round goes out of the front through the
 ##             weapon system and breaks a brick of the wall in front.
-##   grenade   a button beside a dispenser of grenades: one is thrown, goes
+##   arrows    a lever beside a shooter of arrows, a zombie walking down its
+##             line toward the player behind it: 4 turn-ons shoot 4 arrows and
+##             they hurt it (WiringArrow through the damage system).
+##   launch    a shooter of plain items (wire): one lands a few metres out,
+##             a pickup -- items hurt nobody.
+##   grenade   a button beside a shooter of grenades: one is thrown, goes
 ##             off (a blast) and breaks bricks of the wall it lands by.
 ##   bucket    a lever: a bucket's water poured into the stud in front.
 ##   dropper   a lever: one item dropped (DroppedItems).
@@ -104,6 +109,37 @@ func run(gate) -> void:
 	g.check("the round broke a brick of the wall in front (%d -> %d cells)" % [wall0, wall1], wall1 < wall0)
 	g.check("the gun is still in its slot", dd.slots[0] != null and MineHands.is_gun(dd.slots[0]))
 
+	# --- arrow wall: a shooter of arrows, a zombie walking into its line
+	var ax := x0 + 5
+	var adisp := Vector3i(ax, y, zd)
+	wr.place_device(adisp, &"dispenser", false, false, 2)
+	wr.devices[adisp].slots[0] = ItemStack.make(&"arrow", 6)
+	var alev := Vector3i(ax - 1, y, zd)
+	wr.place_device(alev, &"lever")
+	var az = null
+	if w.mobs != null:
+		w.mobs.auto = false
+		az = w.mobs.spawn_zombie(Vector3((ax + 0.5) * stud, y * plate, (zd + 12.5) * stud))
+	# The player behind the shooter: the zombie comes down its line.
+	w._fly_to(Vector3((ax + 0.5) * stud, y * plate + 1.0, (zd - 6.0) * stud), Vector3(0, 0, 1))
+	await w._frames(40)
+	var hp0: float = az.hp() if az != null else 0.0
+	var hits0 := WiringArrow.hits_on_bodies
+	var shots0 := WiringArrow.shot_count
+	for k in 4:
+		wr.use_device(alev)
+		await w._frames(14)
+		wr.use_device(alev)
+		await w._frames(14)
+	await w._frames(20)
+	var hp1: float = az.hp() if az != null and is_instance_valid(az) else 0.0
+	g.check("4 turn-ons: 4 arrows shot (%d), 2 left" % (WiringArrow.shot_count - shots0),
+			WiringArrow.shot_count - shots0 == 4 and wr.devices[adisp].slots[0].count == 2)
+	g.check("arrows hit the zombie in its line (%d hits, hp %.0f -> %.0f)" % [WiringArrow.hits_on_bodies - hits0, hp0, hp1],
+			az != null and WiringArrow.hits_on_bodies > hits0 and hp1 < hp0)
+	if az != null and is_instance_valid(az) and az.pawn != null and not az.dead:
+		az.pawn.health.apply_impact(1000.0, &"")
+
 	# --- grenade: a dispenser of grenades, a button at its side, a wall 6 studs out
 	var gx := x0 + 8
 	var gdisp := Vector3i(gx, y, zd)
@@ -151,7 +187,77 @@ func run(gate) -> void:
 			int(wr.devices[bdisp].slots[0].data.get("tiles", 0)) == 6 and wr.devices[bdisp].has("poured"))
 	g.check("and the dropper dropped one wire (%d -> %d on the ground, %d left)" % [drops0, w.drops.count(),
 			wr.devices[drop].slots[0].count], w.drops.count() == drops0 + 1 and wr.devices[drop].slots[0].count == 4)
+	# A shooter of plain items: one wire launched, lying a few metres out.
+	var lx := bx + 5
+	var ldisp := Vector3i(lx, y, zd)
+	wr.place_device(ldisp, &"dispenser", false, false, 2)
+	wr.devices[ldisp].slots[0] = ItemStack.make(&"cable", 3)
+	var lbtn := Vector3i(lx, y, zd - 1)
+	wr.place_device(lbtn, &"button")
+	await w._frames(14)
+	var n0: int = w.drops.count()
+	wr.use_device(lbtn)
+	await w._frames(90)
+	var far := 0.0
+	var from_l: Vector3 = wr.device_box(ldisp).get_center()
+	for dr in w.drops.drops.slice(n0):
+		far = maxf(far, Vector2((dr.pos as Vector3).x - from_l.x, (dr.pos as Vector3).z - from_l.z).length())
+	g.check("a shooter launches a plain item: it lies %.1f m out, a pickup (%s)" % [far, str(wr.devices[ldisp].get("last", ""))],
+			w.drops.count() == n0 + 1 and far > 1.5 and str(wr.devices[ldisp].get("last", "")) == "launch cable")
 	await g._picture(Vector3((xd + 6) * stud, y * plate, (zd + 3) * stud), Vector3(-2.5, 3.0, -4.5), "wiring_traps.png")
+
+	# --- observer -> pulse -> alarm, a zombie called (before the trench is dug:
+	# its way to the alarm is open ground)
+	var ox := x0 + 27   # clear of the trench: the zombie's way is open ground
+	var oz := z0 + 4
+	var ob := Vector3i(ox, y, oz)
+	var pl := Vector3i(ox - 1, y, oz)
+	var al := Vector3i(ox - 2, y, oz)
+	wr.place_device(ob, &"observer", false, false, 0)
+	wr.place_device(pl, &"pulse", false, false, 1, 20)
+	wr.place_device(al, &"alarm")
+	var zb_at := Vector3((ox - 2.5) * stud, y * plate, (oz + 0.5) * stud + 8.0)
+	var zombie = null
+	if w.mobs != null:
+		w.mobs.auto = false
+		zombie = w.mobs.spawn_zombie(zb_at)
+	# The player far the other way.
+	w._fly_to(Vector3((ox - 2.5) * stud, y * plate + 1.0, (oz + 0.5) * stud - 25.0), Vector3(0, 0, 1))
+	await w._frames(30)
+	var at: Vector3 = wr.device_box(al).get_center()
+	var d0: float = (zombie.last_feet as Vector3).distance_to(at) if zombie != null else 0.0
+	w.terrain_edited(BrickTerrain.fill_box(Vector3i(ox + 1, y, oz), Vector3i(ox + 1, y + 2, oz), BrickTerrain.MAT_STONE, false))
+	var sounded := false
+	var siren := false
+	for i in 20:
+		await w._frames(2)
+		if bool(wr.devices[al].on):
+			sounded = true
+			var snd := (wr.devices[al].node as Node3D).get_node_or_null("Siren") as AudioStreamPlayer3D
+			siren = siren or (snd != null and snd.playing)
+	var ad: Dictionary = wr.devices[al]
+	g.check("a real ground edit before the observer: the alarm sounded (siren %s), called %d" % [siren, int(ad.get("called", 0))],
+			sounded and siren and int(ad.get("calls", 0)) >= 1 and int(ad.get("called", 0)) >= 1)
+	g.check("the zombie is called to the alarm (%s)" % (zombie.state if zombie != null else "no zombie"),
+			zombie != null and zombie.called_to.distance_to(at) < 0.01)
+	# Its path is asked for on a worker: give it up to 8 s to get going.
+	var d1 := d0
+	for i in 120:
+		await w._frames(4)
+		d1 = (zombie.last_feet as Vector3).distance_to(at) if zombie != null and is_instance_valid(zombie) else d0
+		if d1 < d0 - 2.0 or d1 < MobZombie.CALL_THERE + 0.6:
+			break
+	var dp: float = (zombie.last_feet as Vector3).distance_to(w.player_feet_local()) if zombie != null else 0.0
+	g.check("it walked toward the alarm (%.1f -> %.1f m), the player %.1f m away" % [d0, d1, dp],
+			zombie != null and (d1 < d0 - 2.0 or d1 < MobZombie.CALL_THERE + 0.6))
+	# The pulse is 20 ticks (2 s) from the edit: wait it out.
+	for i in 60:
+		await w._frames(3)
+		if not bool(wr.devices[al].on):
+			break
+	g.check("the pulse over: the alarm quiet", not bool(wr.devices[al].on))
+	if zombie != null and is_instance_valid(zombie) and zombie.pawn != null:
+		zombie.pawn.health.apply_impact(1000.0, &"")
 
 	# --- release bricks under a bridge, a trip string on the way to it
 	var xb := x0 + 14
@@ -231,50 +337,6 @@ func run(gate) -> void:
 	for r in rels:
 		gripped = gripped and not bool(wr.devices[r].on) and BrickTerrain.solid_at(r.x, r.y + 1, r.z) != 0
 	g.check("2 s later, nobody on the string: they grip again (solid)", gripped)
-
-	# --- observer -> pulse -> alarm, a zombie called
-	var ox := x0 + 27   # clear of the trench: the zombie's way is open ground
-	var oz := z0 + 4
-	var ob := Vector3i(ox, y, oz)
-	var pl := Vector3i(ox - 1, y, oz)
-	var al := Vector3i(ox - 2, y, oz)
-	wr.place_device(ob, &"observer", false, false, 0)
-	wr.place_device(pl, &"pulse", false, false, 1, 20)
-	wr.place_device(al, &"alarm")
-	var zb_at := Vector3((ox - 2.5) * stud, y * plate, (oz + 0.5) * stud + 8.0)
-	var zombie = null
-	if w.mobs != null:
-		w.mobs.auto = false
-		zombie = w.mobs.spawn_zombie(zb_at)
-	# The player far the other way.
-	w._fly_to(Vector3((ox - 2.5) * stud, y * plate + 1.0, (oz + 0.5) * stud - 25.0), Vector3(0, 0, 1))
-	await w._frames(30)
-	var at: Vector3 = wr.device_box(al).get_center()
-	var d0: float = (zombie.last_feet as Vector3).distance_to(at) if zombie != null else 0.0
-	w.terrain_edited(BrickTerrain.fill_box(Vector3i(ox + 1, y, oz), Vector3i(ox + 1, y + 2, oz), BrickTerrain.MAT_STONE, false))
-	var sounded := false
-	var siren := false
-	for i in 20:
-		await w._frames(2)
-		if bool(wr.devices[al].on):
-			sounded = true
-			var snd := (wr.devices[al].node as Node3D).get_node_or_null("Siren") as AudioStreamPlayer3D
-			siren = siren or (snd != null and snd.playing)
-	var ad: Dictionary = wr.devices[al]
-	g.check("a real ground edit before the observer: the alarm sounded (siren %s), called %d" % [siren, int(ad.get("called", 0))],
-			sounded and siren and int(ad.get("calls", 0)) >= 1 and int(ad.get("called", 0)) >= 1)
-	g.check("the zombie is called to the alarm (%s)" % (zombie.state if zombie != null else "no zombie"),
-			zombie != null and zombie.called_to.distance_to(at) < 0.01)
-	for i in 40:
-		await w._frames(4)
-	var d1: float = (zombie.last_feet as Vector3).distance_to(at) if zombie != null else 0.0
-	var dp: float = (zombie.last_feet as Vector3).distance_to(w.player_feet_local()) if zombie != null else 0.0
-	g.check("it walked toward the alarm (%.1f -> %.1f m), the player %.1f m away" % [d0, d1, dp],
-			zombie != null and (d1 < d0 - 2.0 or d1 < MobZombie.CALL_THERE + 0.6))
-	await w._frames(30)
-	g.check("the pulse over: the alarm quiet", not bool(wr.devices[al].on))
-	if zombie != null and is_instance_valid(zombie) and zombie.pawn != null:
-		zombie.pawn.health.apply_impact(1000.0, &"")
 
 	# --- save: generated again
 	w.generate(w.settings)

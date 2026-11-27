@@ -1,15 +1,18 @@
 class_name WiringTraps
 extends RefCounted
 ## The TRAPS KIT of the mine world's wiring (Docs/MineWiring.md 5, 7, 8, 19):
-## stages 5 and 6 -- dispenser, dropper, release brick, alarm. MineWiring keeps
+## stages 5 and 6 -- shooter, dropper, release brick, alarm. MineWiring keeps
 ## them in its DEVICES table and calls these at a few hooks (placing, taking,
 ## the tick, the look, the readout, saving), so the devices of the earlier
 ## stages and this kit stay apart. Never names MineWiring (two class_name
 ## scripts typing each other leak at exit): `w` is the wiring, untyped.
 ##
-##   dispenser      faces a way, 9 slots (RMB opens them, the chest screen).
-##                  Power turning on at its back or sides fires ONE item out
-##                  of its front, the first slot that holds something:
+##   shooter        (id `dispenser`, kept for saves) faces a way, 9 slots
+##                  (RMB opens them, the chest screen). Power turning on at
+##                  its back or sides shoots ONE item out of its front, the
+##                  first slot that holds something. Weapons do damage:
+##                    arrow     flies (WiringArrow): hurts a body, or lies
+##                              where it lands, an arrow to pick up again
 ##                    a gun     one round through the weapon system (its own
 ##                              GunController aimed out of the front: damage,
 ##                              crits, bricks broken); the gun stays, its
@@ -20,9 +23,11 @@ extends RefCounted
 ##                              still water, BrickFluid.STILL)
 ##                    source bucket  its water or lava, as one brick of still
 ##                              fluid (never a spring: finite only)
-##                    anything else  dropped, as a dropper does
+##                    anything else  launched LAUNCH_SPEED out of the front:
+##                              still an item (food, blocks), a pickup where
+##                              it comes down -- it hurts nobody
 ##   dropper        the same slots and power; drops one item out of its front
-##                  (DroppedItems).
+##                  as a pickup (DroppedItems), whatever it is: never fires.
 ##   release brick  a real brick of the ground (a terrain material, so the
 ##                  collapse survey counts it as support), 1 stud x 3 plates.
 ##                  Powered, it lets go: its cells turn to air, and the
@@ -46,8 +51,10 @@ const RELEASE_HOLD := 20
 ## How far an alarm calls (metres), and how often while it stays on (ticks).
 const ALARM_REACH := 48.0
 const ALARM_AGAIN := 20
-## A dropped item's speed out of a dropper's front (m/s).
+## A dropped item's speed out of a dropper's front, and a launched one's out
+## of a shooter's (m/s; dropped items slow down as they fly: ~4 m).
 const DROP_SPEED := 2.4
+const LAUNCH_SPEED := 9.0
 
 ## (lo, hi, material) -> void: a probe's ground edit instead of BrickTerrain's.
 static var edit_fn := Callable()
@@ -321,19 +328,26 @@ static func fire(w, c: Vector3i, d: Dictionary) -> bool:
 	var s: ItemStack = slots[i]
 	var how := "drop"
 	if d.item == &"dispenser":
+		how = "launch"
 		match ItemCatalog.kind(s.id):
+			"arrow":
+				how = "arrow"
 			"gun":
 				how = "gun"
 			"grenade":
 				how = "grenade"
 			"bucket":
-				how = "bucket" if int(s.data.get("tiles", 0)) > 0 else "drop"
+				how = "bucket" if int(s.data.get("tiles", 0)) > 0 else "launch"
 			"source_bucket":
-				how = "source" if int(s.data.get("fluid", 0)) != 0 else "drop"
+				how = "source" if int(s.data.get("fluid", 0)) != 0 else "launch"
 	var ok := true
 	match how:
 		"gun":
 			ok = _fire_gun(w, c, d, s)
+		"arrow":
+			ok = _shoot_arrow(w, c, d)
+			if ok:
+				_take_one(slots, i)
 		"grenade":
 			ok = _throw_grenade(w, c, d)
 			if ok:
@@ -348,11 +362,15 @@ static func fire(w, c: Vector3i, d: Dictionary) -> bool:
 			if ok:
 				_set_data(s, "fluid", 0)
 		_:
+			# "drop" (a dropper) or "launch" (a shooter): an item either way.
 			var one := s.copy()
 			one.count = 1
 			if w.drops != null:
 				var dir := Vector3(SIDES[int(d.facing)])
-				w.drops.spawn(one, front_point(w, c, d), dir * DROP_SPEED + Vector3.UP * 1.2)
+				var v := dir * DROP_SPEED + Vector3.UP * 1.2
+				if how == "launch":
+					v = dir * LAUNCH_SPEED + Vector3.UP * 2.5
+				w.drops.spawn(one, front_point(w, c, d), v)
 			_take_one(slots, i)
 	d["fired"] = int(d.get("fired", 0)) + 1
 	d["last"] = "%s %s%s" % [how, String(s.id), "" if ok else " (held)"]
@@ -424,6 +442,23 @@ static func _fire_gun(w, c: Vector3i, d: Dictionary, s: ItemStack) -> bool:
 	var ok: bool = ctrl._round_out()
 	s.data["ammo"] = ctrl.ammo
 	return ok
+
+
+## An arrow out of the front (WiringArrow), from the muzzle's height.
+static func _shoot_arrow(w, c: Vector3i, d: Dictionary) -> bool:
+	var host = w.host
+	if host == null:
+		return true      # a probe: the slot logic only
+	var dir := Vector3(SIDES[int(d.facing)])
+	var from: Vector3 = w.to_global(front_point(w, c, d) + Vector3(0, w._plate * 0.1, 0))
+	var ex: Array[RID] = []
+	var body := (d.node as Node3D).get_node_or_null("Body") as StaticBody3D if is_instance_valid(d.node) else null
+	if body != null:
+		ex.append(body.get_rid())
+	var a := WiringArrow.shoot(host, from, w.to_global(front_point(w, c, d) + dir) - w.to_global(front_point(w, c, d)),
+			w.drops, w, ex)
+	d["arrow"] = a
+	return true
 
 
 ## A grenade thrown out of the front: as far as THROW_STUDS or the first

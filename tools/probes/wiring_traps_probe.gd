@@ -12,8 +12,9 @@ extends SceneTree
 ##              held on, nothing more; from its front, nothing; a grenade is
 ##              thrown 17 studs out onto the ground, or short of a wall; a
 ##              bucket pours a brick in front (3 tiles out of 9); a gun stays
-##              in its slot; an empty one fires nothing; other things drop.
-##   dropper    drops even a grenade; RMB opens its slots.
+##              in its slot; an arrow is shot, one a turn-on; an empty one
+##              fires nothing; other things are launched (items still).
+##   dropper    drops even a grenade or an arrow (never shoots); RMB opens its slots.
 ##   release    sits on the brick courses (snap); laid into the ground (its
 ##              cells solid, one edit); powered it lets go (cells air) and
 ##              stays let go RELEASE_HOLD ticks after the power goes, then
@@ -129,7 +130,7 @@ func _dispenser(w: MineWiring) -> void:
 	_ticks(w, 2)
 	_lever(w, lv, true)
 	_ticks(w, 2)
-	_ok("then the next slot's: a wire is dropped (%s)" % d.last, str(d.last) == "drop cable" and d.slots[2].count == 2)
+	_ok("then the next slot's: a wire is LAUNCHED, an item still (%s)" % d.last, str(d.last) == "launch cable" and d.slots[2].count == 2)
 	_lever(w, lv, false)
 	_ticks(w, 2)
 	# From the front: nothing.
@@ -141,8 +142,16 @@ func _dispenser(w: MineWiring) -> void:
 	_ok("a lever at its FRONT fires nothing", int(d.fired) == 3)
 	w.remove_device(front, false)
 	w.place_device(lv, &"lever")
-	# A bucket: a brick of water in front.
+	# Arrows: shot, one used a turn-on.
 	d.slots[2] = null
+	d.slots[1] = ItemStack.make(&"arrow", 3)
+	_lever(w, lv, true)
+	_ticks(w, 2)
+	_ok("arrows: one shot (%s), 2 left" % d.last, str(d.last) == "arrow arrow" and d.slots[1].count == 2)
+	_lever(w, lv, false)
+	_ticks(w, 2)
+	d.slots[1] = null
+	# A bucket: a brick of water in front.
 	d.slots[1] = ItemStack.make(&"bucket", 1, {"tiles": 9})
 	_lever(w, lv, true)
 	_ticks(w, 2)
@@ -186,6 +195,12 @@ func _dropper(w: MineWiring) -> void:
 	_lever(w, Vector3i(1, 0, 0), true)
 	_ticks(w, 2)
 	_ok("a dropper drops even a grenade (%s)" % d.get("last", ""), str(d.get("last", "")) == "drop grenade" and d.slots[4] == null)
+	d.slots[5] = ItemStack.make(&"arrow", 1)
+	_lever(w, Vector3i(1, 0, 0), false)
+	_ticks(w, 2)
+	_lever(w, Vector3i(1, 0, 0), true)
+	_ticks(w, 2)
+	_ok("and an arrow as a pickup, not shot (%s)" % d.get("last", ""), str(d.get("last", "")) == "drop arrow")
 	_ok("RMB opens its slots", w.use_device(c) and int(d.get("opened", 0)) == 1)
 
 
@@ -299,6 +314,11 @@ func _save(w: MineWiring) -> void:
 
 func _items() -> void:
 	print("items")
+	_ok("the dispenser is called Shooter in game", str(ItemCatalog.get_def(&"dispenser").name) == "Shooter")
+	var am := ItemIcons._model(ItemCatalog.get_def(&"arrow"))
+	_ok("arrows are items of kind arrow, with a model", ItemCatalog.kind(&"arrow") == "arrow"
+			and am != null and am.get_child(0).get_child_count() >= 3)
+	am.free()
 	for id in [&"dispenser", &"dropper", &"release_brick", &"alarm"]:
 		_ok("%s is a device item" % id, ItemCatalog.has(id) and ItemCatalog.kind(id) == "device")
 		var m := ItemIcons._model(ItemCatalog.get_def(id))
