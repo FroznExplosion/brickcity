@@ -68,10 +68,9 @@ const EV_ANIMALS := 0
 const EV_BIRDS := 1
 const EV_WEEDS := 2
 const EV_BLIGHT := 3
-## Per plot per in-game day: animals in an open field, birds on a ripe
-## grain or legume under open sky, weeds on a plot not mulched, blight in a
-## field of one crop.
-const ANIMALS_PER_DAY := 0.25
+## Per plot per in-game day: birds on a ripe grain or legume under open
+## sky, weeds on a plot not mulched, blight in a field of one crop. (Animals
+## were an event here too until the mine world had real ones: section 23.)
 const BIRDS_PER_DAY := 0.6
 const WEEDS_PER_DAY := 0.12
 const BLIGHT_PER_DAY := 0.06
@@ -387,8 +386,10 @@ static func hazards(plot: Dictionary, crop: Dictionary) -> PackedFloat64Array:
 	if not trouble or crop.is_empty() or int(plot.get("giant", 0)) != 0:
 		return out
 	var ripe := int(plot.stage) >= int(crop.stages) - 1
-	if bool(plot.get("open", false)):
-		out[EV_ANIMALS] = ANIMALS_PER_DAY / DAY
+	# No animals here (Docs/MineFarming.md 23): the mine world's real animals
+	# eat and trample crops themselves (MineFarming.animal_eat,
+	# creature_landed). EV_ANIMALS stays 0 -- kept so old saves' numbers mean
+	# the same.
 	if ripe and BIRD_FAMILIES.has(str(crop.family)) and float(plot.sky) > 0.5:
 		out[EV_BIRDS] = BIRDS_PER_DAY / DAY * (SCARED if bool(plot.get("scared", false)) else 1.0)
 	if not bool(plot.get("weeds", false)) and not bool(plot.get("mulch", false)) and int(crop.tree) < 0:
@@ -552,8 +553,6 @@ static func limits(plot: Dictionary, now: float) -> PackedStringArray:
 		out.append("dislikes this biome")
 	if bool(plot.get("weeds", false)):
 		out.append("weeds (LMB to pull them)")
-	if bool(plot.get("open", false)) and trouble:
-		out.append("open to animals")
 	if bool(plot.get("mono", false)) and trouble:
 		out.append("one-crop field: blight")
 	return out

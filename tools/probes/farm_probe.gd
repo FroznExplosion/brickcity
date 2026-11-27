@@ -451,7 +451,9 @@ func _trouble() -> void:
 		weeds_mulch += 1 if bool(m.weeds) else 0
 		birds_free += _count_events(b, "birds")
 		birds_scared += _count_events(_ripe_held(i, false, false, true), "birds")
-	_ok("animals visit open fields (%d) and never closed ones (%d)" % [open_ev, closed_ev], open_ev > 0 and closed_ev == 0)
+	# Farming rolls no animals any more (section 23: the world's real animals
+	# eat and trample crops); an open field gets none either.
+	_ok("no animal events, open field or not (%d, %d)" % [open_ev, closed_ev], open_ev == 0 and closed_ev == 0)
 	_ok("mulch keeps weeds off (%d of 40 weedy bare, %d mulched)" % [weeds_bare, weeds_mulch], weeds_bare > 0 and weeds_mulch == 0)
 	_ok("a scarecrow keeps most birds off (%d visits free, %d scared)" % [birds_free, birds_scared], birds_scared < birds_free)
 	var w := _plot(&"wheat")
