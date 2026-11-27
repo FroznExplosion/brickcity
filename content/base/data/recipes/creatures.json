@@ -17,6 +17,14 @@
 			"station": "workbench",
 			"output": "tall_fence",
 			"count": 2
+		},
+		{
+			"name": "Fence gate",
+			"inputs": {
+				"wood": 8
+			},
+			"station": "workbench",
+			"output": "fence_gate"
 		}
 	]
 }

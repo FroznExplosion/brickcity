@@ -127,6 +127,16 @@ not move its middle yet (the weights are the stamp's).
   faces (it wrote none on block faces before -- only glass gets one, so no
   other face's look changes). A translucent brick of a stamped building
   or build is glass. Not a real transparent pass: one opaque draw kept.
+- **5b, real glass** (2026-11-26). The near mesher's glass faces (material
+  byte MAT_GLASS) are split out of the tile's mesh (BrickTerrain
+  split_glass, before split_behind, so none lands behind) into
+  "glass_mesh"; TerrainTile draws them on a node of their own,
+  "SurfaceGlass", blended (shaders/terrain_glass.gdshader: the glass
+  colour, 22% opaque face-on, more edge-on, glossy), casting no shadow
+  (set_casts_shadow leaves it off), so the sun reaches the room. The
+  terrain shader's screen-door stays only for a glass face that still
+  reaches the opaque mesh (none today). Coarse tiles keep glass as its top
+  colour; the far facades draw it blue.
 - **6, interiors.** The tower's rooms are furnished as the city's
   (TowerBlockout._furnish: RoomManifest's furniture as plain bricks), so
   furniture is building bricks too: mined, shot, falling with it. Not yet:

@@ -3581,6 +3581,10 @@ struct PackStore {
         uint64_t version = 0;
         uint64_t used = 0;
         std::shared_ptr<const brick::TileTops> pack;
+        /// The whole pack, for the most recently used tiles only
+        /// (PACKS_FULL_MAX): a rebake of an unchanged tile (lava light, sky
+        /// light, behind faces) reuses it instead of packing again.
+        std::shared_ptr<const brick::TilePack> full;
     };
     std::unordered_map<uint64_t, Entry> tiles;
     uint64_t clock = 0;
@@ -3591,6 +3595,9 @@ PackStore g_packs;
 /// The mine world keeps ~240 tiles drawn; the rest is the survey's ring and
 /// the far edits round them.
 constexpr size_t PACKS_MAX = 768;
+/// Whole packs kept for this many tiles (~14 KB each, ~3.5 MB): about the
+/// drawn near tiles; past it only their tops.
+constexpr size_t PACKS_FULL_MAX = 256;
 } // namespace
 
 std::shared_ptr<const brick::TilePack> brick::packed_tile(int tx, int tz, TileSample &s) {
@@ -3599,8 +3606,16 @@ std::shared_ptr<const brick::TilePack> brick::packed_tile(int tx, int tz, TileSa
     const uint64_t ver = tile_version(tx, tz);
     sample_tile(g_field, tx, tz, s);
     const uint64_t k = (uint64_t)tile_key(tx, tz);
-    // Packed every time (the packs are no longer kept); what is kept is the
-    // tile's TileTops, for the readers that need only those.
+    {
+        std::lock_guard<std::mutex> lk(g_packs.lock);
+        auto it = g_packs.tiles.find(k);
+        if (it != g_packs.tiles.end() && it->second.version == ver && it->second.full) {
+            it->second.used = ++g_packs.clock;
+            ++g_packs.hits;
+            return it->second.full;
+        }
+    }
+    // Packed; kept whole for the recent tiles, as TileTops for the rest.
     auto fresh = std::make_shared<TilePack>();
     pack_tile(g_field, s, fresh->pieces, fresh->owner);
     fresh->top.resize((size_t)TILE * TILE);
@@ -3640,7 +3655,28 @@ std::shared_ptr<const brick::TilePack> brick::packed_tile(int tx, int tz, TileSa
                 it = it->second.used <= cut ? g_packs.tiles.erase(it) : std::next(it);
             }
         }
-        g_packs.tiles[k] = PackStore::Entry{ ver, ++g_packs.clock, tops };
+        g_packs.tiles[k] = PackStore::Entry{ ver, ++g_packs.clock, tops, fresh };
+        // Whole packs past PACKS_FULL_MAX: the least used quarter's dropped.
+        size_t full = 0;
+        for (const auto &e : g_packs.tiles) {
+            full += e.second.full ? 1 : 0;
+        }
+        if (full > PACKS_FULL_MAX) {
+            std::vector<uint64_t> used;
+            for (const auto &e : g_packs.tiles) {
+                if (e.second.full) {
+                    used.push_back(e.second.used);
+                }
+            }
+            const size_t q = used.size() / 4;
+            std::nth_element(used.begin(), used.begin() + q, used.end());
+            const uint64_t cut = used[q];
+            for (auto &e : g_packs.tiles) {
+                if (e.second.full && e.second.used <= cut) {
+                    e.second.full.reset();
+                }
+            }
+        }
     }
     return fresh;
 }
@@ -4441,16 +4477,15 @@ static void exposed_brick_cells(const TileSample &s, bool tops, std::vector<uint
     }
 }
 
-/// Every BEHIND_FACE triangle moved out of `m` into mesh arrays of its own
-/// (build_tile's "behind_mesh"): drawn by a node of its own with a short
-/// visibility range, so a far tile's are not processed at all. Empty: none.
-static Array split_behind(MeshBuf &m) {
+/// Every vertex whose CUSTOM0 byte `byte` is `value` (and its triangles)
+/// moved out of `m` into mesh arrays of its own. Empty: none.
+static Array split_faces(MeshBuf &m, int byte, uint8_t value) {
     const int nv = m.verts.size();
     const uint8_t *cu = m.custom0.ptr();
     std::vector<uint8_t> which((size_t)nv, 0);
     bool any = false;
     for (int i = 0; i < nv; ++i) {
-        which[(size_t)i] = cu[(size_t)i * 4 + 2] == BEHIND_FACE ? 1 : 0;
+        which[(size_t)i] = cu[(size_t)i * 4 + byte] == value ? 1 : 0;
         any = any || which[(size_t)i] != 0;
     }
     if (!any) {
@@ -4498,6 +4533,22 @@ static Array split_behind(MeshBuf &m) {
     mesh[Mesh::ARRAY_INDEX] = b.indices;
     mesh[Mesh::ARRAY_CUSTOM0] = b.custom0;
     return mesh;
+}
+
+/// Every BEHIND_FACE triangle moved out of `m` into mesh arrays of its own
+/// (build_tile's "behind_mesh"): drawn by a node of its own with a short
+/// visibility range, so a far tile's are not processed at all. Empty: none.
+static Array split_behind(MeshBuf &m) {
+    return split_faces(m, 2, BEHIND_FACE);
+}
+
+/// Every GLASS face (material byte MAT_GLASS, stamped by the near mesher)
+/// moved out of `m` (build_tile's "glass_mesh", Docs/TerrainBuildings.md 5b):
+/// the terrain is one opaque pass, so TerrainTile draws these with a
+/// blended material of their own. Before split_behind: a glass face never
+/// lands in the behind mesh. Empty: none.
+static Array split_glass(MeshBuf &m) {
+    return split_faces(m, 0, (uint8_t)MAT_GLASS);
 }
 
 /// The behind pass (BEHIND_FACE): into `m`, after the main pass; `cells`
@@ -7268,6 +7319,7 @@ Dictionary BrickTerrain::build_section(int tx, int sy, int tz) {
         cave_boxes = add_cave_boxes(s, boxes, true, nullptr);
         sky_light_pass(m, s, false, out, &studs);
         t_behind = nullptr;
+        out["glass_mesh"] = split_glass(m);
         out["behind_mesh"] = split_behind(m);
         out["own_lo"] = s.own_lo;
         out["own_hi"] = s.own_hi;
@@ -8379,6 +8431,7 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
     Dictionary sky;
     sky_light_pass(m, s, true, sky, &studs);
     t_behind = nullptr;
+    const Array glass_mesh = split_glass(m);
     const Array behind_mesh = split_behind(m);
 
     // No edge skirt on the detail tiles (19.18): the detail square always
@@ -8399,6 +8452,7 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
 
     Dictionary out = sky;
     out["mesh"] = mesh;
+    out["glass_mesh"] = glass_mesh;
     out["behind_mesh"] = behind_mesh;
     out["behind_baked"] = behind_baked;
     out["behind_cells_ms"] = t_behind_cells_ms;
@@ -8789,6 +8843,11 @@ Dictionary BrickTerrain::memory_stats() {
             const brick::TileTops &p = *e.second.pack;
             bytes += (int64_t)(sizeof(brick::TileTops) + vec_bytes(p.top) + vec_bytes(p.rect));
             bytes += 64;   // the map node, the shared_ptr's control block
+            if (e.second.full) {
+                const brick::TilePack &f = *e.second.full;
+                bytes += (int64_t)(sizeof(brick::TilePack) + vec_bytes(f.pieces) + vec_bytes(f.owner) + vec_bytes(f.top));
+                pieces += (int64_t)f.pieces.size();
+            }
         }
         d["packs_kept"] = (int64_t)g_packs.tiles.size();
         d["packs_bytes"] = bytes;
@@ -9507,9 +9566,9 @@ Vector4 BrickWave::shore_band_uniform() {
 
 namespace {
 bool g_river_calm = false;
-constexpr double RIVER_OPEN_R = 12.0;   ///< metres looked out for open water
-constexpr double RIVER_NARROW_LO = 3.5; ///< open within it under this: a river, calm
-constexpr double RIVER_NARROW_HI = 9.0; ///< ...over this: the sea's full swell
+constexpr double RIVER_OPEN_R = 16.0;   ///< metres looked out for open water
+constexpr double RIVER_NARROW_LO = 5.0; ///< open within it under this: a river, calm
+constexpr double RIVER_NARROW_HI = 12.0; ///< ...over this: the sea's full swell
 constexpr double RIVER_AMP = 0.03;      ///< the ripple, metres
 constexpr double RIVER_LEN = 4.0;       ///< metres between its crests
 constexpr double RIVER_SPEED = 0.8;     ///< metres a second, downstream
@@ -9581,7 +9640,7 @@ double BrickWave::height_at(double x, double z, double t) {
     double narrow = 1.0;
     const double ripple = river_shape(x, z, dist, t, narrow);
     return g_sea_level + taper * group_factor(x, z, t) * swell_near_shore(dist) * swell * narrow
-            + band_value(x, z, t) + ripple;
+            + band_value(x, z, t) * narrow + ripple;
 }
 
 /// The surface as the pieces actually sit. Gameplay uses the CONTINUOUS height

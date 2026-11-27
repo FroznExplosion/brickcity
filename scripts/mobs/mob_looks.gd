@@ -65,25 +65,62 @@ static func zombie() -> Node3D:
 	return root
 
 
-## The pig: 2 studs across, 3 long, 6 plates (2 bricks) to its back.
-static func pig() -> Node3D:
+## The look of creature `kind`: a real model if a content pack has one --
+## creatures/<kind>.tscn, .scn or .glb, feet at its origin, facing -Z, legs
+## named "leg*" to swing -- else the block-out (Docs/MineCreatures.md 11).
+static func make(kind: StringName, def: Dictionary) -> Node3D:
+	for ext in ["tscn", "scn", "glb"]:
+		var path := ContentPacks.resolve("creatures/%s.%s" % [kind, ext])
+		if path != "" and ResourceLoader.exists(path):
+			var scene := load(path) as PackedScene
+			if scene != null:
+				var n := scene.instantiate()
+				if n is Node3D:
+					return n
+				n.free()
+	if kind == &"zombie":
+		return zombie()
+	return quadruped(def)
+
+
+## A four-legged block-out from a CreatureBook entry: its body box the
+## creature's width x `look.len` studs, its height the body's plates.
+static func quadruped(def: Dictionary) -> Node3D:
+	var look: Dictionary = def.get("look", {})
+	var b: Vector4i = def.get("body", Vector4i(2, 6, 3, 9))
 	var root := Node3D.new()
-	root.name = "PigLook"
-	var pink := _mat(Color("e89aa8"))
-	var dark := _mat(Color("c97585"))
-	var legs := 2 * PLATE
-	var body := 4 * PLATE
-	_box(root, "body", Vector3(STUD * 2.0, body, STUD * 3.0), Vector3(0, legs + body * 0.5, 0), pink)
+	root.name = "%sLook" % str(def.get("name", "Animal"))
+	var main := _mat(Color(str(look.get("colour", "#a08060"))))
+	var dark := _mat(Color(str(look.get("dark", "#604830"))))
+	var w := b.x * STUD
+	var length := float(look.get("len", 3)) * STUD
+	var legs := float(look.get("legs", 2)) * PLATE
+	var h := b.y * PLATE
+	var body_h := maxf(h - legs - PLATE, PLATE * 1.5)
+	_box(root, "body", Vector3(w, body_h, length), Vector3(0, legs + body_h * 0.5, 0), main)
 	var head := Node3D.new()
 	head.name = "head"
-	head.position = Vector3(0, legs + body * 0.7, -STUD * 1.5)
+	head.position = Vector3(0, legs + body_h * 0.75, -length * 0.5)
 	root.add_child(head)
-	_box(head, "skull", Vector3(STUD * 1.4, PLATE * 3.5, STUD * 1.2), Vector3(0, 0, -STUD * 0.5), pink)
-	_box(head, "snout", Vector3(STUD * 0.7, PLATE * 1.5, STUD * 0.3), Vector3(0, -PLATE * 0.5, -STUD * 1.2), dark)
+	var hs := minf(w * 0.7, h * 0.5)
+	_box(head, "skull", Vector3(hs, hs, hs * 0.9), Vector3(0, 0, -hs * 0.4), main)
+	if bool(look.get("snout", false)) or bool(look.get("tusks", false)):
+		_box(head, "snout", Vector3(hs * 0.5, hs * 0.4, STUD * 0.3), Vector3(0, -hs * 0.15, -hs * 0.95), dark)
+	if bool(look.get("tusks", false)):
+		for sx in [-1.0, 1.0]:
+			_box(head, "tusk", Vector3(0.03, 0.08, 0.03), Vector3(sx * hs * 0.3, -hs * 0.2, -hs * 1.05), _mat(Color("e8e0c8")))
+	if bool(look.get("ears", false)):
+		for sx in [-1.0, 1.0]:
+			_box(head, "ear", Vector3(hs * 0.2, hs * 0.6, hs * 0.1), Vector3(sx * hs * 0.3, hs * 0.65, -hs * 0.2), dark)
+	if bool(look.get("antlers", false)):
+		for sx in [-1.0, 1.0]:
+			_box(head, "antler", Vector3(0.04, hs * 1.1, 0.04), Vector3(sx * hs * 0.35, hs * 0.95, -hs * 0.1), _mat(Color("d8c8a0")))
+	if bool(look.get("tail", false)):
+		_box(root, "tail", Vector3(STUD * 0.25, STUD * 0.25, STUD * 0.9), Vector3(0, legs + body_h * 0.8, length * 0.5 + STUD * 0.35), dark)
+	var leg_w := clampf(w * 0.25, 0.08, STUD * 0.5)
 	for sx in [-1.0, 1.0]:
 		for sz in [-1.0, 1.0]:
-			_limb(root, "leg", Vector3(STUD * 0.5, legs, STUD * 0.5),
-					Vector3(sx * STUD * 0.6, legs, sz * STUD * 1.0), dark)
+			_limb(root, "leg", Vector3(leg_w, legs, leg_w), Vector3(sx * (w * 0.5 - leg_w * 0.6), legs, sz * (length * 0.5 - leg_w)), dark)
 	return root
 
 

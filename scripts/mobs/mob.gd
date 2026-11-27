@@ -1,7 +1,7 @@
 class_name Mob
 extends Node
 ## A creature of the mine world (Docs/MineCreatures.md): a Pawn's body driven
-## by a brain, walking TerrainNav's graph. MobZombie and MobPig extend it.
+## by a brain, walking TerrainNav's graph. MobZombie and MobAnimal extend it.
 ##
 ## Positions are in the TERRAIN frame (the mine world node's local space, which
 ## the origin shift moves): `feet()`, paths, goals. The Pawn works in global
@@ -10,6 +10,11 @@ extends Node
 ##
 ## A path is asked on a worker (TerrainNav.find_path in WorkerThreadPool) and
 ## taken when done, never waited for (CLAUDE.md).
+##
+## FAR (section 11): past the terrain's colliders a body cannot walk -- there
+## is nothing to stand on. There the Pawn's physics is off and the creature
+## RIDES the nav: slid from node to node of its path (or the field) at its
+## speed, its feet on the nodes' floors. Back near, the Pawn walks again.
 
 const THINK_HZ := 4.0
 ## A path older than this is asked again when the goal is far.
@@ -22,16 +27,26 @@ var kind := &""
 ## TerrainNav body: width studs, height plates, step up plates, drop plates.
 var body := Vector4i(2, 12, 3, 19)
 ## A fall of at least this many bricks onto a planted plot tramples it
-## (Docs/MineCreatures.md 5.3). 0: walking over one is enough.
+## (Docs/MineCreatures.md 9.7). 0: walking over one is enough; < 0 never.
 var trample_bricks := 3.0
+## Climbs body.z plates with a jump (a deer: 2 bricks).
+var jumps := false
 var look: Node3D
 var state := "idle"
 var asleep := false
+var far := false
 ## Brain off, standing (a gate holds one in place).
 var held := false
 var dead := false
 var running := false
 var trampled := 0
+## Penned in (TerrainNav.free_reach, MineMobs): saved with the world.
+var penned := false
+## Where its feet were last tick, terrain frame: read by everything else, and
+## by the save at the world's close (the bodies are out of the tree by then).
+var last_feet := Vector3.INF
+## Where the last blow came from (a wolf's bite); INF: the player's.
+var last_hit_from := Vector3.INF
 ## Where to face instead of the way it walks (INF: the walk).
 var face_point := Vector3.INF
 ## The last path's answer: did it get to the goal (false: as near as it could).
@@ -52,6 +67,7 @@ var _stuck_at := Vector3.INF
 var _stuck_t := 0.0
 var _anim_t := 0.0
 var _die_t := 0.0
+var _last_plot := Vector3i.MAX
 
 
 ## Called once by MineMobs after the pawn is made.
@@ -67,10 +83,19 @@ func attach(p_mobs, p_pawn: Pawn, p_look: Node3D) -> void:
 		pawn.body.add_child(look)
 		look.position = Vector3.DOWN * pawn.stand_height * 0.5
 	pawn.landed.connect(_on_landed)
+	last_feet = feet()
 
 
 func feet() -> Vector3:
 	return mobs.to_terrain(pawn.feet())
+
+
+func hp() -> float:
+	return pawn.health.total_current() if pawn != null and is_instance_valid(pawn) and pawn.health != null else 0.0
+
+
+func eye_height() -> float:
+	return Pawn.EYE_HEIGHT
 
 
 func is_dead() -> bool:
@@ -88,10 +113,20 @@ func steer_point() -> Vector3:
 	return Vector3.INF
 
 
+## Far or near (MineMobs): the Pawn's physics off and on.
+func set_far(on: bool) -> void:
+	if on == far:
+		return
+	far = on
+	pawn.process_mode = Node.PROCESS_MODE_DISABLED if on else Node.PROCESS_MODE_INHERIT
+	if not on:
+		pawn.place(mobs.to_world(last_feet + Vector3(0, 0.05, 0)))
+
+
 ## Ask for a way to `goal` (terrain frame), unless the one held still serves.
 func walk_to(goal: Vector3, now: float) -> void:
 	var same := _goal != Vector3.INF and goal.distance_to(_goal) < 1.0
-	if same and (now - _path_at < PATH_STALE or feet().distance_to(goal) < 4.0):
+	if same and (now - _path_at < PATH_STALE or last_feet.distance_to(goal) < 4.0):
 		return
 	if not same:
 		_path = PackedVector3Array()
@@ -104,7 +139,7 @@ func walk_to(goal: Vector3, now: float) -> void:
 	var out := []
 	_job_out = out
 	var nav: TerrainNav = mobs.nav
-	var from := feet()
+	var from := last_feet
 	var b := body
 	_job = WorkerThreadPool.add_task(func() -> void:
 			out.append(nav.find_path(from, goal, b, 4000)), true, "mob path")
@@ -149,6 +184,8 @@ func _physics_process(delta: float) -> void:
 		return
 	if asleep:
 		return
+	if not far:
+		last_feet = feet()
 	if held:
 		pawn.intents.move = Vector3.ZERO
 		return
@@ -157,23 +194,36 @@ func _physics_process(delta: float) -> void:
 		_next_think = now + 1.0 / THINK_HZ
 		think(now)
 	_poll_path()
-	_steer(delta)
+	if far:
+		_ride(delta)
+	else:
+		_steer(delta)
+		_walk_trample()
 	_animate(delta)
 
 
-func _steer(delta: float) -> void:
-	var f := feet()
+## The point to go to now: steer_point, or the path's next node.
+func _next_point() -> Vector3:
 	var to := steer_point()
 	if to == Vector3.INF and not _path.is_empty():
-		while _wp < _path.size() and Vector2(_path[_wp].x - f.x, _path[_wp].z - f.z).length() < ARRIVE:
+		while _wp < _path.size() and Vector2(_path[_wp].x - last_feet.x, _path[_wp].z - last_feet.z).length() < ARRIVE:
 			_wp += 1
 		if _wp < _path.size():
 			to = _path[_wp]
+	return to
+
+
+func _steer(delta: float) -> void:
+	var f := last_feet
+	var to := _next_point()
 	var wish := Vector3.ZERO
 	if to != Vector3.INF:
 		var d := Vector3(to.x - f.x, 0.0, to.z - f.z)
 		if d.length() > 0.08:
 			wish = d.normalized()
+		# A jumper's climb: the next node over a step, from the floor.
+		if jumps and to.y - f.y > Pawn.STEP_HEIGHT and pawn.is_on_floor() and d.length() < 1.2:
+			pawn.body.velocity.y = sqrt(2.0 * Pawn.GRAVITY * (to.y - f.y + 0.3))
 	if wish != Vector3.ZERO:
 		wish = (wish + mobs.separation(self) * 0.6).normalized()
 	pawn.intents.move = wish
@@ -195,16 +245,37 @@ func _steer(delta: float) -> void:
 		_stuck_t = 0.0
 
 
+## Far: slide to the next node at its speed, the feet on the nodes' floors.
+func _ride(delta: float) -> void:
+	var to := _next_point()
+	if to == Vector3.INF:
+		return
+	var speed := (Pawn.RUN_SPEED if running else Pawn.WALK_SPEED) * pawn.move_mult
+	var d := to - last_feet
+	var flat := Vector2(d.x, d.z).length()
+	var step := minf(speed * delta, flat)
+	var nf := last_feet
+	if flat > 0.001:
+		nf += Vector3(d.x, 0.0, d.z) / flat * step
+	nf.y = move_toward(last_feet.y, to.y, maxf(step * 2.0, 4.0 * delta))
+	last_feet = nf
+	pawn.body.global_position = mobs.to_world(nf) + Vector3.UP * pawn.stand_height * 0.5
+	if look != null and flat > 0.01:
+		look.rotation.y = atan2(-d.x, -d.z)
+
+
 func _animate(delta: float) -> void:
 	if look == null:
 		return
 	var v := pawn.body.velocity
-	var speed := Vector2(v.x, v.z).length()
+	var speed := Vector2(v.x, v.z).length() if not far else Pawn.WALK_SPEED * pawn.move_mult
 	_anim_t += delta
 	MobLooks.swing(look, _anim_t, speed)
+	if far:
+		return
 	var want := INF
 	if face_point != Vector3.INF:
-		var d := face_point - feet()
+		var d := face_point - last_feet
 		if Vector2(d.x, d.z).length() > 0.1:
 			want = atan2(-d.x, -d.z)
 	elif speed > 0.2:
@@ -214,26 +285,33 @@ func _animate(delta: float) -> void:
 
 
 func _on_landed() -> void:
-	if dead or mobs.host.farming == null:
+	if dead or trample_bricks <= 0.0 or mobs.host.farming == null:
 		return
-	if trample_bricks > 0.0 and pawn.last_fall < trample_bricks * Pawn.BRICK_M - 0.05:
+	if pawn.last_fall < trample_bricks * Pawn.BRICK_M - 0.05:
 		return
-	if mobs.host.farming.creature_landed(feet()):
+	if mobs.host.farming.creature_landed(last_feet):
 		trampled += 1
-		mobs.log_line("%s trampled a plot (fell %.2f m)" % [kind, pawn.last_fall])
+		mobs.log_line("a %s trampled a plot (fell %.2f m)" % [kind, pawn.last_fall])
 
 
 ## Walking over plots tramples them, for a creature with trample_bricks 0.
 func _walk_trample() -> void:
-	if trample_bricks <= 0.0 and pawn.is_on_floor() and mobs.host.farming != null:
-		if mobs.host.farming.creature_landed(feet()):
-			trampled += 1
+	if trample_bricks != 0.0 or not pawn.is_on_floor() or mobs.host.farming == null:
+		return
+	var cell := Vector3i(floori(last_feet.x / 0.7), 0, floori(last_feet.z / 0.7))
+	if cell == _last_plot:
+		return
+	_last_plot = cell
+	if mobs.host.farming.creature_landed(last_feet):
+		trampled += 1
 
 
 func _die() -> void:
 	dead = true
 	_die_t = 0.0
 	pawn.intents.move = Vector3.ZERO
+	if far:
+		set_far(false)
 	for c in pawn.body.get_children():
 		if c is CollisionShape3D:
 			(c as CollisionShape3D).set_deferred(&"disabled", true)

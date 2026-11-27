@@ -423,10 +423,10 @@ a layout, not a rule.
   and wears the shield by its damage (`data.wear`, shown as "Brick Shield
   83%"); worn out it breaks and is gone. Hits from the side or behind land.
   Raised, you walk at 45% (`BLOCK_WALK`, the pawn's move_mult, put back as
-  it was), and a blocked hit thuds. A zombie's blow (it only shoves, the
-  player cannot be hurt yet) asks the same guard from where the zombie
-  stands: from in front the shield takes it, no shove, 1 wear
-  (`MineMobs.hit_player`, `hits_blocked`).
+  it was), and a blocked hit thuds. A creature's blow (a shove, and damage
+  in survival) asks the same guard from where the creature stands: from in
+  front the shield takes it -- no shove, no damage, worn by the damage
+  (`MineMobs.hurt_player`, `hits_blocked`).
 - Tests: inventory_probe (the off-hand rules, pickups never into it, the
   quick slot and up flag saved); `--gate=inventory` 4a (stone laid from the
   off-hand with C and RMB), 4b (the off-hand pistol fires on RMB taps, a
