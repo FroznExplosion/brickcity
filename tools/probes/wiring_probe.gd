@@ -57,6 +57,15 @@ extends SceneTree
 ##             the way stalls; power at its front does not count; 4 pushes
 ##             a tick, the fifth the next; laid facing up when looking down
 ##             (a gate not); the wrench's turn order; saved.
+## Stage 7 (Docs/MineWiring.md 20):
+##   wire brick a terrain material; a check over an edit finds wire bricks,
+##             a wall of them carries a lever's power up and along to a lamp,
+##             the wrench reads its net, one broken cuts the circuit, a wire
+##             on its top joins it, saved.
+##   links     a receiver 40 studs away follows its transmitter's channel;
+##             another channel stays dark; RMB / shift+RMB step the two
+##             colours; the readout names the channel; no latch beside its
+##             own transmitter; the channel is saved.
 
 var _pass := 0
 var _fail := 0
@@ -112,6 +121,7 @@ func _init() -> void:
 	_stage3(w)
 	_stage3b(w)
 	_stage4(w)
+	_stage7(w)
 	_save(w)
 	_save2(w)
 	_items()
@@ -656,8 +666,11 @@ func _items() -> void:
 	_ok("every device is an item of kind device, and the wrench", every and ItemCatalog.kind(&"wrench") == "wrench")
 	_ok("in game it is called Wire, and the ore Wire ore (names decided 2026-11-26)", str(ItemCatalog.get_def(&"cable").name) == "Wire"
 			and ItemCatalog.has(&"redstone_ore") and str(ItemCatalog.get_def(&"redstone_ore").name) == "Wire ore")
+	_ok("the wire brick is a block item named Wire brick", ItemCatalog.has(&"wire_brick")
+			and ItemCatalog.kind(&"wire_brick") == "block" and str(ItemCatalog.get_def(&"wire_brick").name) == "Wire brick"
+			and int(ItemCatalog.get_def(&"wire_brick").material) == BrickTerrain.MAT_WIRE_BRICK)
 	_ok("their kinds: wire, device", ItemCatalog.kind(&"cable") == "wire" and ItemCatalog.kind(&"lever") == "device")
-	for id in [&"cable", &"lever", &"lamp", &"button", &"pressure_tile", &"trip_hook", &"and_gate", &"wrench", &"piston", &"sticky_piston"]:
+	for id in [&"cable", &"lever", &"lamp", &"button", &"pressure_tile", &"trip_hook", &"and_gate", &"wrench", &"piston", &"sticky_piston", &"wire_transmitter", &"wire_receiver"]:
 		var m := ItemIcons._model(ItemCatalog.get_def(id))
 		_ok("%s has a model" % id, m != null and m.get_child(0).get_child_count() >= 2)
 		m.free()
@@ -961,4 +974,121 @@ func _stage4(w: MineWiring) -> void:
 	_ok("a sticky piston facing up, out, comes back so", w2.devices.has(p) and int(w2.devices[p].facing) == up
 			and w2.devices[p].item == &"sticky_piston")
 	w2.queue_free()
+	_reset(w)
+
+
+# --- stage 7: wireless links and wire bricks ---------------------------------
+
+## A wire brick's stud of a course: its three plates, as the builder lays it.
+func _wire(x: int, course: int, z: int) -> void:
+	for p in 3:
+		_holes.erase(Vector3i(x, course * 3 + p, z))
+		_extra[Vector3i(x, course * 3 + p, z)] = WiringLinks.wire_material()
+
+
+func _stage7(w: MineWiring) -> void:
+	print("stage 7: wireless links, wire bricks")
+	_ok("the wire brick is a terrain material (%d)" % WiringLinks.wire_material(),
+			WiringLinks.wire_material() == BrickTerrain.MAT_WIRE_BRICK and WiringLinks.wire_material() > 0)
+	# A wall of wire bricks: a lever at its foot, a lamp at its far side two
+	# courses up -- the signal runs up and along inside it.
+	_reset(w)
+	var lev := Vector3i(100, 0, 100)
+	var lamp := Vector3i(103, 3, 100)
+	_wire(101, 0, 100)
+	_wire(101, 1, 100)
+	_wire(102, 1, 100)
+	for y in 3:
+		_extra[Vector3i(103, y, 100)] = true    # the lamp's ground
+	w.check(Vector3i(99, -1, 99), Vector3i(104, 8, 101))
+	w.place_device(lev, &"lever")
+	w.place_device(lamp, &"lamp")
+	_ticks(w, 2)
+	_ok("the edit's check finds three wire bricks, one net", w.wires.size() == 3 and w.net_of.has(Vector3i(101, 0, 100))
+			and w.net_of[Vector3i(101, 0, 100)] == w.net_of[Vector3i(102, 3, 100)])
+	_ok("lever off: the lamp dark", not w.is_lit(lamp))
+	w.use_device(lev)
+	_ticks(w, 2)
+	_ok("lever on: up the wall and along it, the lamp lit", w.is_lit(lamp))
+	_ok("the wrench reads a wire brick's net", w.readout({"cell": Vector3i(101, 4, 100)}).contains("Wire brick")
+			and w.readout({"cell": Vector3i(101, 4, 100)}).contains("level 15"))
+	# A shot (or a pickaxe) breaks the middle one: the circuit is cut.
+	for p in 3:
+		_extra.erase(Vector3i(101, 3 + p, 100))
+		_holes[Vector3i(101, 3 + p, 100)] = true
+	w.check(Vector3i(101, 3, 100), Vector3i(101, 5, 100))
+	_ticks(w, 2)
+	_ok("the middle wire brick broken: gone from the nets, the lamp dark", not w.wires.has(Vector3i(101, 3, 100))
+			and not w.is_lit(lamp))
+	# A cable on a wire brick's top joins its net.
+	_reset(w)
+	_wire(110, 0, 100)
+	for y in 3:
+		_extra[Vector3i(111, y, 100)] = true
+	w.check(Vector3i(109, -1, 99), Vector3i(112, 3, 101))
+	w.place_cable(Vector3i(110, 3, 100))
+	w.place_device(Vector3i(109, 0, 100), &"lever", true)
+	w.place_device(Vector3i(111, 3, 100), &"lamp")
+	_ticks(w, 3)
+	_ok("a wire on a wire brick's top joins it: lit through both", w.is_lit(Vector3i(111, 3, 100)))
+	# Saved and back.
+	var saved: Variant = JSON.parse_string(JSON.stringify(w.to_save()))
+	var w2 := MineWiring.new()
+	w2.solid_fn = _solid
+	root.add_child(w2)
+	w2.restore(saved)
+	_ticks(w2, 3)
+	_ok("saved: the wire brick and the lit lamp come back", w2.wires.has(Vector3i(110, 0, 100))
+			and w2.is_lit(Vector3i(111, 3, 100)))
+	w2.queue_free()
+	# Wireless: a transmitter beside a lever, a receiver far away beside a lamp.
+	_reset(w)
+	var tx := Vector3i(120, 0, 100)
+	var rx := Vector3i(150, 0, 130)
+	var tl := Vector3i(119, 0, 100)
+	var rl := Vector3i(151, 0, 130)
+	w.place_device(tl, &"lever")
+	w.place_device(tx, &"wire_transmitter")
+	w.place_device(rx, &"wire_receiver")
+	w.place_device(rl, &"lamp")
+	_ticks(w, 2)
+	_ok("unpowered: the far lamp dark", not w.is_lit(rl))
+	w.use_device(tl)
+	_ticks(w, 3)
+	_ok("the lever on: the receiver 40 studs away lights its lamp", w.output_of(rx) == 15 and w.is_lit(rl))
+	w.use_device(rx)
+	_ticks(w, 3)
+	_ok("the receiver's first colour stepped: another channel, dark (%s)" % WiringLinks.channel_name(int(w.devices[rx].setting)),
+			not w.is_lit(rl) and int(w.devices[rx].setting) == 8)
+	w.use_device(tx, "use2")
+	w.use_device(tx)
+	w.use_device(rx, "use2")
+	_ticks(w, 3)
+	_ok("both on blue + blue (RMB, shift + RMB): lit again", int(w.devices[tx].setting) == 9
+			and int(w.devices[rx].setting) == 9 and w.is_lit(rl))
+	_ok("the wrench names the channel", w.readout({"device": rx}).contains("channel blue + blue"))
+	w.use_device(tl)
+	_ticks(w, 3)
+	_ok("the lever off: dark", not w.is_lit(rl))
+	# A receiver beside its own channel's transmitter does not hold it on.
+	_reset(w)
+	w.place_device(tl, &"lever")
+	w.place_device(tx, &"wire_transmitter")
+	var rnear := Vector3i(121, 0, 100)
+	w.place_device(rnear, &"wire_receiver")
+	w.use_device(tl)
+	_ticks(w, 3)
+	var on1 := w.output_of(rnear) == 15
+	w.use_device(tl)
+	_ticks(w, 4)
+	_ok("a receiver beside its own transmitter: on with the lever, off again (no latch)", on1 and w.output_of(rnear) == 0)
+	# The channel is saved.
+	w.use_device(rnear, "use2")
+	var saved2: Variant = JSON.parse_string(JSON.stringify(w.to_save()))
+	var w3 := MineWiring.new()
+	w3.solid_fn = _solid
+	root.add_child(w3)
+	w3.restore(saved2)
+	_ok("a receiver's channel comes back", int(w3.devices[rnear].setting) == 1)
+	w3.queue_free()
 	_reset(w)

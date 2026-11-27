@@ -411,6 +411,11 @@ static func _model(d: Dictionary) -> Node3D:
 				_part(inner, _box(Vector3(0.35, 0.8, 1.0)), _mat(Color(0.12, 0.13, 0.15), 0.5), Vector3(0, 0.4, 0))
 				_part(inner, _box(Vector3(0.04, 0.4, 0.14)), _mat(col, 0.3, 1.0, true), Vector3(0.18, 0.4, -0.12))
 				_part(inner, _box(Vector3(0.04, 0.4, 0.14)), _mat(col, 0.3, 1.0, true), Vector3(0.18, 0.4, 0.12))
+			elif dm == "link":
+				# A brick (the item's colour), two round antennas, red and blue.
+				_part(inner, _box(Vector3(0.8, 0.8, 0.8)), _mat(col, 0.5), Vector3(0, 0.4, 0))
+				_part(inner, _cyl(0.1, 0.1, 0.45), _mat(Color(0.72, 0.13, 0.13), 0.4), Vector3(-0.17, 1.02, 0))
+				_part(inner, _cyl(0.1, 0.1, 0.3), _mat(Color(0.13, 0.35, 0.68), 0.4), Vector3(0.17, 0.95, 0))
 			elif dm == "piston":
 				# A grey body, the head plate (the item's colour) at the front.
 				_part(inner, _box(Vector3(0.65, 0.9, 0.9)), _mat(Color(0.33, 0.34, 0.37), 0.6), Vector3(-0.17, 0.45, 0))

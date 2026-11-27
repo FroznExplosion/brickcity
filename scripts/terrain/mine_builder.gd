@@ -864,7 +864,9 @@ func place_target() -> bool:
 				inv.add_item(ItemStack.make(it, 1))
 				inv.changed.emit()
 		else:
-			used = host.wiring.use_device(dev, "turn" if hand_kind() == "wrench" else "use")
+			# Shift + RMB: a wire link's second antenna colour (stage 7).
+			used = host.wiring.use_device(dev, "turn" if hand_kind() == "wrench"
+					else ("use2" if Input.is_key_pressed(KEY_SHIFT) else "use"))
 		if used:
 			log_blocks.append("use device %s" % dev)
 		target = {}
