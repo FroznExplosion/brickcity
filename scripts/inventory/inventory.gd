@@ -52,6 +52,11 @@ var backpack: ItemStack = null
 ## The old 2 x 2 craft grid's contents (stage 9), only to give them back from
 ## an old save (from_dict empties it into storage).
 var old_craft: Array = []
+## The crafting grid in the screen (Docs/Inventory.md 16): craft_n x craft_n
+## of craft_grid (row by row; 2 by hand, a station's `grid`), area "craft".
+## Never saved: the screen closing puts it back (clear_craft).
+var craft_grid: Array = []
+var craft_n := 2
 ## The storage: the worn backpack's slots, or none.
 var main: Array:
 	get:
@@ -85,6 +90,7 @@ func _init() -> void:
 	hotbars[0] = _empty(HOTBAR_SIZE)
 	hotbars[1] = _empty(HOTBAR_SIZE)
 	old_craft = _empty(4)
+	craft_grid = _empty(RecipeBook.MAX_GRID * RecipeBook.MAX_GRID)
 	backpack = make_backpack(KIT_BACKPACK)
 
 
@@ -181,12 +187,15 @@ func _array(area: StringName) -> Array:
 		&"quick": return quick
 		&"main": return main
 		&"chest": return chest_slots
+		&"craft": return craft_grid
 	return []
 
 
 func area_size(area: StringName) -> int:
 	if area == &"backpack":
 		return 1
+	if area == &"craft":
+		return craft_n * craft_n
 	return _array(area).size()
 
 
@@ -825,10 +834,27 @@ func _carried() -> Array:
 	return out
 
 
-## How many of recipe input `inp` are carried.
+## The crafting grid's slots in use.
+func _grid_addrs() -> Array:
+	var out: Array = []
+	for i in craft_n * craft_n:
+		out.append(addr(&"craft", i))
+	return out
+
+
+## How many of recipe input `inp` are carried (the crafting grid's too).
 func count_of(inp: Dictionary) -> int:
+	return count_carried(inp) + _count_in(inp, _grid_addrs())
+
+
+## How many of `inp` are carried outside the crafting grid.
+func count_carried(inp: Dictionary) -> int:
+	return _count_in(inp, _carried())
+
+
+func _count_in(inp: Dictionary, addrs: Array) -> int:
 	var n := 0
-	for a in _carried():
+	for a in addrs:
 		var s := get_slot(a)
 		if RecipeBook.takes(inp, s):
 			n += s.count
@@ -871,7 +897,7 @@ func craft(r: Dictionary, near: Array, all := false) -> Dictionary:
 		var kept: Array = []
 		for inp in r.inputs:
 			var need := int(inp.count)
-			for a in _carried():
+			for a in _carried() + _grid_addrs():
 				if need <= 0:
 					break
 				var s := get_slot(a)
@@ -947,15 +973,220 @@ func _can_fit(s: ItemStack, areas: Array) -> bool:
 ## What did not fit, for the caller to drop.
 func clear_craft() -> Array:
 	var left := []
-	for i in old_craft.size():
-		var s: ItemStack = old_craft[i]
-		old_craft[i] = null
-		if s != null:
-			var l := _insert(s, [&"main", hotbar_area(), hotbar_area(1 - active_hotbar)])
-			if l != null:
-				left.append(l)
+	for arr in [old_craft, craft_grid]:
+		for i in (arr as Array).size():
+			var s: ItemStack = arr[i]
+			arr[i] = null
+			if s != null:
+				var l := _insert(s, [&"main", hotbar_area(), hotbar_area(1 - active_hotbar)])
+				if l != null:
+					left.append(l)
 	changed.emit()
 	return left
+
+
+# ---------------------------------------------------------------------------
+# The crafting grid (Docs/Inventory.md 16): shapes 2x2 / 3x3 / 4x4, a cell
+# may need several of its item, and what a cell lacks comes from what the
+# player carries.
+
+## The grid made `n` x `n` (the screen opening by hand or at a station):
+## what was in it goes back first. What did not fit, to drop.
+func set_craft_size(n: int) -> Array:
+	n = clampi(n, 2, RecipeBook.MAX_GRID)
+	if n == craft_n:
+		return []
+	var left := clear_craft()
+	craft_n = n
+	changed.emit()
+	return left
+
+
+## The grid's stacks, n*n, row by row.
+func grid() -> Array:
+	return craft_grid.slice(0, craft_n * craft_n)
+
+
+## The recipe the grid's layout makes ({} or RecipeBook.match_grid's); the
+## recipe picked in the book (`grid_prefer`) is tried first.
+var grid_prefer: Dictionary = {}
+
+
+func grid_match() -> Dictionary:
+	return RecipeBook.match_grid(grid(), craft_n, grid_prefer)
+
+
+## What the matched grid `m` still lacks, in words ("7 more Wood", "a
+## workbench near"): each item's cells short of their count, made up from
+## what is carried outside the grid.
+func grid_lack(m: Dictionary, near: Array) -> PackedStringArray:
+	var out := PackedStringArray()
+	if m.is_empty():
+		return out
+	var r: Dictionary = m.recipe
+	var extra := {}
+	var cells := {}
+	for e in m.need:
+		var have := 0
+		for gi in e.idx:
+			var st: ItemStack = craft_grid[gi]
+			have += st.count if st != null else 0
+		var k := "%s|%s" % [e.cell.id, e.cell.tag]
+		extra[k] = int(extra.get(k, 0)) + maxi(0, int(e.cell.count) - have)
+		cells[k] = e.cell
+	for k in extra:
+		var lack := int(extra[k]) - count_carried(cells[k])
+		if lack > 0:
+			var c: Dictionary = cells[k]
+			var what: String = ("any " + c.tag) if str(c.tag) != "" else str(ItemCatalog.get_def(c.id).get("name", c.id))
+			out.append("%d more %s" % [lack, what])
+	if r.station != &"" and not near.has(r.station):
+		out.append("a %s near" % str(ItemCatalog.get_def(r.station).get("name", r.station)).to_lower())
+	return out
+
+
+## Make what the grid shows (once; `all`: as many as can be, the grid's
+## cells topped up from what is carried between makes): each cell's count
+## from the cell first, the rest from what is carried. `to_cursor`: the
+## result onto the held stack (Minecraft's click; stops when it would not
+## fit), else into the inventory. {"made": n, "left": [stacks to drop]}.
+func craft_grid_now(near: Array, to_cursor: bool, all := false) -> Dictionary:
+	var made := 0
+	var left: Array = []
+	var first := ""
+	for _n in (64 if all else 1):
+		var m := grid_match()
+		if m.is_empty() or not grid_lack(m, near).is_empty():
+			break
+		var r: Dictionary = m.recipe
+		# "As many as you can" of what was shown: what is left in the grid may
+		# make another recipe (a ring of wood half used up is a compost bin).
+		if first.is_empty():
+			first = r.name
+		elif r.name != first:
+			break
+		var out := ItemStack.make(r.output, int(r.count))
+		if to_cursor and cursor != null and (not cursor.same_kind(out)
+				or cursor.count + out.count > ItemCatalog.max_stack(out.id)):
+			break
+		var ids := {}
+		var kept: Array = []
+		for e in m.need:
+			var need := int(e.cell.count)
+			for gi in e.idx:
+				var st: ItemStack = craft_grid[gi]
+				if st == null:
+					continue
+				ids[gi] = st.id
+				if not st.contents.is_empty() and kept.is_empty():
+					kept = st.contents
+				var take := mini(need, st.count)
+				st.count -= take
+				need -= take
+				if st.count <= 0:
+					craft_grid[gi] = null
+				if need <= 0:
+					break
+			if need > 0:
+				for a in _carried():
+					var st2 := get_slot(a)
+					if not RecipeBook.takes(e.cell, st2):
+						continue
+					var take2 := mini(need, st2.count)
+					st2.count -= take2
+					need -= take2
+					if st2.count <= 0:
+						set_slot(a, null)
+					if need <= 0:
+						break
+		if is_backpack(out):
+			out = make_backpack(r.output)
+			if r.keep_contents and not kept.is_empty():
+				out.contents = kept
+				_fit_backpack(out)
+		made += 1
+		if to_cursor:
+			if cursor == null:
+				cursor = out
+			else:
+				cursor.count += out.count
+		else:
+			var l := _insert(out, [hotbar_area(), hotbar_area(1 - active_hotbar), &"main"])
+			if l != null:
+				left.append(l)
+				break
+		if all:
+			# Keep the shape: an emptied cell gets its item back from what is carried.
+			for e in m.need:
+				for gi in e.idx:
+					if craft_grid[gi] == null and ids.has(gi):
+						_fill_cell(gi, ids[gi], int(e.cell.count))
+	if made > 0:
+		changed.emit()
+	return {"made": made, "left": left}
+
+
+## Up to `upto` of item `id` moved from what is carried into grid cell `gi`
+## (onto what is there). How many.
+func _fill_cell(gi: int, id: StringName, upto: int) -> int:
+	var moved := 0
+	for a in _carried():
+		var t: ItemStack = craft_grid[gi]
+		var want := upto - (t.count if t != null else 0)
+		if want <= 0:
+			break
+		var st := get_slot(a)
+		if st == null or st.id != id or not st.contents.is_empty():
+			continue
+		var n := mini(want, st.count)
+		if t == null:
+			craft_grid[gi] = ItemStack.make(id, n, st.data)
+		else:
+			t.count += n
+		st.count -= n
+		moved += n
+		if st.count <= 0:
+			set_slot(a, null)
+	return moved
+
+
+## The recipe book's click (Bedrock's fill): the grid emptied back, then recipe
+## `r` laid in it from what is carried -- its shape from the top left, each
+## cell up to its count (a list: one input a cell). False if `r` needs a
+## bigger grid. `ghosts`: grid cell -> the cell it wants (the screen shows what
+## is missing); `left`: what did not fit back, to drop.
+func fill_grid(r: Dictionary) -> Dictionary:
+	if int(r.grid) > craft_n:
+		return {"ok": false, "ghosts": {}, "left": []}
+	var left := clear_craft()
+	var place := []
+	var sh: Dictionary = r.get("shape", {})
+	if not sh.is_empty():
+		for y in int(sh.h):
+			for x in int(sh.w):
+				var c = sh.cells[y * int(sh.w) + x]
+				if c != null:
+					place.append([y * craft_n + x, c])
+	else:
+		for i in r.inputs.size():
+			place.append([i, r.inputs[i]])
+	var ghosts := {}
+	for pc in place:
+		var gi: int = pc[0]
+		var c: Dictionary = pc[1]
+		ghosts[gi] = c
+		var id: StringName = c.id
+		if str(c.tag) != "":
+			id = &""
+			for a in _carried():
+				var st := get_slot(a)
+				if RecipeBook.takes(c, st):
+					id = st.id
+					break
+		if id != &"":
+			_fill_cell(gi, id, int(c.count))
+	changed.emit()
+	return {"ok": true, "ghosts": ghosts, "left": left}
 
 
 # ---------------------------------------------------------------------------

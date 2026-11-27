@@ -41,6 +41,8 @@ var bad := false
 var picked := false
 ## The size of one Minecraft pixel for the bevel (the screen sets it).
 var unit := 2.0
+## Drawn faint in an empty slot: what the picked recipe wants there.
+var ghost: StringName = &"" 
 var _hot := false
 var _angle := 0.0
 var _grow := 1.0
@@ -121,6 +123,8 @@ func _draw() -> void:
 		var border := Color(1, 1, 1) if selected else Color(0.32, 0.34, 0.4)
 		draw_rect(r.grow(-1.0), border, false, 3.0 if selected else 1.0)
 	var s := stack()
+	if s == null and ghost != &"":
+		ItemIcons.draw_icon(self, r.grow(-r.size.x * 0.12), ghost, 0.0, Color(1, 1, 1, 0.35))
 	var extra := 0
 	if not addr.is_empty() and inv != null and inv.is_dragging():
 		extra = inv.drag_amount_for(addr)
