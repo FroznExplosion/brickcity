@@ -3581,6 +3581,10 @@ struct PackStore {
         uint64_t version = 0;
         uint64_t used = 0;
         std::shared_ptr<const brick::TileTops> pack;
+        /// The whole pack, for the most recently used tiles only
+        /// (PACKS_FULL_MAX): a rebake of an unchanged tile (lava light, sky
+        /// light, behind faces) reuses it instead of packing again.
+        std::shared_ptr<const brick::TilePack> full;
     };
     std::unordered_map<uint64_t, Entry> tiles;
     uint64_t clock = 0;
@@ -3591,6 +3595,9 @@ PackStore g_packs;
 /// The mine world keeps ~240 tiles drawn; the rest is the survey's ring and
 /// the far edits round them.
 constexpr size_t PACKS_MAX = 768;
+/// Whole packs kept for this many tiles (~14 KB each, ~3.5 MB): about the
+/// drawn near tiles; past it only their tops.
+constexpr size_t PACKS_FULL_MAX = 256;
 } // namespace
 
 std::shared_ptr<const brick::TilePack> brick::packed_tile(int tx, int tz, TileSample &s) {
@@ -3599,8 +3606,16 @@ std::shared_ptr<const brick::TilePack> brick::packed_tile(int tx, int tz, TileSa
     const uint64_t ver = tile_version(tx, tz);
     sample_tile(g_field, tx, tz, s);
     const uint64_t k = (uint64_t)tile_key(tx, tz);
-    // Packed every time (the packs are no longer kept); what is kept is the
-    // tile's TileTops, for the readers that need only those.
+    {
+        std::lock_guard<std::mutex> lk(g_packs.lock);
+        auto it = g_packs.tiles.find(k);
+        if (it != g_packs.tiles.end() && it->second.version == ver && it->second.full) {
+            it->second.used = ++g_packs.clock;
+            ++g_packs.hits;
+            return it->second.full;
+        }
+    }
+    // Packed; kept whole for the recent tiles, as TileTops for the rest.
     auto fresh = std::make_shared<TilePack>();
     pack_tile(g_field, s, fresh->pieces, fresh->owner);
     fresh->top.resize((size_t)TILE * TILE);
@@ -3640,7 +3655,28 @@ std::shared_ptr<const brick::TilePack> brick::packed_tile(int tx, int tz, TileSa
                 it = it->second.used <= cut ? g_packs.tiles.erase(it) : std::next(it);
             }
         }
-        g_packs.tiles[k] = PackStore::Entry{ ver, ++g_packs.clock, tops };
+        g_packs.tiles[k] = PackStore::Entry{ ver, ++g_packs.clock, tops, fresh };
+        // Whole packs past PACKS_FULL_MAX: the least used quarter's dropped.
+        size_t full = 0;
+        for (const auto &e : g_packs.tiles) {
+            full += e.second.full ? 1 : 0;
+        }
+        if (full > PACKS_FULL_MAX) {
+            std::vector<uint64_t> used;
+            for (const auto &e : g_packs.tiles) {
+                if (e.second.full) {
+                    used.push_back(e.second.used);
+                }
+            }
+            const size_t q = used.size() / 4;
+            std::nth_element(used.begin(), used.begin() + q, used.end());
+            const uint64_t cut = used[q];
+            for (auto &e : g_packs.tiles) {
+                if (e.second.full && e.second.used <= cut) {
+                    e.second.full.reset();
+                }
+            }
+        }
     }
     return fresh;
 }
@@ -8789,6 +8825,11 @@ Dictionary BrickTerrain::memory_stats() {
             const brick::TileTops &p = *e.second.pack;
             bytes += (int64_t)(sizeof(brick::TileTops) + vec_bytes(p.top) + vec_bytes(p.rect));
             bytes += 64;   // the map node, the shared_ptr's control block
+            if (e.second.full) {
+                const brick::TilePack &f = *e.second.full;
+                bytes += (int64_t)(sizeof(brick::TilePack) + vec_bytes(f.pieces) + vec_bytes(f.owner) + vec_bytes(f.top));
+                pieces += (int64_t)f.pieces.size();
+            }
         }
         d["packs_kept"] = (int64_t)g_packs.tiles.size();
         d["packs_bytes"] = bytes;

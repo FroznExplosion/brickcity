@@ -1431,6 +1431,7 @@ struct World {
     std::shared_ptr<const FitParams> params;
     Dictionary settings;
     Dictionary calibration;
+    bool calibrated = false;
     /// The game's bricks from the fit (TerrainFit.set_enabled); off, the
     /// old pattern (terrain_bond.h). The lookup answers either way.
     std::atomic<bool> enabled{ false };
@@ -1447,7 +1448,13 @@ void TerrainFit::configure(const Dictionary &settings) {
     g_world->settings = settings.duplicate(true);
     auto p = std::make_shared<FitParams>(parse(settings));
     Dictionary rep;
-    calibrate(*p, settings, &rep);
+    // The calibration (~0.4 s) only when the game's bricks come from the
+    // fit: off, nobody reads the shares (set_enabled calibrates later).
+    g_world->calibrated = false;
+    if (g_world->enabled) {
+        calibrate(*p, settings, &rep);
+        g_world->calibrated = true;
+    }
     g_world->calibration = rep;
     std::atomic_store(&g_world->params, std::shared_ptr<const FitParams>(p));
     brick::fitted_clear();
@@ -1455,6 +1462,15 @@ void TerrainFit::configure(const Dictionary &settings) {
 
 void TerrainFit::set_enabled(bool on) {
     if (!g_world) g_world = std::make_unique<World>();
+    if (on && !g_world->calibrated && world_params()) {
+        auto p = std::make_shared<FitParams>(*world_params());
+        Dictionary rep;
+        calibrate(*p, g_world->settings, &rep);
+        g_world->calibration = rep;
+        g_world->calibrated = true;
+        std::atomic_store(&g_world->params, std::shared_ptr<const FitParams>(p));
+        brick::fitted_clear();
+    }
     if (g_world->enabled.exchange(on) != on) {
         brick::bump_field_version();   // every tile drawn again, with the other bricks
     }
