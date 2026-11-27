@@ -101,6 +101,8 @@ var buildings_far: MineBuildingsFar = null
 var drops: DroppedItems = null
 ## Farming (Docs/MineFarming.md): tilled plots, crops on the world clock.
 var farming: MineFarming = null
+## Creatures: a zombie, pigs, fences' reason to be (Docs/MineCreatures.md).
+var mobs: MineMobs = null
 ## THE WORLD CLOCK (Docs/MineFarming.md 4): seconds played in this world,
 ## saved with it (the world file's "time"). The sky's hour is its day part;
 ## crops grow by it. Runs only while the world is open.
@@ -285,6 +287,9 @@ func _ready() -> void:
 	farming.name = "Farming"
 	add_child(farming)
 	farming.setup(self)
+	mobs = MineMobs.new()
+	add_child(mobs)
+	mobs.setup(self)
 	_build_item_icons()
 	debris = Debris.new()
 	debris.name = "Debris"
@@ -324,6 +329,10 @@ func _ready() -> void:
 		elif "--gate=farm" in OS.get_cmdline_user_args():
 			# Farming (Docs/MineFarming.md): scripts/farming/farm_gate.gd.
 			_farm_gate = preload("res://scripts/farming/farm_gate.gd").new()
+			_farm_gate.run(self)
+		elif "--gate=mobs" in OS.get_cmdline_user_args():
+			# Creatures (Docs/MineCreatures.md): scripts/mobs/mobs_gate.gd.
+			_farm_gate = preload("res://scripts/mobs/mobs_gate.gd").new()
 			_farm_gate.run(self)
 		elif "--gate=wiring" in OS.get_cmdline_user_args():
 			# Wiring (Docs/MineWiring.md): scripts/wiring/wiring_gate.gd.
@@ -407,6 +416,8 @@ func generate(s: Dictionary) -> void:
 		save_edits(true)
 	settings = s.duplicate(true)
 	_teardown()
+	if mobs != null:
+		mobs.reset()
 	_pending_tiles = Rect2i()
 	_reanchors = 0
 	_last_reanchor_ms = 0.0
@@ -1045,6 +1056,8 @@ func _wait_breaks() -> void:
 func terrain_edited(res: Dictionary) -> void:
 	if farming != null:
 		farming.terrain_changed()     # fields: a wall built or broken
+	if mobs != null:
+		mobs.terrain_edited(res)      # the creatures' nav forgets that box
 	water.terrain_changed(res)
 	# A stamped building undermined on one side tips (Docs/TerrainBuildings.md 4b).
 	MineBuildings.after_edit(self, res)
@@ -1353,6 +1366,8 @@ func _process(delta: float) -> void:
 	_tend_towns(delta, eye)
 	if farming != null:
 		farming.step(delta, eye)
+	if mobs != null:
+		mobs.step(delta)
 	_autosave(delta)
 	_hud_in -= delta
 	if _hud_in <= 0.0:
@@ -2925,11 +2940,16 @@ func _run_inventory_gate() -> void:
 		await _frames(3)
 		await _click(mk.get_global_rect().get_center())
 		await _frames(3)
-	check.call("picked: the crafting area shows the gravel result",
-			not scr.picked.is_empty() and scr.picked.name == "Gravel" and scr.result_slot().item_id == &"gravel")
+	var g0: ItemStack = inv.craft_grid[0]
+	check.call("picked: the book laid 12 stone in the 2x2 grid, the result shows gravel (Inventory.md 16)",
+			not scr.picked.is_empty() and scr.picked.name == "Gravel" and scr.result_slot().item_id == &"gravel"
+			and inv.craft_n == 2 and g0 != null and g0.count == 12)
 	await _click(scr.result_slot().get_global_rect().get_center())
 	await _frames(3)
-	check.call("a click on the result: 12 stone -> 12 gravel (gravel %d -> %d, stone %d -> %d)" % [gravel0,
+	check.call("a click on the result: 12 gravel onto the cursor (Minecraft's)", inv.cursor != null
+			and inv.cursor.id == &"gravel" and inv.cursor.count == 12 and inv.craft_grid[0] == null)
+	await _key(KEY_ESCAPE)
+	check.call("put back (Escape): 12 stone -> 12 gravel (gravel %d -> %d, stone %d -> %d)" % [gravel0,
 			_carried_count(inv, &"gravel"), stone0, _carried_count(inv, &"stone")],
 			_carried_count(inv, &"gravel") == gravel0 + 12 and _carried_count(inv, &"stone") == stone0 - 12)
 	var sb := scr.recipe_cell("Sandstone")
@@ -2944,6 +2964,31 @@ func _run_inventory_gate() -> void:
 	await _click(only.get_global_rect().get_center())
 	await _frames(3)
 	check.call("... off again: Sandstone back", scr.recipe_cell("Sandstone") != null)
+	# The recipe editor (16.3): its tab, the palette's wood clicked into a cell,
+	# Shift-click: +12. Not saved here (a test writes no recipe tables).
+	var ed_tab: Control = scr.get("_tabs")["editor"]
+	await _click(ed_tab.get_global_rect().get_center())
+	await _frames(5)
+	var ed: RecipeEditorPanel = scr.get("_editor")
+	check.call("the Editor tab shows the recipe editor and the palette", scr.page == "editor" and ed.is_visible_in_tree()
+			and (scr.get("_creative_scroll") as Control).is_visible_in_tree())
+	var wood_cat := _inv_slot(scr, {}, &"wood")
+	if wood_cat != null:
+		(scr.get("_creative_scroll") as ScrollContainer).ensure_control_visible(wood_cat)
+		await _frames(3)
+		await _click(wood_cat.get_global_rect().get_center())
+	var cell0: InvSlot = ed.find_child("EditorCell0", true, false)
+	if cell0 != null:
+		await _click(cell0.get_global_rect().get_center())
+		await _click(cell0.get_global_rect().get_center())
+	var c0 = ed.cells[0]
+	check.call("a held wood clicked into a cell: wood, then +1 (%s)" % str(c0), c0 != null and c0.id == &"wood"
+			and int(c0.count) == 2)
+	await _shot(UserPaths.DEV + "inv_editor.png")
+	inv.cursor = null
+	ed.clear_all()
+	await _click(tab_s.get_global_rect().get_center())
+	await _frames(3)
 	var winr := get_window()
 	var sizer := winr.size
 	winr.size = Vector2i(640, 400)
@@ -3132,9 +3177,11 @@ func _run_inventory_gate() -> void:
 				await _frames(3)
 				await _click(sb2.get_global_rect().get_center())
 				await _frames(3)
+				check.call("at the workbench the grid is 3x3", inv.craft_n == 3)
 				await _click(_inv_screen.result_slot().get_global_rect().get_center())
 				await _frames(3)
-			check.call("a click on the result: 12 sand -> 12 sandstone (%d -> %d)" % [sand0,
+				await _key(KEY_ESCAPE)
+			check.call("a click on the result, put back: 12 sand -> 12 sandstone (%d -> %d)" % [sand0,
 					_carried_count(inv, &"sandstone")], _carried_count(inv, &"sandstone") == sand0 + 12)
 			await _shot(UserPaths.DEV + "inv_workbench.png")
 			await _key(KEY_E)
@@ -7397,6 +7444,12 @@ func _run_buildings_gate() -> void:
 	ok = let > 0 and fell > 0
 	check.call(ok, "cut loose, it falls (%d pieces, %d bricks)" % [let, fell])
 	fails += 0 if ok else 1
+	if "--dig-all" in OS.get_cmdline_user_args():
+		# Let go by MineBuildings, not the survey (whose fitted ground floats
+		# big groups): no support at all is a topple straight down.
+		ok = MineBuildings.toppled == tipped0 + 1
+		check.call(ok, "nothing under it, it is let go whole by its own balance check")
+		fails += 0 if ok else 1
 	if not "--dig-all" in OS.get_cmdline_user_args():
 		ok = MineBuildings.toppled == tipped0 + 1
 		check.call(ok, "undermined past its middle, it tips (%d balance checks)" % MineBuildings.checks)

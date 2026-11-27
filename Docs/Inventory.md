@@ -653,7 +653,53 @@ moved on (half a smelt shown on the arrow, then 2 ingots), the ingots
 clicked out, then shut: a minute on gives 3 gold ingots; saved with its
 fire. Pictures: user://dev/inv_furnace, inv_furnace_done.
 
-## 16. Shaped crafting, the recipe editor, armour and the figure (plan, 2026-11-26)
+## 16. Shaped crafting, the recipe editor, armour and the figure (2026-11-26)
+
+**Status:** 16.1-16.3 built (shaped recipes, the real grid, the result onto
+the cursor, the recipe editor); 16.4 (armour, the figure) not started --
+waits on open question 3. Built as below, with these choices for the open
+questions: (1) a new **Workshop table** station (`grid: 4`, `counts_as:
+workbench`) gives the 4x4 grid, made at a workbench from 8 wood + an iron
+ingot; no recipe needs 4x4 yet. (2) The editor saves into the base pack's
+`data/recipes/custom.json` in the editor build, into the mod pack
+`user://mods/my_recipes/` (made with its pack.json) in a player build. (4)
+base.json's recipes have Minecraft shapes with cells of 12; farming.json's
+(the farming chat's) stay shapeless lists, which the grid also takes.
+
+**How it plays.** The grid is real: 2x2 in the inventory, 3x3 at a
+workbench, 4x4 at a workshop table; click or drag items in. The result slot
+shows what the grid's layout makes (shape anywhere in the grid, mirrored
+too; or a shapeless list's items), red while a cell is short even with what
+you carry. Click it: onto the cursor (only onto nothing or the same item);
+Shift-click: as many as can be, into the inventory, the grid's cells topped
+up from what you carry between makes -- and only of the recipe it started
+with (a half-used ring of wood is also a compost bin: Shift-click stops
+there). The book's click empties the grid back and lays the recipe in it
+from what you carry, each cell up to its count; what is missing shows as a
+faint ghost, red. The picked recipe is matched first (two lists of iron
+ingots, a can and a sprinkler, are told apart by what was picked). Closing
+the screen puts the grid's items back.
+
+**Code.** `RecipeBook`: `pattern`/`key` parsed and trimmed (`trim_shape`,
+`signature`), `grid`, `match_grid(grid, n, prefer)`, `to_raw`,
+`save_custom`, `delete_custom`, `custom_path` (`custom_path_override` for
+probes). `Inventory`: area `craft` (`craft_grid`, `craft_n`,
+`set_craft_size`, `grid_match`, `grid_lack`, `craft_grid_now`, `fill_grid`,
+`grid_prefer`); `count_of` counts the grid too, `count_carried` not.
+`InventoryScreen`: the grid's slots, ghosts (`InvSlot.ghost`), the Editor
+tab. `RecipeEditorPanel`: the editor. `MineChests.stations_near` adds a
+station's `counts_as`.
+
+**Tests.** inventory_probe `_grid_crafting` (17 checks): shapes parsed, a
+cell's count made up from what is carried, the lack in words, a shape in a
+corner of a bigger grid, the book's fill and its ghosts, Shift-click
+stopping at its recipe, a 3x3 recipe refused in a 2x2 grid, shapeless,
+nothing onto a held stack of another kind, a recipe to JSON and back, the
+editor's save (2 wood in one cell) and its refusing a taken shape (to a
+probe file). `--gate=inventory`: the book laying 12 stone in the 2x2 grid,
+the gravel onto the cursor, put back; the 3x3 grid at the workbench; the
+Editor tab, wood from the palette clicked into a cell twice (wood x2).
+Picture: user://dev/inv_editor.
 
 The user: do all of what section 14 left out (3x3 shapes, the result onto the
 cursor, armour, the player figure); use zylanntest's recipe builder

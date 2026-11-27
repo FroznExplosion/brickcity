@@ -435,6 +435,7 @@ func _build_bricks_tab() -> void:
 	_float_slider(p, "Bricks across chunk edges (chance)", b, "cross", 0, 1, 0.05)
 	_check(p, "Bricks may hold several materials", b, "mixed")
 	_check(p, "Use these bricks in the game (test)", b, "fitted")
+	_float_slider(p, "Groups this big float (cells, 0 never)", b, "float_cells", 0, 5000, 50)
 	var bands: Array = b.get("bands", [])
 	if not bands.is_empty():
 		_section(p, "Deep caves (own sizes from the preset)")

@@ -91,6 +91,10 @@ func _initialize() -> void:
 		_with(chosen, {"name": "chosen + deep band (from %.0f m)" % DEEP_M,
 				"bands": [_with(Presets.DEFAULT_BRICKS.bands[0], {"below_m": DEEP_M})]}),
 		_with(chosen, {"name": "chosen, cross 0", "cross": 0.0}),
+		_with(chosen, {"name": "chosen, no pair merge", "pair_merge": false}),
+		_with(chosen, {"name": "chosen, not calibrated", "calibrate": false}),
+		_with(chosen, {"name": "chosen, stagger across layers", "stagger_layers": true}),
+		_with(chosen, {"name": "chosen, no stagger", "stagger": -1.0, "cave_stagger": -2.0}),
 	]
 	var t0 := Time.get_ticks_msec()
 	var res: Array = TerrainFit.run(areas, variants)
