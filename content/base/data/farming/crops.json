@@ -703,6 +703,291 @@
 				}
 			],
 			"tips": "Grows only in jungle: warm, sunny and wet. Planted from a pineapple."
+		},
+		"apple_tree": {
+			"name": "Apple tree",
+			"family": "fruit tree",
+			"seed": "apple_sapling",
+			"produce": "apple",
+			"tree": 0,
+			"ground": "soil",
+			"fruit_at": 4,
+			"regrow_to": 4,
+			"stages": 7,
+			"stage_hours": 8,
+			"fruit_hours": 12,
+			"dry_rate": 0.65,
+			"light": 0.55,
+			"drain": 3,
+			"likes": [
+				"Plains",
+				"Forest",
+				"Meadow"
+			],
+			"dislikes": [
+				"Desert",
+				"Jungle",
+				"Snowy Plains"
+			],
+			"yield": [
+				3,
+				6
+			],
+			"seeds_back": [
+				0,
+				0
+			],
+			"look": {
+				"shape": "sapling",
+				"leaf": "#5e9e3b",
+				"ripe": "#c8202a"
+			},
+			"tips": "A fruit tree: planted as a sapling on grass or dirt, it grows into a real oak that keeps its plot and fruits again about every day. Hit it when the apples are red to shake them down; hit it with nothing ripe and it is felled."
+		},
+		"cherry_tree": {
+			"name": "Cherry tree",
+			"family": "fruit tree",
+			"seed": "cherry_sapling",
+			"produce": "cherries",
+			"tree": 2,
+			"ground": "soil",
+			"fruit_at": 4,
+			"regrow_to": 4,
+			"stages": 7,
+			"stage_hours": 8,
+			"fruit_hours": 12,
+			"dry_rate": 0.65,
+			"light": 0.55,
+			"drain": 3,
+			"likes": [
+				"Birch Forest",
+				"Meadow",
+				"Forest"
+			],
+			"dislikes": [
+				"Desert",
+				"Savanna",
+				"Jungle"
+			],
+			"yield": [
+				4,
+				8
+			],
+			"seeds_back": [
+				0,
+				0
+			],
+			"look": {
+				"shape": "sapling",
+				"leaf": "#7ab84a",
+				"ripe": "#8e1022"
+			},
+			"tips": "A fruit tree on a birch: many small cherries. Hit it when they are dark red to shake them down; the tree stays."
+		},
+		"orange_tree": {
+			"name": "Orange tree",
+			"family": "fruit tree",
+			"seed": "orange_sapling",
+			"produce": "orange",
+			"tree": 3,
+			"ground": "soil",
+			"fruit_at": 4,
+			"regrow_to": 4,
+			"stages": 7,
+			"stage_hours": 8,
+			"fruit_hours": 12,
+			"dry_rate": 0.65,
+			"light": 0.55,
+			"drain": 3,
+			"likes": [
+				"Savanna",
+				"Jungle",
+				"Plains"
+			],
+			"dislikes": [
+				"Snowy Plains",
+				"Snowy Taiga",
+				"Taiga"
+			],
+			"yield": [
+				3,
+				5
+			],
+			"seeds_back": [
+				0,
+				0
+			],
+			"look": {
+				"shape": "sapling",
+				"leaf": "#7e8a2e",
+				"ripe": "#f08a1c"
+			},
+			"tips": "A warm-country fruit tree, tall like an acacia and happy dry. Hit it when the oranges show to shake them down."
+		},
+		"lemon_tree": {
+			"name": "Lemon tree",
+			"family": "fruit tree",
+			"seed": "lemon_sapling",
+			"produce": "lemon",
+			"tree": 1,
+			"ground": "soil",
+			"fruit_at": 4,
+			"regrow_to": 4,
+			"stages": 7,
+			"stage_hours": 8,
+			"fruit_hours": 12,
+			"dry_rate": 0.65,
+			"light": 0.55,
+			"drain": 3,
+			"likes": [
+				"Savanna",
+				"Jungle",
+				"Badlands"
+			],
+			"dislikes": [
+				"Snowy Plains",
+				"Snowy Taiga",
+				"Taiga"
+			],
+			"yield": [
+				3,
+				5
+			],
+			"seeds_back": [
+				0,
+				0
+			],
+			"look": {
+				"shape": "sapling",
+				"leaf": "#2f6e34",
+				"ripe": "#f2d43a"
+			},
+			"tips": "A dark-leaved fruit tree that likes it warm. Hit it when the lemons are yellow to shake them down."
+		},
+		"blueberry_bush": {
+			"name": "Blueberry bush",
+			"family": "bush",
+			"seed": "blueberries",
+			"produce": "blueberries",
+			"stages": 5,
+			"stage_hours": 6,
+			"dry_rate": 0.75,
+			"light": 0.4,
+			"drain": 4,
+			"regrow_to": 3,
+			"likes": [
+				"Taiga",
+				"Snowy Taiga",
+				"Birch Forest"
+			],
+			"dislikes": [
+				"Desert",
+				"Badlands",
+				"Jungle"
+			],
+			"yield": [
+				2,
+				4
+			],
+			"seeds_back": [
+				0,
+				0
+			],
+			"look": {
+				"shape": "bush",
+				"leaf": "#2f6a44",
+				"ripe": "#3c4fa8"
+			},
+			"found": [
+				{
+					"material": "podzol",
+					"chance": 0.03
+				}
+			],
+			"tips": "A bush: pick it and it grows its berries again. Likes cool woods and copes with shade and dry soil."
+		},
+		"grape_vine": {
+			"name": "Grape vine",
+			"family": "bush",
+			"seed": "grapes",
+			"produce": "grapes",
+			"stages": 5,
+			"stage_hours": 6,
+			"dry_rate": 0.7,
+			"light": 0.4,
+			"drain": 4,
+			"regrow_to": 3,
+			"likes": [
+				"Plains",
+				"Savanna",
+				"Meadow"
+			],
+			"dislikes": [
+				"Snowy Plains",
+				"Snowy Taiga",
+				"Jungle"
+			],
+			"yield": [
+				2,
+				4
+			],
+			"seeds_back": [
+				0,
+				0
+			],
+			"look": {
+				"shape": "vine",
+				"leaf": "#4f8a2e",
+				"ripe": "#6a2c7a"
+			},
+			"found": [
+				{
+					"material": "dry grass",
+					"chance": 0.02
+				}
+			],
+			"tips": "A vine (on a trellis later): pick it and it grows its grapes again. Likes sun and warmth, copes with dry soil."
+		},
+		"raspberry_bush": {
+			"name": "Raspberry bush",
+			"family": "bush",
+			"seed": "raspberries",
+			"produce": "raspberries",
+			"stages": 5,
+			"stage_hours": 6,
+			"dry_rate": 0.7,
+			"light": 0.4,
+			"drain": 4,
+			"regrow_to": 3,
+			"likes": [
+				"Forest",
+				"Birch Forest",
+				"Meadow"
+			],
+			"dislikes": [
+				"Desert",
+				"Badlands"
+			],
+			"yield": [
+				2,
+				4
+			],
+			"seeds_back": [
+				0,
+				0
+			],
+			"look": {
+				"shape": "bush",
+				"leaf": "#3a7a34",
+				"ripe": "#d6345a"
+			},
+			"found": [
+				{
+					"material": "grass",
+					"chance": 0.01
+				}
+			],
+			"tips": "A bush: pick it and it grows its berries again. Likes woods and meadows."
 		}
 	}
 }

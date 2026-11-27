@@ -48,6 +48,23 @@ extends RefCounted
 ##             a collector given seeds harvests ripe crops in reach into its
 ##             slots and replants from them (then it is taken away, so the
 ##             'away' check below sees plain growth).
+##   fruit     (HandoffFarming.md 7.1-7.2) an apple sapling on plain grass
+##             stands as a REAL tree at its fruit stage and its plot is KEPT
+##             (ground "tree", in the planted list); ripe, its fruit is drawn
+##             in the leaves (user://dev/farm_fruit.png, with a ripe grape vine
+##             and blueberry bush); hitting the tree shakes the apples down as
+##             dropped items and the tree stays, back to its bare stage; the
+##             label names the tree when it is looked at; hit again with
+##             nothing ripe it is felled and its plot goes.
+##   farmer    (HandoffFarming.md 7.3) an auto farmer inside a stone ring
+##             (2 bricks high) tends the plots inside and not those outside
+##             (its area: a flood on a worker); a chest beside it; the player
+##             flies away, six days pass, nothing is settled while away;
+##             back again its plots have harvested and replanted, each exactly
+##             where one settle puts it, and the chest holds the harvest;
+##             the plots outside stand ripe. A chest with no room leaves the
+##             harvest waiting on the plots (the label says so), nothing lost;
+##             the farmer taken away, what waited drops on its plots.
 ##   gaps      (Docs/MineFarming.md 22) seeds on plain grass say why over
 ##             the hotbar; crops are drawn sky-lit (the cave's light, per
 ##             instance); from 150 m the field is far patches, not bare soil
@@ -575,6 +592,226 @@ func run(host: Node) -> void:
 			creplanted += 1
 	check("and replants them from its seeds (%d creplanted)" % creplanted, creplanted > 0)
 	w.chests.break_chest(ckey, false)
+
+	# --- fruit trees and new bushes (HandoffFarming.md 7.1-7.2), on a patch
+	# of their own past the field (a canopy is 8 studs)
+	var fx0 := x0 + 24
+	for res in [BrickTerrain.fill_box(Vector3i(fx0, top + 1, z0), Vector3i(fx0 + 15, top + 60, z0 + 11), 0, false),
+			BrickTerrain.fill_box(Vector3i(fx0, top - 9, z0), Vector3i(fx0 + 15, top - 1, z0 + 11), BrickTerrain.MAT_DIRT, false),
+			BrickTerrain.fill_box(Vector3i(fx0, top, z0), Vector3i(fx0 + 15, top, z0 + 11), BrickTerrain.MAT_GRASS, false)]:
+		w.terrain_edited(res)
+	await w._frames(10)
+	var ab := Vector3i(floori(fx0 / 2.0) + 3, top, floori(z0 / 2.0) + 3)
+	_hold(&"apple_sapling")
+	w.builder.target = {"cell": Vector3i(ab.x * 2, top, ab.z * 2), "normal": Vector3i.UP}
+	var ap_ok: bool = w.builder.place_target()
+	check("an apple sapling goes on plain grass", ap_ok and f.store.get_plot(ab).crop == &"apple_tree")
+	var vb := Vector3i(ab.x + 4, top, ab.z - 2)
+	var bbb := Vector3i(ab.x + 4, top, ab.z + 1)
+	for nb in [vb, bbb]:
+		f.till({"cell": Vector3i(nb.x * 2, top, nb.z * 2), "normal": Vector3i.UP})
+	f.plant({"cell": Vector3i(vb.x * 2, top, vb.z * 2)}, &"grapes")
+	f.plant({"cell": Vector3i(bbb.x * 2, top, bbb.z * 2)}, &"blueberries")
+	check("a grape vine and a blueberry bush planted", f.store.get_plot(vb).crop == &"grape_vine"
+			and f.store.get_plot(bbb).crop == &"blueberry_bush")
+	var acrop := FarmCrops.get_crop(&"apple_tree")
+	var acell := Vector2i(ab.x * 2, ab.z * 2)
+	var grown0 := f.trees_grown
+	for _i in 30:
+		w.world_time += FarmPlant.DAY * 0.5
+		await w._frames(2)
+		f.settle_all()
+		if int(f.store.get_plot(ab).get("stage", 0)) >= int(acrop.fruit_at):
+			break
+	var ap := f.store.get_plot(ab)
+	check("the apple sapling stands as a real tree and keeps its plot (stage %d, ground %s, planted: %s)" % [
+			int(ap.get("stage", -1)), ap.get("ground", "?"), w._trees.planted.has(acell)],
+			not ap.is_empty() and str(ap.ground) == "tree" and w._trees.planted.has(acell) and f.trees_grown == grown0 + 1)
+	for _i in 30:
+		w.world_time += FarmPlant.DAY * 0.5
+		await w._frames(2)
+		f.settle_all()
+		if FarmPlant.is_ripe(f.store.get_plot(ab)) and FarmPlant.is_ripe(f.store.get_plot(vb)) \
+				and FarmPlant.is_ripe(f.store.get_plot(bbb)):
+			break
+	check("the apples ripen on the tree, the vine and bush too", FarmPlant.is_ripe(f.store.get_plot(ab))
+			and FarmPlant.is_ripe(f.store.get_plot(vb)) and FarmPlant.is_ripe(f.store.get_plot(bbb)))
+	var cbox := f.canopy_box(f.store.get_plot(ab))
+	var tmid := cbox.get_center() - Vector3(0, cbox.size.y * 0.4, 0)
+	var tcam := tmid + Vector3(-4.6, 0.6, -4.2)
+	var td := (tmid - tcam).normalized()
+	w._fly_to(tcam - Vector3(0, 1.6, 0), Vector3(td.x, 0, td.z))
+	w.walker.pitch = asin(clampf(td.y, -1.0, 1.0))
+	if w._hud_layer != null:
+		w._hud_layer.visible = false
+	await w._frames(60)
+	var fruit_mmi: MultiMeshInstance3D = f.draw._mmis.get("apple_tree:fruit:%d" % (int(acrop.stages) - 1))
+	check("ripe apples are drawn in its leaves (%d trees)" % (fruit_mmi.multimesh.instance_count if fruit_mmi != null else -1),
+			fruit_mmi != null and fruit_mmi.multimesh.instance_count == 1)
+	await w._shot(UserPaths.DEV + "farm_fruit.png")
+	if w._hud_layer != null:
+		w._hud_layer.visible = true
+	check("the label names the tree looked at", f.look_text({"tree": acell}).begins_with("Apple tree"))
+	_hold(&"hoe")
+	var drops0: int = w.drops.count()
+	var shaken0 := f.shaken
+	w.builder.target = {"tree": acell, "position": cbox.get_center()}
+	w.builder.break_target()
+	var ap2 := f.store.get_plot(ab)
+	check("hitting the ripe tree shakes %d apples down, the tree stays (bare stage %d)" % [w.drops.count() - drops0,
+			int(ap2.get("stage", -1))], f.shaken == shaken0 + 1 and w.drops.count() - drops0 >= int(acrop.yield.x)
+			and w._trees.planted.has(acell) and int(ap2.get("stage", -1)) == int(acrop.fruit_at))
+	w.builder.target = {"tree": acell, "position": cbox.get_center()}
+	w.builder.break_target()
+	check("hit with nothing ripe it is felled, its plot gone", not w._trees.planted.has(acell)
+			and f.store.get_plot(ab).is_empty() and f.tree_plot(acell).is_empty())
+
+	# --- the auto farmer (HandoffFarming.md 7.3): a stone ring, plots in and
+	# out of it, the farmer and a chest inside
+	var ax2 := floori((x0 + 48) / 2.0) * 2
+	var az2 := floori(z0 / 2.0) * 2
+	for res in [BrickTerrain.fill_box(Vector3i(ax2, top + 1, az2), Vector3i(ax2 + 15, top + 60, az2 + 21), 0, false),
+			BrickTerrain.fill_box(Vector3i(ax2, top - 9, az2), Vector3i(ax2 + 15, top - 1, az2 + 21), BrickTerrain.MAT_DIRT, false),
+			BrickTerrain.fill_box(Vector3i(ax2, top, az2), Vector3i(ax2 + 15, top, az2 + 21), BrickTerrain.MAT_GRASS, false)]:
+		w.terrain_edited(res)
+	# The ring: studs ax2+1 .. ax2+12 by az2+1 .. az2+12, six plates high.
+	for wall in [[Vector3i(ax2 + 1, top + 1, az2 + 1), Vector3i(ax2 + 12, top + 6, az2 + 1)],
+			[Vector3i(ax2 + 1, top + 1, az2 + 12), Vector3i(ax2 + 12, top + 6, az2 + 12)],
+			[Vector3i(ax2 + 1, top + 1, az2 + 1), Vector3i(ax2 + 1, top + 6, az2 + 12)],
+			[Vector3i(ax2 + 12, top + 1, az2 + 1), Vector3i(ax2 + 12, top + 6, az2 + 12)]]:
+		w.terrain_edited(BrickTerrain.fill_box(wall[0], wall[1], BrickTerrain.MAT_STONE, false))
+	@warning_ignore("integer_division")
+	var abx := ax2 / 2
+	@warning_ignore("integer_division")
+	var abz := az2 / 2
+	var af_in: Array[Vector3i] = []
+	var af_out: Array[Vector3i] = []
+	for i in 3:
+		for k in 2:
+			af_in.append(Vector3i(abx + 1 + i, top, abz + 1 + k))
+		af_out.append(Vector3i(abx + 1 + i, top, abz + 8))
+	var af_mid := f._top_middle(Vector3i(abx + 3, top, abz + 4))
+	w._fly_to(af_mid + Vector3(-6.0, 4.0, -6.0), Vector3(1, 0, 1).normalized())
+	await w._frames(20)
+	for b in af_in + af_out:
+		f.till({"cell": Vector3i(b.x * 2, top, b.z * 2), "normal": Vector3i.UP})
+		f.plant({"cell": Vector3i(b.x * 2, top, b.z * 2)}, &"wheat_seeds")
+	var af_planted := 0
+	for b in af_in + af_out:
+		if f.store.get_plot(b).get("crop", &"") == &"wheat":
+			af_planted += 1
+	check("nine wheat plots, six in the ring and three outside (%d)" % af_planted, af_planted == 9)
+	var fblk := Vector3i(abx + 4, top + 1, abz + 4)
+	var achest := Vector3i(abx + 5, top + 1, abz + 4)
+	w.chests.place(fblk, [], true, &"auto_farmer")
+	w.chests.place(achest, [], true, &"chest")
+	var fkey := MineChests.key_of(fblk)
+	var achest_key := MineChests.key_of(achest)
+	var af_ready := false
+	for _i in 600:
+		await w._frames(1)
+		var all_in := true
+		for b in af_in:
+			all_in = all_in and bool(f.store.get_plot(b).get("auto", false))
+		if all_in and f.auto.areas.has(fkey):
+			af_ready = true
+			break
+	var none_out := true
+	for b in af_out:
+		none_out = none_out and not bool(f.store.get_plot(b).get("auto", false))
+	check("the auto farmer tends the six plots in its ring (area of %d plot columns, %d floods)" % [
+			(f.auto.areas.get(fkey, {}).get("cols", {}) as Dictionary).size(), f.auto.floods], af_ready)
+	check("and not the three outside the ring", none_out)
+	check("its chest is in reach", f.farmer_chests(fkey).has(achest_key))
+	# Away six days (dry wheat, no water near: about four days to ripen).
+	var af_before := {}
+	for b in af_in + af_out:
+		FarmPlant.settle(f.store.get_plot(b), w.world_time)
+		af_before[b] = f.store.get_plot(b).duplicate(true)
+	w._fly_to(af_mid + Vector3(400.0, 60.0, 0.0), Vector3.FORWARD)
+	await w._frames(10)
+	for _i in 600:
+		if not f._near.has(af_in[0]):
+			break
+		await w._frames(1)
+	w.world_time += FarmPlant.DAY * 6.0
+	await w._frames(90)
+	var af_untouched := true
+	for b in af_in:
+		af_untouched = af_untouched and is_equal_approx(float(f.store.get_plot(b).t), float(af_before[b].t))
+	check("while away its plots were not settled", af_untouched)
+	var af_expect := {}
+	var af_wheat := 0
+	for b in af_in + af_out:
+		var e: Dictionary = (af_before[b] as Dictionary).duplicate(true)
+		FarmPlant.settle(e, w.world_time)
+		af_expect[b] = e
+		if b in af_in:
+			af_wheat += FarmPlant.out_count(e, &"wheat")
+	w._fly_to(af_mid + Vector3(-6.0, 4.0, -6.0), Vector3(1, 0, 1).normalized())
+	# Until its area is in again (a flood) and it has carried the harvest.
+	for _i in 900:
+		await w._frames(1)
+		var af_wait := 0
+		for b in af_in:
+			af_wait += (f.store.get_plot(b).get("auto_out", []) as Array).size()
+		# (and every plot caught up: the farm's in-reach list is rebuilt once a second)
+		for b in af_in + af_out:
+			if not is_equal_approx(float(f.store.get_plot(b).t), float(w.world_time)):
+				af_wait += 1
+		if af_wait == 0 and f.auto.areas.has(fkey):
+			break
+	await w._frames(10)
+	var af_exact := true
+	var af_cycles := 0
+	for b in af_in:
+		var q := f.store.get_plot(b)
+		var e: Dictionary = af_expect[b]
+		af_cycles += int(q.get("autos", 0))
+		af_exact = af_exact and q.crop == &"wheat" and int(q.stage) == int(e.stage) and absf(float(q.p) - float(e.p)) < 1e-6 \
+				and int(q.seed) == int(e.seed) and int(q.get("autos", 0)) == int(e.get("autos", 0)) and int(q.get("autos", 0)) >= 1
+	check("back again: %d harvests and replantings on six plots, each exactly where one settle puts it" % af_cycles, af_exact)
+	var af_in_chest := 0
+	for sl in w.chests.slots_of(achest_key):
+		if sl is ItemStack and (sl as ItemStack).id == &"wheat":
+			af_in_chest += (sl as ItemStack).count
+	var af_left := 0
+	for b in af_in:
+		af_left += FarmPlant.out_count(f.store.get_plot(b), &"wheat")
+	check("the chest holds the harvest (%d wheat, %d expected, %d still on the plots)" % [af_in_chest, af_wheat, af_left],
+			af_in_chest == af_wheat and af_wheat > 0 and af_left == 0)
+	var af_out_ripe := true
+	for b in af_out:
+		af_out_ripe = af_out_ripe and FarmPlant.is_ripe(f.store.get_plot(b)) and int(f.store.get_plot(b).get("autos", 0)) == 0
+	check("the plots outside the ring stand ripe, untouched by it", af_out_ripe)
+	# A chest with no room: the harvest waits on the plots.
+	var af_slots: Array = w.chests.slots_of(achest_key)
+	for i in af_slots.size():
+		af_slots[i] = ItemStack.make(&"hoe", 1)
+	# (the replanted dry wheat needs about four days)
+	w.world_time += FarmPlant.DAY * 5.0
+	await w._frames(150)
+	var af_waiting := 0
+	for b in af_in:
+		af_waiting += FarmPlant.out_count(f.store.get_plot(b), &"wheat")
+	var af_hoes := 0
+	for sl in af_slots:
+		if sl is ItemStack and (sl as ItemStack).id == &"hoe":
+			af_hoes += 1
+	check("a full chest holds the harvest back: %d wheat waiting on the plots, the chest as it was" % af_waiting,
+			af_waiting > 0 and af_hoes == af_slots.size())
+	check("the label says so", f.look_text({"cell": Vector3i(af_in[0].x * 2, top, af_in[0].z * 2)}).contains("waiting"))
+	# The farmer taken away: what waited drops on the plots, the flags go.
+	var af_drops0: int = w.drops.count()
+	w.chests.break_chest(fkey, false)
+	await w._frames(30)
+	var af_off := true
+	for b in af_in:
+		af_off = af_off and not bool(f.store.get_plot(b).get("auto", false)) \
+				and (f.store.get_plot(b).get("auto_out", []) as Array).is_empty()
+	check("the farmer taken away: its plots are plain again, what waited dropped (%d drops)" % (w.drops.count() - af_drops0),
+			af_off and w.drops.count() > af_drops0)
+	w.chests.break_chest(achest_key, false)
 
 	# --- the gaps: a refusal said, crops sky-lit, far fields drawn
 	f.plant({"cell": Vector3i((bx0 + 4) * 2, top, (bz0 + 4) * 2), "normal": Vector3i.UP}, &"wheat_seeds")

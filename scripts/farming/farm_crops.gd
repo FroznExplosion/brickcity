@@ -67,6 +67,14 @@ static func _complete(e: Dictionary) -> Dictionary:
 		"found": e.get("found", []) if e.get("found") is Array else [],
 		## A sapling: the tree variant (Trees) it grows into when ripe, -1 for a crop.
 		"tree": int(e.get("tree", -1)),
+		## A FRUIT tree (HandoffFarming.md 7.1): the stage at which the real tree
+		## stands (-1: a timber sapling, the plot goes when it is grown). From
+		## it on the plot is kept, the fruit grows in its leaves, and a pick
+		## sends it back to `regrow_to`.
+		"fruit_at": int(e.get("fruit_at", -1)),
+		## In-game hours a stage once the tree stands (the fruit's); default
+		## the sapling's stage_hours.
+		"fruit_hours": maxf(float(e.get("fruit_hours", e.get("stage_hours", 6.0))), 0.05),
 		## Where it is planted: "farm" tilled soil only; "soil" plain soil or tilled.
 		"ground": str(e.get("ground", "farm")),
 		## Crops it likes next to it (x COMPANION_BONUS), stage 6.
@@ -77,6 +85,17 @@ static func _complete(e: Dictionary) -> Dictionary:
 		"giant": bool(e.get("giant", false)),
 		"tips": str(e.get("tips", "")),
 	}
+
+
+## A sapling that grows into a timber tree and is gone as a plot when grown
+## (not a fruit tree).
+static func is_timber(c: Dictionary) -> bool:
+	return not c.is_empty() and int(c.tree) >= 0 and int(c.get("fruit_at", -1)) < 0
+
+
+## A fruit tree: a tree that stands on its plot and fruits again and again.
+static func is_fruit_tree(c: Dictionary) -> bool:
+	return not c.is_empty() and int(c.tree) >= 0 and int(c.get("fruit_at", -1)) >= 0
 
 
 static func has(id: StringName) -> bool:

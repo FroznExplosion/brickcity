@@ -749,12 +749,31 @@ func _find_seeds(material: int, at: Vector3) -> void:
 ## tree comes down. Survival: its trunk as wood, its canopy as leaves, in
 ## plate cells (Trees.yield_cells); what does not fit drops where it stood.
 func _fell(cell: Vector2i, at: Vector3) -> bool:
+	# A fruit tree with ripe fruit is shaken, not felled (HandoffFarming.md 7.1).
+	if host.farming != null and host.farming.shake_tree(cell):
+		target = {}
+		log_blocks.append("shake tree %s" % cell)
+		return true
 	var got: Dictionary = host.fell_tree(cell)
 	target = {}
 	if got.is_empty():
 		return false
 	broken += 1
 	log_blocks.append("fell tree %s" % cell)
+	var fruit_sap: StringName = host.farming.tree_felled(cell) if host.farming != null else &""
+	if not inv.creative and fruit_sap != &"":
+		# A fruit tree: wood and leaves as any tree, and always its sapling.
+		for k in ["wood", "leaves"]:
+			var id := StringName(k)
+			if int(got.get(k, 0)) > 0 and ItemCatalog.has(id):
+				var left := inv.add_item(ItemStack.make(id, int(got[k])))
+				if left != null:
+					host.drops.spawn(left, at)
+		var left3 := inv.add_item(ItemStack.make(fruit_sap, 1))
+		if left3 != null:
+			host.drops.spawn(left3, at)
+		log_blocks.append("found %s" % fruit_sap)
+		return true
 	if not inv.creative:
 		for k in ["wood", "leaves"]:
 			var id := StringName(k)
@@ -769,6 +788,14 @@ func _fell(cell: Vector2i, at: Vector3) -> bool:
 			if left2 != null:
 				host.drops.spawn(left2, at)
 			log_blocks.append("found %s" % sap)
+		# Now and then a fruit sapling of its kind (HandoffFarming.md 7.1).
+		var fruits := MineFarming.fruit_saplings_of(int(got.get("variant", -1)))
+		if not fruits.is_empty() and randf() < MineFarming.FRUIT_SAPLING_CHANCE:
+			var fs: StringName = fruits[randi() % fruits.size()]
+			var left4 := inv.add_item(ItemStack.make(fs, 1))
+			if left4 != null:
+				host.drops.spawn(left4, at)
+			log_blocks.append("found %s" % fs)
 	return true
 
 
