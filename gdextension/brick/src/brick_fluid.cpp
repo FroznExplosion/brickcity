@@ -3320,7 +3320,10 @@ double BrickFluid::surface_at(Vector3 p) {
     }
     const int f = c_fluid(c);
     int b = k.y;
-    for (int i = 0; i < 64; ++i) {
+    // Up to the top of the body, however deep (the deep ocean is 70-90 m,
+    // Docs/MineOcean.md 2.1; 64 bricks stopped 27 m down, and a swimmer
+    // deeper floated to that as its surface). The bedrock is 300 bricks down.
+    for (int i = 0; i < 400; ++i) {
         const Cell a = rcell(k.x, b + 1, k.z);
         if (!(c_wet(a) && c_fluid(a) == f)) break;
         c = a;
