@@ -291,6 +291,23 @@ static func _model(d: Dictionary) -> Node3D:
 				_part(inner, _box(Vector3(0.5, 0.45, 0.22)), _mat(Color(0.55, 0.25, 0.2), 0.8), Vector3(0, 0.9, 0))
 				_part(inner, _box(Vector3(0.3, 0.3, 0.3)), _mat(col, 0.8), Vector3(0, 1.32, 0))
 				_part(inner, _cyl(0.3, 0.3, 0.05), _mat(col.darkened(0.3), 0.8), Vector3(0, 1.49, 0))
+			elif str(d.get("model", "")) == "auto_farmer":
+				# A little brick robot (HandoffFarming.md 7.3): tracks, a body, a
+				# head with a visor and an antenna, one arm holding a hoe.
+				var m := _mat(col, 0.4)
+				var dark := _mat(col.darkened(0.55), 0.6)
+				var steel := _mat(Color(0.66, 0.68, 0.72), 0.3)
+				for x in [-0.3, 0.3]:
+					_part(inner, _box(Vector3(0.22, 0.2, 0.8)), dark, Vector3(x, 0.1, 0))
+				_part(inner, _box(Vector3(0.7, 0.5, 0.55)), m, Vector3(0, 0.45, 0))
+				_part(inner, _box(Vector3(0.4, 0.3, 0.4)), m, Vector3(0, 0.85, 0))
+				_part(inner, _box(Vector3(0.32, 0.1, 0.04)), _mat(Color(0.35, 0.85, 1.0), 0.1, 1.0, true),
+						Vector3(0, 0.88, 0.21))
+				_part(inner, _cyl(0.02, 0.02, 0.22), steel, Vector3(0.1, 1.11, 0))
+				_part(inner, _cyl(0.05, 0.05, 0.05), _mat(Color(1.0, 0.35, 0.2), 0.2, 1.0, true), Vector3(0.1, 1.24, 0))
+				_part(inner, _box(Vector3(0.1, 0.4, 0.1)), steel, Vector3(0.42, 0.5, 0.1), Basis(Vector3.RIGHT, -0.5))
+				_part(inner, _box(Vector3(0.05, 0.7, 0.05)), _mat(Color(0.45, 0.3, 0.16), 0.7), Vector3(0.45, 0.45, 0.36))
+				_part(inner, _box(Vector3(0.2, 0.05, 0.14)), steel, Vector3(0.45, 0.1, 0.42))
 			elif str(d.get("model", "")) == "bin":
 				# A slatted wooden box, open at the top, dark compost in it.
 				var m := _mat(col, 0.8)
@@ -418,6 +435,11 @@ static func _model(d: Dictionary) -> Node3D:
 				_part(inner, _box(Vector3(0.35, 0.8, 1.0)), _mat(Color(0.12, 0.13, 0.15), 0.5), Vector3(0, 0.4, 0))
 				_part(inner, _box(Vector3(0.04, 0.4, 0.14)), _mat(col, 0.3, 1.0, true), Vector3(0.18, 0.4, -0.12))
 				_part(inner, _box(Vector3(0.04, 0.4, 0.14)), _mat(col, 0.3, 1.0, true), Vector3(0.18, 0.4, 0.12))
+			elif dm == "link":
+				# A brick (the item's colour), two round antennas, red and blue.
+				_part(inner, _box(Vector3(0.8, 0.8, 0.8)), _mat(col, 0.5), Vector3(0, 0.4, 0))
+				_part(inner, _cyl(0.1, 0.1, 0.45), _mat(Color(0.72, 0.13, 0.13), 0.4), Vector3(-0.17, 1.02, 0))
+				_part(inner, _cyl(0.1, 0.1, 0.3), _mat(Color(0.13, 0.35, 0.68), 0.4), Vector3(0.17, 0.95, 0))
 			elif dm == "piston":
 				# A grey body, the head plate (the item's colour) at the front.
 				_part(inner, _box(Vector3(0.65, 0.9, 0.9)), _mat(Color(0.33, 0.34, 0.37), 0.6), Vector3(-0.17, 0.45, 0))

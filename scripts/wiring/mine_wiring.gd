@@ -18,11 +18,13 @@ extends Node3D
 ## Devices (DEVICES):
 ##   lever          RMB turns it; on: 15 to every side.
 ##   button         RMB: 15 to every side for a second.
-##   pressure tile  a plate (1 plate tall): 15 while someone stands on it.
+##   pressure tile  a plate (1 plate tall): 15 while someone stands on it --
+##                  the player or a creature (section 21).
 ##   trip hook      two facing each other in a line, up to 12 studs apart,
 ##                  nothing solid between, string between them: both give 15
 ##                  while someone crosses the string.
-##   lamp           lit while anything beside it is above 0.
+##   lamp           lit while anything beside it is above 0; the lit ones
+##                  nearest the eye hang a real light, the rest glow (23).
 ##   gates          FACE a way (placed facing away from the player; the
 ##                  wrench turns them): inputs at the back, left and right,
 ##                  output only at the front. AND (every side with something
@@ -42,10 +44,11 @@ extends Node3D
 ##   gate tile      a solid brick (a collider) that turns passable while
 ##                  powered -- Terraria's actuator. Gate tiles touching (side
 ##                  by side, stacked) are one group and open together; one
-##                  stands on ground or on/beside another (stage 3b, 16).
+##                  stands on ground or on/beside another (stage 3b, 16),
+##                  and falls when nothing holds it up any more (24).
 ##   sequencer      faces a way: its back turning on runs a program of
-##                  on/off steps out of its front (RMB picks the program) --
-##                  Create's sequenced gearshift.
+##                  on/off steps out of its front (RMB opens its program
+##                  editor, SequencerPanel, 25) -- Create's sequenced gearshift.
 ##   number display a 2-stud brick showing the level beside it, 0-15.
 ##   piston         faces a way or UP: power rising pushes the placed brick in
 ##                  front (and every placed brick clutched on its top, and
@@ -65,6 +68,8 @@ extends Node3D
 ## a readout of what is looked at (the whole net's level, its cables and
 ## devices; a device's inputs and output), RMB turns a facing device, shift +
 ## RMB takes a device back. Create's goggles and wrench (Docs/MineWiring.md 12).
+##
+## Wires and devices take the sky light of their cells (dark in caves, 22).
 ##
 ## Broken by LMB, a shot, a blast, or the ground going (`check`). Saved with
 ## the world's items (`to_save` / `restore`). A child of the mine world with
@@ -87,6 +92,10 @@ const TRIP_REACH := 12
 const PULSE_LENGTHS := [2, 5, 10, 20]
 ## The sequencer's programs: ticks on, off, on, ... (RMB steps through them).
 const PROGRAMS := [[5, 5, 5], [10], [2, 2, 2, 2, 2], [20, 10, 20], [3, 3, 3, 3, 3, 3, 3], [10, 30, 10]]
+## A program of the player's own (the sequencer panel, Docs/MineWiring.md
+## 25): at most this many steps, each 1..STEP_MAX ticks.
+const PROGRAM_STEPS := 16
+const STEP_MAX := 100
 ## What each device is. plates: its height; omni: drives every side; facing:
 ## has a front; reads: lit by its sides.
 const DEVICES := {
@@ -119,6 +128,10 @@ const DEVICES := {
 	&"dropper": {"kind": "dropper", "plates": 3, "facing": true},
 	&"release_brick": {"kind": "release", "plates": 3},
 	&"alarm": {"kind": "alarm", "plates": 3},
+	# Stage 7 (section 20): scripts/wiring/wiring_links.gd. A receiver drives
+	# every side (omni); a transmitter drives nothing.
+	&"wire_transmitter": {"kind": "transmitter", "plates": 3},
+	&"wire_receiver": {"kind": "receiver", "plates": 3, "omni": true},
 }
 ## The fifth facing: up (a piston laid looking steeply down).
 const FACE_UP := 4
@@ -160,6 +173,9 @@ var animate := true
 
 ## cell -> true: a cable tile there.
 var cables := {}
+## A wire brick's stud of a course, keyed by its bottom plate cell -> true
+## (stage 7, WiringLinks): nodes of the nets as cables are.
+var wires := {}
 ## bottom cell -> {"item", "on", "facing", "setting", "timer", "out", "lit",
 ## "prev", "queue", "node"}
 var devices := {}
@@ -179,6 +195,8 @@ var _changed_cells: Array[Vector3i] = []
 var _logic_dirty := false
 var _draw_dirty := false
 var _pairs_dirty := false
+## A gate tile went: the next tick floods their support again.
+var _gatetiles_dirty := false
 var _clock := 0.0
 ## Ticks run (probes), cells flooded by the last rebuild.
 var ticks := 0
@@ -195,10 +213,46 @@ var _plate := 0.14
 var _tiles_mi: MultiMeshInstance3D = null
 var _cable_mi: MultiMeshInstance3D = null
 var _string_mi: MultiMeshInstance3D = null
+## Wire bricks' copper bands (stage 7).
+var _wire_mi: MultiMeshInstance3D = null
 ## The wrench's view: the cables again, through walls.
 var _xray_tiles: MultiMeshInstance3D = null
 var _xray_cable: MultiMeshInstance3D = null
 var _readout: Label = null
+
+## SKY LIGHT in caves (Docs/MineWiring.md 22). `light_fn(point)` gives the sky
+## and lava block levels (0..15) at a point (terrain frame): the mine world's
+## MineSkyLit.levels_at by default, when it has one (sky light on); a probe
+## gives its own (`use_sky_light`). Unset: everything lit as outdoors.
+var light_fn: Callable
+## The mine world's MineSkyLit (devices are tracked by it), or null.
+var _sky: MineSkyLit = null
+## Cable cell -> Vector2(sky, block), asked; cells still to ask (a frame's
+## asking budget at a time, MineSkyLit's).
+var cell_light := {}
+var _light_todo: Array[Vector3i] = []
+var _light_queued := {}
+var _light_dirty := false
+var lights_asked := 0
+## The sky level reads the tiles' baked tops, which lag an edit until the tile
+## is rebuilt: the wires near an edit are asked again this long after it (s).
+const LIGHT_AGAIN := 0.6
+var _light_again: Array = []   # [time left, lo, hi]
+
+## LAMP LIGHTS (Docs/MineWiring.md 23): only the lit lamps nearest the eye
+## hang a real light (an OmniLight3D from a pool, 4.5 m, no shadow); the rest
+## glow. How many: `lamp_lights`, or -1 for Options > Video > Lamp Lights
+## (BrickGridLight.near_max: Off 0, 2, 4, 8) times two -- 8 by default.
+var lamp_lights := -1
+## Where the eye is (terrain frame): the camera's by default; a probe's own.
+var view_fn: Callable
+## Lamp cell -> its pool light, for the gate and the probe.
+var lamp_light_of := {}
+var _lamp_pool: Array[OmniLight3D] = []
+var _lamps_dirty := false
+var _lamp_clock := 0.0
+## How often the nearest are picked again as the eye moves (s).
+const LAMP_PICK := 0.25
 
 
 func setup(p_host: Node, p_drops: DroppedItems) -> void:
@@ -208,6 +262,90 @@ func setup(p_host: Node, p_drops: DroppedItems) -> void:
 	_plate = BrickWorld.get_plate_metres()
 	if _tiles_mi == null:
 		_make_draw()
+	var sky = host.get("sky_lit") if host != null else null
+	if sky is MineSkyLit:
+		_sky = sky
+		use_sky_light(func(p: Vector3) -> Vector2: return _sky.levels_at(p))
+
+
+## Wires take the sky light of their cells from now on: `fn(point)` ->
+## Vector2(sky, block). Their MultiMeshes carry it per instance
+## (INSTANCE_CUSTOM, the falling sand's way) and draw with wiring.gdshader's
+## SKY_LIT copy.
+func use_sky_light(fn: Callable) -> void:
+	light_fn = fn
+	if _tiles_mi == null:
+		_make_draw()
+	var mat := ShaderMaterial.new()
+	mat.shader = wire_shader(true)
+	for mi in [_tiles_mi, _cable_mi, _string_mi]:
+		var mm: MultiMesh = mi.multimesh
+		mm.instance_count = 0
+		mm.use_custom_data = true
+		mi.material_override = mat
+	for c in cables:
+		_queue_light(c)
+	_draw_dirty = true
+
+
+static var _wire_shaders := [null, null]
+
+
+## wiring.gdshader, or its copy with `#define SKY_LIT` in front.
+static func wire_shader(sky: bool) -> Shader:
+	var i := 1 if sky else 0
+	if _wire_shaders[i] == null:
+		var src: Shader = load("res://shaders/wiring.gdshader")
+		_wire_shaders[i] = MineSkyLit._with_define(src, "SKY_LIT") if sky else src
+	return _wire_shaders[i]
+
+
+## Light reaches 15 cells: the wires within 16 studs and 16 courses of an
+## edit's box take their levels again (MineSkyLit.REACH).
+func _relight(lo: Vector3i, hi: Vector3i) -> void:
+	var r := Vector3i(16, 16 * COURSE, 16)
+	for c in cables:
+		if lo.x == -WHOLE or _inside(c, lo - r, hi + r):
+			_queue_light(c)
+	for c in pairs:
+		if lo.x == -WHOLE or _inside(c, lo - r, hi + r):
+			_queue_light(c)
+
+
+func _queue_light(c: Vector3i) -> void:
+	if light_fn.is_valid() and not _light_queued.has(c):
+		_light_queued[c] = true
+		_light_todo.append(c)
+
+
+## A cell's levels as a colour for INSTANCE_CUSTOM (r sky, g block, 0..1);
+## not asked yet: the eye's level (things appear near the player).
+func _light_col(c: Vector3i) -> Color:
+	var v: Vector2
+	if cell_light.has(c):
+		v = cell_light[c]
+	else:
+		_queue_light(c)
+		v = Vector2(float(host.get("_eye_sky")) if host != null and host.get("_eye_sky") != null else 15.0, 0.0)
+	return Color(v.x / 15.0, v.y / 15.0, 0.0, 0.0)
+
+
+## Asks the cells waiting, within MineSkyLit's frame budget (one always).
+func ask_lights(all := false) -> void:
+	var n := 0
+	while not _light_todo.is_empty():
+		if not all and n > 0 and _sky != null and not _sky.has_room():
+			break
+		var c: Vector3i = _light_todo.pop_front()
+		_light_queued.erase(c)
+		n += 1
+		if not cables.has(c) and not pairs.has(c):
+			continue
+		var v: Vector2 = light_fn.call(cable_box(c).get_center())
+		lights_asked += 1
+		if not cell_light.has(c) or cell_light[c] != v:
+			cell_light[c] = v
+			_light_dirty = true
 
 
 func _ready() -> void:
@@ -237,6 +375,23 @@ func set_hud(layer: CanvasLayer) -> void:
 func _process(delta: float) -> void:
 	if not _moves.is_empty():
 		_step_moves(delta)
+	if not _light_again.is_empty():
+		for k in range(_light_again.size() - 1, -1, -1):
+			var e: Array = _light_again[k]
+			e[0] = float(e[0]) - delta
+			if float(e[0]) <= 0.0:
+				_light_again.remove_at(k)
+				_relight(e[1], e[2])
+				if _sky != null:
+					_sky.dirty_box(e[1], e[2])   # the devices (and chests) too
+	if not _light_todo.is_empty():
+		ask_lights()
+	if _light_dirty:
+		_light_dirty = false
+		_draw_dirty = true
+	_lamp_clock += delta
+	if _lamps_dirty or (_lamp_clock >= LAMP_PICK and not lamp_light_of.is_empty()):
+		place_lamp_lights()
 	_clock += delta
 	if _clock < TICK:
 		return
@@ -254,6 +409,8 @@ func tick() -> void:
 		_changed_cells.clear()
 		_logic_dirty = true
 		_draw_dirty = true
+	if _gatetiles_dirty:
+		drop_unheld_gatetiles(_riding() if not _moves.is_empty() else {})
 	if _pairs_dirty:
 		_pairs_dirty = false
 		_find_pairs()
@@ -439,12 +596,33 @@ func _poke(lo: Vector3i, hi: Vector3i) -> void:
 			_logic_dirty = true
 
 
+## The player's feet, and every living creature's (MineMobs: zombies, pigs,
+## the rest), so a zombie walking into a trap springs it (Docs/MineWiring.md
+## 21). The mine world has no AI pawns of its own (section 19). A creature far
+## off (its pawn asleep) counts where it was last.
 func _host_bodies() -> Array:
+	var out := []
 	if host != null and host.has_method("player_feet_local"):
 		var p: Vector3 = host.player_feet_local()
 		if p != Vector3.INF:
-			return [p]
-	return []
+			out.append(p)
+	var mm = host.get("mobs") if host != null else null
+	if mm != null and is_instance_valid(mm):
+		out.append_array(creature_feet(mm.mobs))
+	return out
+
+
+## The feet (terrain frame) of the creatures in `list` that are alive and on
+## their own feet (not held).
+static func creature_feet(list: Array) -> Array:
+	var out := []
+	for m in list:
+		if m == null or not is_instance_valid(m) or m.is_dead() or bool(m.get("held")):
+			continue
+		var f: Vector3 = m.last_feet if bool(m.get("far")) else m.feet()
+		if f != Vector3.INF:
+			out.append(f)
+	return out
 
 
 # ---------------------------------------------------------------------------
@@ -460,6 +638,7 @@ func place_cable(c: Vector3i, force := false) -> bool:
 	if not force and not can_place_cable(c):
 		return false
 	cables[c] = true
+	_queue_light(c)
 	_changed_cells.append(c)
 	_pairs_dirty = true
 	_poke(c, c)
@@ -488,6 +667,7 @@ func place_device(c0: Vector3i, item: StringName, on := false, force := false, f
 	var f := clampi(facing, 0, FACE_UP if can_face_up(item) else 3)
 	var node := _device_node(c, item, f)
 	add_child(node)
+	_light_device(node)
 	devices[c] = {"item": item, "on": on, "facing": f, "setting": st, "timer": 0,
 			"out": 0, "lit": false, "prev": 0, "queue": [], "step": 0, "node": node}
 	for k in cells_of(c, item, f):
@@ -522,6 +702,7 @@ func use_device(c: Vector3i, how := "use") -> bool:
 			var old: Node = d.node
 			d.node = _device_node(c, d.item, int(d.facing))
 			add_child(d.node)
+			_light_device(d.node)
 			if is_instance_valid(old):
 				old.queue_free()
 		else:
@@ -530,6 +711,8 @@ func use_device(c: Vector3i, how := "use") -> bool:
 		_pairs_dirty = true
 	else:
 		match str(def.kind):
+			"transmitter", "receiver":
+				WiringLinks.use(self, c, d, how)
 			"switch":
 				d.on = not bool(d.on)
 			"button":
@@ -548,6 +731,7 @@ func use_device(c: Vector3i, how := "use") -> bool:
 						d.setting = PULSE_LENGTHS[(i + 1) % PULSE_LENGTHS.size()]
 					"sequence":
 						d.setting = (int(d.setting) + 1) % PROGRAMS.size()
+						d.erase("program")
 						d.timer = 0
 						d.step = 0
 					_:
@@ -564,6 +748,7 @@ func remove_cable(c: Vector3i, drop := true) -> bool:
 	if not cables.has(c):
 		return false
 	cables.erase(c)
+	cell_light.erase(c)
 	_changed_cells.append(c)
 	_pairs_dirty = true
 	_poke(c, c)
@@ -582,6 +767,10 @@ func remove_device(c: Vector3i, drop := true) -> bool:
 	for k in cells_of(c, d.item, int(d.facing)):
 		_occupied.erase(k)
 	WiringTraps.on_remove(self, c, d)
+	if str(DEVICES[d.item].kind) == "gatetile":
+		_gatetiles_dirty = true   # what it held may fall (the next tick)
+	if lamp_light_of.has(c):
+		_lamps_dirty = true   # its light goes to the next nearest
 	devices.erase(c)
 	if is_instance_valid(d.node):
 		(d.node as Node).queue_free()
@@ -710,12 +899,71 @@ func check(lo := Vector3i(-WHOLE, -WHOLE, -WHOLE), hi := Vector3i(WHOLE, WHOLE, 
 		if bad:
 			remove_device(c)
 			gone += 1
+	gone += drop_unheld_gatetiles(riding)
+	if light_fn.is_valid():
+		_relight(lo, hi)
+		if lo.x != -WHOLE:
+			_light_again.append([LIGHT_AGAIN, lo, hi])
 	_pairs_dirty = true
 	# The ground changed in the box: observers watching it pulse (not for a
 	# whole check, which is not a change).
 	if lo.x != -WHOLE:
 		_poke(lo, hi)
+		# Wire bricks found or gone in the box (stage 7).
+		WiringLinks.scan(self, lo, hi)
 	return gone
+
+
+## Gate tiles that nothing holds up any more break (dropping their item in
+## survival; Docs/MineWiring.md 24). Held: standing on ground, or joined --
+## on, under or beside -- to a gate tile that is held, through any chain of
+## them. A flood from the grounded ones over the whole set: a bridge hanging
+## off one that stands falls when that one's ground goes, or when the tile
+## joining it is taken. Asked by `check` and the tick after a gate tile goes.
+## Tiles riding a piston's move (`riding`) count as held. Returns how many.
+func drop_unheld_gatetiles(riding := {}) -> int:
+	_gatetiles_dirty = false
+	var tiles: Array[Vector3i] = []
+	for c in devices:
+		if str(DEVICES[devices[c].item].kind) == "gatetile":
+			tiles.append(c)
+	if tiles.is_empty():
+		return 0
+	var held := {}
+	var todo: Array[Vector3i] = []
+	for c in tiles:
+		if riding.has(c) or _solid(c + Vector3i.DOWN):
+			held[c] = true
+			todo.append(c)
+	var i := 0
+	while i < todo.size():
+		for n in _gatetile_links(todo[i]):
+			if not held.has(n):
+				held[n] = true
+				todo.append(n)
+		i += 1
+	var gone := 0
+	for c in tiles:
+		if not held.has(c) and devices.has(c):
+			remove_device(c)
+			gone += 1
+	return gone
+
+
+## The gate tiles touching gate tile `c`: the one under it, the one on it,
+## and any whose cells are beside its cells.
+func _gatetile_links(c: Vector3i) -> Array[Vector3i]:
+	var out: Array[Vector3i] = []
+	var h := plates_of(devices[c].item)
+	var at: Array[Vector3i] = [c + Vector3i.DOWN, c + Vector3i(0, h, 0)]
+	for s in SIDES:
+		for dy in h:
+			at.append(c + s + Vector3i(0, dy, 0))
+	for k in at:
+		var b = _occupied.get(k, null)
+		if b != null and b != c and devices.has(b) and str(DEVICES[devices[b].item].kind) == "gatetile" 				and not out.has(b):
+			out.append(b)
+	return out
 
 
 static func _inside(c: Vector3i, lo: Vector3i, hi: Vector3i) -> bool:
@@ -733,6 +981,12 @@ func clear() -> void:
 	devices.clear()
 	_occupied.clear()
 	cables.clear()
+	cell_light.clear()
+	if not lamp_light_of.is_empty():
+		_lamps_dirty = true
+	_light_todo.clear()
+	_light_queued.clear()
+	wires.clear()
 	net_of.clear()
 	nets.clear()
 	pairs.clear()
@@ -753,6 +1007,10 @@ func _changed() -> void:
 ## The cables `c` joins: four sides, up to a brick up or down.
 func links(c: Vector3i) -> Array[Vector3i]:
 	var out: Array[Vector3i] = []
+	if not wires.is_empty():
+		WiringLinks.links(self, c, out)
+		if wires.has(c):
+			return out
 	for s in SIDES:
 		for dy in range(-STEP, STEP + 1):
 			var n := c + s + Vector3i(0, dy, 0)
@@ -776,13 +1034,13 @@ func _rebuild(changed: Array[Vector3i]) -> void:
 				for c in nets[id].cells:
 					redo[c] = true
 				nets.erase(id)
-		if cables.has(s):
+		if cables.has(s) or wires.has(s):
 			redo[s] = true
 	for c in redo:
 		net_of.erase(c)
 	last_flooded = 0
 	for c in redo:
-		if not cables.has(c) or net_of.has(c):
+		if not (cables.has(c) or wires.has(c)) or net_of.has(c):
 			continue
 		var id := _next_net
 		_next_net += 1
@@ -806,6 +1064,8 @@ func side_nets(c: Vector3i, s: Vector3i) -> Array:
 		var n := c + s + Vector3i(0, dy, 0)
 		if net_of.has(n) and not out.has(net_of[n]):
 			out.append(net_of[n])
+	if not wires.is_empty():
+		WiringLinks.side_nets(self, c, s, plates_of(devices[c].item) if devices.has(c) else COURSE, out)
 	return out
 
 
@@ -992,6 +1252,8 @@ func _evaluate() -> void:
 				_show_device(g)
 	# 3d. The traps kit: dispensers fire, release bricks let go, alarms call.
 	WiringTraps.evaluate(self)
+	# 3e. Wireless links: each channel's level, out of its receivers.
+	WiringLinks.evaluate(self)
 	# 4. Gates: the next output from what they read now, applied together.
 	var nexts := {}
 	for c in devices:
@@ -1059,7 +1321,7 @@ func _gate_next(c: Vector3i, d: Dictionary) -> int:
 			return out
 		"sequence":
 			# Its back turning on starts the program (not while it runs).
-			var prog: Array = PROGRAMS[clampi(int(d.setting), 0, PROGRAMS.size() - 1)]
+			var prog: Array = program_of(c)
 			var now := int(b[0]) > 0
 			if now and int(d.prev) == 0 and int(d.timer) == 0:
 				d.step = 0
@@ -1075,6 +1337,52 @@ func _gate_next(c: Vector3i, d: Dictionary) -> int:
 						d.timer = int(prog[d.step])
 			return out
 	return 0
+
+
+## A sequencer's program: ticks on, off, on, ... -- its own (set_program),
+## else the preset its setting names.
+func program_of(c: Vector3i) -> Array:
+	if not devices.has(c):
+		return []
+	var d: Dictionary = devices[c]
+	if d.has("program") and not (d.program as Array).is_empty():
+		return d.program
+	return PROGRAMS[clampi(int(d.setting), 0, PROGRAMS.size() - 1)]
+
+
+## A sequencer gets a program of its own (the panel): 1..PROGRAM_STEPS steps
+## of 1..STEP_MAX ticks; a run under way stops. Saved with it. True if `c`
+## is a sequencer.
+func set_program(c: Vector3i, steps: Array) -> bool:
+	if not devices.has(c) or str(DEVICES[devices[c].item].get("op", "")) != "sequence":
+		return false
+	var prog: Array = []
+	for v in steps.slice(0, PROGRAM_STEPS):
+		prog.append(clampi(int(v), 1, STEP_MAX))
+	if prog.is_empty():
+		prog = [1]
+	var d: Dictionary = devices[c]
+	d.program = prog
+	d.timer = 0
+	d.step = 0
+	_show_device(c)
+	_logic_dirty = true
+	_changed()
+	return true
+
+
+## A sequencer takes a preset again (the panel's preset buttons).
+func set_preset(c: Vector3i, i: int) -> bool:
+	if not devices.has(c) or str(DEVICES[devices[c].item].get("op", "")) != "sequence":
+		return false
+	var d: Dictionary = devices[c]
+	d.setting = clampi(i, 0, PROGRAMS.size() - 1)
+	d.erase("program")
+	d.timer = 0
+	d.step = 0
+	_logic_dirty = true
+	_changed()
+	return true
 
 
 ## The highest level reaching any side of a device's footprint (a door's
@@ -1533,6 +1841,8 @@ func _piston_push(c: Vector3i) -> bool:
 	var seeds: Array = meet.seeds
 	if seeds.is_empty():
 		d.stall = ""
+		var hc := head_cells(c, f, 1)
+		shove_pieces(hc[0], hc[hc.size() - 1], piston_step(f))
 		return true          # the head goes out into the air
 	var g := piston_group(seeds, piston_step(f), true, c)
 	if g.has("stall"):
@@ -1600,6 +1910,7 @@ func _move(g: Dictionary, step: Vector3i) -> void:
 		ch.riding[key] = true
 		if is_instance_valid(ch.chests[key].node):
 			chest_base[key] = (ch.chests[key].node as Node3D).position
+	shove_pieces(lo, hi, step)
 	var m := {"bricks": bricks, "step": step, "cells": cells, "lo": lo, "hi": hi, "phase": 0, "t": 0.0,
 			"wait": 0.0, "off": Vector3.ZERO, "box": _bricks_box(bricks), "node": null, "rect": Rect2i(),
 			"cables": r_cables, "devices": r_devices, "base": base, "chests": r_chests, "chest_base": chest_base}
@@ -1616,6 +1927,54 @@ func _move(g: Dictionary, step: Vector3i) -> void:
 	m.rect = _tile_rect(res)
 	_moves.append(m)
 	_edited(res)
+
+
+## PISTONS SHOVE FALLEN PIECES (Docs/MineWiring.md 27): a collapse piece
+## (PlanetPieces, a physics body) in the cells a push moves into -- or
+## touching them, or resting on them -- is woken if it had settled and given
+## an impulse of the push's speed (a step in MOVE_TIME), sideways with a
+## little lift so it rides over studs. Not a move: it is the ram of 6.2.
+## The mine world's pieces (host.collapse.pieces); `pieces_fn` -> a
+## PlanetPieces for a gate of its own. Returns how many were shoved.
+var pieces_fn: Callable
+var pieces_shoved := 0
+const SHOVE_LIFT := 1.2
+
+
+func _pieces():
+	if pieces_fn.is_valid():
+		return pieces_fn.call()
+	var col = host.get("collapse") if host != null else null
+	if col == null or not is_instance_valid(col):
+		return null
+	return col.get("pieces")
+
+
+func shove_pieces(lo: Vector3i, hi: Vector3i, step: Vector3i) -> int:
+	var pp = _pieces()
+	if pp == null or not is_instance_valid(pp) or not is_inside_tree():
+		return 0
+	var box := AABB(Vector3(lo.x * _stud, lo.y * _plate, lo.z * _stud),
+			Vector3(hi.x - lo.x + 1, hi.y - lo.y + 1, hi.z - lo.z + 1) * Vector3(_stud, _plate, _stud))
+	var xf := global_transform
+	var gbox: AABB = (xf * box).grow(0.03)
+	var v := xf.basis * (_metres(step) / MOVE_TIME)
+	if step.y == 0:
+		v += xf.basis * Vector3(0, SHOVE_LIFT, 0)
+	var n := 0
+	for piece in pp.pieces:
+		if piece.fading_since != 0 or not is_instance_valid(piece.body):
+			continue
+		if not (pp.world_box(piece) as AABB).intersects(gbox):
+			continue
+		if piece.settled:
+			pp._wake(piece)
+		var b: RigidBody3D = piece.body
+		b.sleeping = false
+		b.apply_central_impulse(v * b.mass)
+		n += 1
+	pieces_shoved += n
+	return n
 
 
 ## Does any of the group rest on STUDS that stay (6.2)? Then a sideways move
@@ -1892,6 +2251,16 @@ func _carry(m: Dictionary, was: Vector3, now: Vector3) -> void:
 
 ## The stand-in of a moving group: its bricks as boxes with studs on their
 ## tops (one MultiMesh each), a kinematic body of the same boxes to stand on.
+## The material a piston's stand-in draws its bricks with: the mine world's
+## brick material (brick.gdshader, as the collapse pieces), its sky-lit copy
+## with sky light on; null without one (plain boxes then).
+func standin_brick_material() -> ShaderMaterial:
+	var src = host.get("_brick_mat") if host != null else null
+	if not (src is ShaderMaterial):
+		return null
+	return _sky.brick_material(src) if _sky != null else src
+
+
 func _standin(bricks: Array) -> Node3D:
 	var root := Node3D.new()
 	root.name = "PistonMove"
@@ -1919,7 +2288,7 @@ func _standin(bricks: Array) -> Node3D:
 			var hi: Vector3i = bx[1]
 			var size := Vector3((hi.x - lo.x + 1) * _stud, (hi.y - lo.y + 1) * _plate, (hi.z - lo.z + 1) * _stud)
 			var mid := Vector3(lo.x * _stud, lo.y * _plate, lo.z * _stud) + size * 0.5
-			boxes.append([Transform3D(Basis.from_scale(size - Vector3.ONE * 0.004), mid), col])
+			boxes.append([Transform3D(Basis.from_scale(size - Vector3.ONE * 0.002), mid), col])
 			var shape := CollisionShape3D.new()
 			var bs := BoxShape3D.new()
 			bs.size = size
@@ -1944,7 +2313,38 @@ func _standin(bricks: Array) -> Node3D:
 	cyl.bottom_radius = _stud * 0.3
 	cyl.height = stud_h
 	cyl.radial_segments = 12
+	# The bricks as the bevelled bricks they are (Docs/MineWiring.md 27): the
+	# collapse pieces' look, a box a brick (brick_boxed.gdshaderinc) with the
+	# mine world's brick material, its sky-lit copy when sky light is on.
+	var brick_mat: ShaderMaterial = standin_brick_material()
+	if brick_mat != null:
+		var bmm := MultiMesh.new()
+		bmm.transform_format = MultiMesh.TRANSFORM_3D
+		bmm.use_colors = true
+		bmm.use_custom_data = true
+		bmm.mesh = BrickNear.bevel_box_mesh()
+		bmm.instance_count = boxes.size()
+		for k in boxes.size():
+			var t: Transform3D = boxes[k][0]
+			var col: Color = boxes[k][1]
+			bmm.set_instance_transform(k, t)
+			# PLA (material 0, grain along x): alpha 1; the brick's middle, for
+			# its print lines.
+			bmm.set_instance_color(k, Color(col.r, col.g, col.b, 1.0))
+			bmm.set_instance_custom_data(k, Color(t.origin.x, t.origin.y, t.origin.z, 0.0))
+		var bmi := MultiMeshInstance3D.new()
+		bmi.name = "Bricks"
+		bmi.multimesh = bmm
+		bmi.material_override = brick_mat
+		bmi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+		if sky != null:
+			bmi.set_instance_shader_parameter(&"sky_level", light.r * 15.0)
+			bmi.set_instance_shader_parameter(&"block_level", light.g * 15.0)
+		root.add_child(bmi)
+		boxes = []
 	for pair in [[_box_mesh(Vector3.ONE), boxes], [cyl, tops]]:
+		if (pair[1] as Array).is_empty():
+			continue
 		var mm := MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
 		mm.use_colors = true
@@ -1989,11 +2389,12 @@ func readout(target: Dictionary) -> String:
 			"pulse":
 				parts.append("pulse %d ticks (RMB)" % int(d.setting))
 			"sequence":
-				var prog: Array = PROGRAMS[clampi(int(d.setting), 0, PROGRAMS.size() - 1)]
+				var prog: Array = program_of(c)
 				var steps: Array[String] = []
 				for i in prog.size():
 					steps.append("%d %s" % [int(prog[i]), "on" if i % 2 == 0 else "off"])
-				parts.append("program: %s (RMB)" % ", ".join(steps))
+				parts.append("%s: %s (RMB edits)" % ["own program" if d.has("program") else "program",
+						", ".join(steps)])
 		if str(def.kind) == "gatetile":
 			parts.append("open" if bool(d.on) else "solid")
 		if str(def.kind) == "display":
@@ -2015,7 +2416,13 @@ func readout(target: Dictionary) -> String:
 			if (int(d.prev) > 0) != bool(d.on) and str(d.get("stall", "")) != "":
 				parts.append("stalled: %s" % d.stall)
 		parts.append_array(WiringTraps.readout(self, c, d))
+		parts.append_array(WiringLinks.readout(self, c, d))
 		return " | ".join(parts)
+	if target.has("cell") and not wires.is_empty():
+		var wk := WiringLinks.key(target.cell)
+		if wires.has(wk) and net_of.has(wk):
+			var wid: int = net_of[wk]
+			return "Wire brick -- net level %d | %d parts" % [int(nets[wid].level), nets[wid].cells.size()]
 	if target.has("cable") and net_of.has(target.cable):
 		var id: int = net_of[target.cable]
 		var n_dev := 0
@@ -2042,17 +2449,6 @@ func show_wrench(on: bool, target: Dictionary) -> void:
 # ---------------------------------------------------------------------------
 # Drawing
 
-const _SHADER := """
-shader_type spatial;
-varying vec4 tint;
-void vertex() { tint = COLOR; }
-void fragment() {
-	ALBEDO = tint.rgb;
-	ROUGHNESS = 0.45;
-	EMISSION = tint.rgb * tint.a * 1.6;
-}
-"""
-
 const _XRAY_SHADER := """
 shader_type spatial;
 render_mode unshaded, depth_test_disabled, cull_disabled, blend_mix;
@@ -2067,11 +2463,11 @@ void fragment() {
 
 func _make_draw() -> void:
 	var mat := ShaderMaterial.new()
-	mat.shader = Shader.new()
-	mat.shader.code = _SHADER
+	mat.shader = wire_shader(false)
 	_tiles_mi = _multi("CableTiles", _box_mesh(Vector3(0.94, 0.86, 0.94)), mat)
 	_cable_mi = _multi("Cables", _box_mesh(Vector3(1, 1, 1)), mat)
 	_string_mi = _multi("TripStrings", _box_mesh(Vector3(1, 1, 1)), mat)
+	_wire_mi = _multi("WireBands", _box_mesh(Vector3(1, 1, 1)), mat)
 	var xmat := ShaderMaterial.new()
 	xmat.shader = Shader.new()
 	xmat.shader.code = _XRAY_SHADER
@@ -2111,12 +2507,15 @@ static func _box_mesh(size: Vector3) -> BoxMesh:
 func _redraw() -> void:
 	if _tiles_mi == null:
 		return
+	if _wire_mi != null:
+		WiringLinks.draw(self, _wire_mi.multimesh)
 	var tiles := _tiles_mi.multimesh
 	var arms := _cable_mi.multimesh
 	var tile_h := _plate * 0.86
 	var cab_h := _plate * 0.22
 	var cab_w := _stud * 0.26
-	var parts: Array = []   # [Transform3D, Color]
+	var parts: Array = []   # [Transform3D, Color, light]
+	var lit := light_fn.is_valid()
 	tiles.instance_count = cables.size()
 	var i := 0
 	for c in cables:
@@ -2124,10 +2523,13 @@ func _redraw() -> void:
 		tiles.set_instance_transform(i, Transform3D(Basis.from_scale(Vector3(_stud, _plate, _stud)),
 				base + Vector3(0, tile_h * 0.5, 0)))
 		tiles.set_instance_color(i, COL_TILE)
+		var lc := _light_col(c) if lit else Color()
+		if lit:
+			tiles.set_instance_custom_data(i, lc)
 		i += 1
 		var col := COL_ON if level_at(c) > 0 else COL_OFF
 		var top := base.y + tile_h + cab_h * 0.5
-		parts.append([Transform3D(Basis.from_scale(Vector3(cab_w, cab_h, cab_w)), Vector3(base.x, top, base.z)), col])
+		parts.append([Transform3D(Basis.from_scale(Vector3(cab_w, cab_h, cab_w)), Vector3(base.x, top, base.z)), col, lc])
 		for s in SIDES:
 			var linked := false
 			for dy in range(-STEP, STEP + 1):
@@ -2139,11 +2541,13 @@ func _redraw() -> void:
 			var len_x := half if s.x != 0 else cab_w
 			var len_z := half if s.z != 0 else cab_w
 			var mid := Vector3(base.x + s.x * half * 0.5, top, base.z + s.z * half * 0.5)
-			parts.append([Transform3D(Basis.from_scale(Vector3(len_x, cab_h, len_z)), mid), col])
+			parts.append([Transform3D(Basis.from_scale(Vector3(len_x, cab_h, len_z)), mid), col, lc])
 	arms.instance_count = parts.size()
 	for k in parts.size():
 		arms.set_instance_transform(k, parts[k][0])
 		arms.set_instance_color(k, parts[k][1])
+		if lit:
+			arms.set_instance_custom_data(k, parts[k][2])
 	# Strings: one per pair.
 	var strings: Array = []
 	for a in pairs:
@@ -2159,12 +2563,15 @@ func _redraw() -> void:
 		var sz := slen if absf(along.z) > 0.5 else 0.02
 		var on := int(devices[a].out) > 0
 		strings.append([Transform3D(Basis.from_scale(Vector3(sx, 0.02, sz)), (pa + pb) * 0.5),
-				Color(0.95, 0.25, 0.2, 0.6) if on else Color(0.85, 0.82, 0.75, 0.0)])
+				Color(0.95, 0.25, 0.2, 0.6) if on else Color(0.85, 0.82, 0.75, 0.0),
+				_light_col(a) if lit else Color()])
 	var sm := _string_mi.multimesh
 	sm.instance_count = strings.size()
 	for k in strings.size():
 		sm.set_instance_transform(k, strings[k][0])
 		sm.set_instance_color(k, strings[k][1])
+		if lit:
+			sm.set_instance_custom_data(k, strings[k][2])
 
 
 func _device_node(c: Vector3i, item: StringName, facing := 0) -> Node3D:
@@ -2177,6 +2584,8 @@ func _device_node(c: Vector3i, item: StringName, facing := 0) -> Node3D:
 	match str(def.kind):
 		"dispenser", "dropper", "release", "alarm":
 			WiringTraps.build(self, root, str(def.kind), box, facing)
+		"transmitter", "receiver":
+			WiringLinks.build(self, root, str(def.kind), box)
 		"switch":
 			_add_box(root, Vector3(_stud * 0.92, _plate, _stud * 0.92), Vector3(0, _plate * 0.5, 0), stone)
 			var pivot := Node3D.new()
@@ -2225,18 +2634,12 @@ func _device_node(c: Vector3i, item: StringName, facing := 0) -> Node3D:
 			cyl.bottom_radius = _stud * 0.3
 			cyl.height = _plate * 0.6
 			stud.mesh = cyl
+			stud.name = "GlassStud"
 			stud.material_override = glass
 			stud.position = Vector3(0, box.size.y + _plate * 0.3, 0)
 			root.add_child(stud)
-			var light := OmniLight3D.new()
-			light.name = "Light"
-			light.light_color = Color(1.0, 0.82, 0.55)
-			light.omni_range = 4.5
-			light.light_energy = 1.4
-			light.shadow_enabled = false
-			light.position = Vector3(0, box.size.y * 0.6, 0)
-			light.visible = false
-			root.add_child(light)
+			# Its light, while lit and among the nearest, is one of the pool's
+			# (place_lamp_lights).
 		"door", "trapdoor":
 			# Built with +x the front and +z the right, turned to the facing.
 			# The panel and its collider hang from a hinge: a door's at its
@@ -2418,6 +2821,130 @@ static func _mat(col: Color, rough: float) -> StandardMaterial3D:
 	return m
 
 
+## How many real lamp lights there may be now.
+func lamp_light_cap() -> int:
+	return lamp_lights if lamp_lights >= 0 else BrickGridLight.near_max * 2
+
+
+## The eye (terrain frame): view_fn's, else the mine world's `_eye`, else the
+## viewport's camera, else the player's feet, else the origin.
+func _view_point() -> Vector3:
+	if view_fn.is_valid():
+		return view_fn.call()
+	# The mine world's eye: the camera drawn from, walking or flying (the
+	# viewport's current camera need not be it).
+	if host != null and host.has_method("_eye") and host.is_inside_tree():
+		return host._eye()
+	var vp := get_viewport() if is_inside_tree() else null
+	var cam := vp.get_camera_3d() if vp != null else null
+	if cam != null:
+		return to_local(cam.global_position)
+	if host != null and host.has_method("player_feet_local"):
+		var f: Vector3 = host.player_feet_local()
+		if f != Vector3.INF:
+			return f
+	return Vector3.ZERO
+
+
+## The lit lamps nearest the eye take the pool's lights (made once, before
+## they enter the tree, never freed while the wiring lives); the rest of the
+## pool is hidden. Again when a lamp lights or goes dark, and every
+## LAMP_PICK s while any light is out (the eye moves).
+func place_lamp_lights() -> void:
+	_lamps_dirty = false
+	_lamp_clock = 0.0
+	var cap := lamp_light_cap()
+	var lit: Array = []
+	if cap > 0:
+		var eye := _view_point()
+		for c in devices:
+			var d: Dictionary = devices[c]
+			if bool(d.lit) and DEVICES[d.item].kind == "lamp":
+				lit.append([device_box(c).get_center().distance_squared_to(eye), c])
+		lit.sort_custom(func(a, b): return a[0] < b[0])
+		lit = lit.slice(0, cap)
+	while _lamp_pool.size() < lit.size():
+		var light := OmniLight3D.new()
+		light.name = "LampLight%d" % _lamp_pool.size()
+		light.light_color = Color(1.0, 0.82, 0.55)
+		light.omni_range = 4.5
+		light.light_energy = 1.4
+		light.shadow_enabled = false
+		light.visible = false
+		add_child(light)
+		_lamp_pool.append(light)
+	lamp_light_of.clear()
+	for i in _lamp_pool.size():
+		var light := _lamp_pool[i]
+		if i < lit.size():
+			var c: Vector3i = lit[i][1]
+			var box := device_box(c)
+			light.position = Vector3(box.get_center().x, box.position.y + box.size.y * 0.6, box.get_center().z)
+			light.visible = true
+			lamp_light_of[c] = light
+		elif light.visible:
+			light.visible = false
+
+
+## A device's meshes drawn with MineSkyLit's sky-lit copies and tracked by
+## it, so a device in a dark cave is as dark as the walls (Docs/MineWiring.md
+## 22). A mesh whose glow or see-through changes (set_glow, set_alpha) gets a
+## copy of its own; the rest share one a look.
+func _light_device(root: Node3D) -> void:
+	if _sky == null:
+		return
+	for n in root.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		var std := mi.material_override as StandardMaterial3D
+		if std == null:
+			continue
+		var m: ShaderMaterial = _sky.item_material(std)
+		# Its own copy where its glow, see-through or colour changes (set_glow,
+		# set_alpha, set_colour: a link's antennas take its channel's colours).
+		if std.emission_enabled or std.transparency != BaseMaterial3D.TRANSPARENCY_DISABLED 				or str(mi.name).begins_with("Ant"):
+			m = m.duplicate()
+			if std.emission_enabled:
+				m.set_shader_parameter(&"emission", std.emission)
+		mi.material_override = m
+	_sky.track(root)
+
+
+## A device mesh's glow, on its StandardMaterial3D or its sky-lit copy.
+static func set_glow(mi: GeometryInstance3D, energy: float) -> void:
+	if mi == null:
+		return
+	var m := mi.material_override
+	if m is StandardMaterial3D:
+		(m as StandardMaterial3D).emission_energy_multiplier = energy
+	elif m is ShaderMaterial:
+		(m as ShaderMaterial).set_shader_parameter(&"emission_energy", energy)
+
+
+## A device mesh's colour (a link's antenna), either material; its alpha kept.
+static func set_colour(mi: GeometryInstance3D, col: Color) -> void:
+	if mi == null:
+		return
+	var m := mi.material_override
+	if m is StandardMaterial3D:
+		(m as StandardMaterial3D).albedo_color = col
+	elif m is ShaderMaterial:
+		var old: Color = (m as ShaderMaterial).get_shader_parameter(&"albedo")
+		(m as ShaderMaterial).set_shader_parameter(&"albedo", Color(col.r, col.g, col.b, old.a))
+
+
+## A device mesh's alpha (a gate tile open), either material.
+static func set_alpha(mi: GeometryInstance3D, a: float) -> void:
+	if mi == null:
+		return
+	var m := mi.material_override
+	if m is StandardMaterial3D:
+		(m as StandardMaterial3D).albedo_color.a = a
+	elif m is ShaderMaterial:
+		var col: Color = (m as ShaderMaterial).get_shader_parameter(&"albedo")
+		col.a = a
+		(m as ShaderMaterial).set_shader_parameter(&"albedo", col)
+
+
 ## Turning +x (the model's front) to a facing, about y.
 static func _yaw(f: int) -> float:
 	return [0.0, PI, -PI * 0.5, PI * 0.5][f]
@@ -2432,6 +2959,8 @@ func _show_device(c: Vector3i) -> void:
 	match str(DEVICES[d.item].kind):
 		"dispenser", "dropper", "release", "alarm":
 			WiringTraps.show(self, c, d, node)
+		"transmitter", "receiver":
+			WiringLinks.show(self, d, node)
 		"switch":
 			var arm := node.get_node_or_null("Arm") as Node3D
 			if arm != null:
@@ -2450,10 +2979,10 @@ func _show_device(c: Vector3i) -> void:
 		"lamp":
 			var glass := node.get_node_or_null("Glass") as MeshInstance3D
 			if glass != null:
-				(glass.material_override as StandardMaterial3D).emission_energy_multiplier = 3.0 if bool(d.lit) else 0.0
-			var light := node.get_node_or_null("Light") as OmniLight3D
-			if light != null:
-				light.visible = bool(d.lit)
+				set_glow(glass, 3.0 if bool(d.lit) else 0.0)
+				set_glow(node.get_node_or_null("GlassStud") as MeshInstance3D, 3.0 if bool(d.lit) else 0.0)
+			if bool(d.lit) != lamp_light_of.has(c):
+				_lamps_dirty = true
 		"door":
 			var h := node.get_node_or_null("Turn/Hinge") as Node3D
 			if h != null:
@@ -2468,8 +2997,8 @@ func _show_device(c: Vector3i) -> void:
 				body.collision_layer = 0 if bool(d.on) else Layers.WORLD
 			var bm := node.get_node_or_null("Brick") as MeshInstance3D
 			if bm != null:
-				var m := bm.material_override as StandardMaterial3D
-				m.albedo_color.a = 0.22 if bool(d.on) else 1.0
+				set_alpha(bm, 0.22 if bool(d.on) else 1.0)
+				set_alpha(node.get_node_or_null("Stud") as MeshInstance3D, 0.22 if bool(d.on) else 1.0)
 		"display":
 			var lab := node.get_node_or_null("Turn/Number") as Label3D
 			if lab != null:
@@ -2480,7 +3009,7 @@ func _show_device(c: Vector3i) -> void:
 				turn2.rotation.y = _yaw(int(d.facing))
 				var g2 := turn2.get_node_or_null("Glow") as MeshInstance3D
 				if g2 != null:
-					(g2.material_override as StandardMaterial3D).emission_energy_multiplier = 3.0 if int(d.out) > 0 else 0.0
+					set_glow(g2, 3.0 if int(d.out) > 0 else 0.0)
 		"piston":
 			var head := node.get_node_or_null("Turn/Head") as Node3D
 			if head != null:
@@ -2500,7 +3029,7 @@ func _show_device(c: Vector3i) -> void:
 				turn.rotation.y = _yaw(int(d.facing))
 				var g := turn.get_node_or_null("Glow") as MeshInstance3D
 				if g != null:
-					(g.material_override as StandardMaterial3D).emission_energy_multiplier = 3.0 if int(d.out) > 0 else 0.0
+					set_glow(g, 3.0 if int(d.out) > 0 else 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -2520,8 +3049,13 @@ func to_save() -> Dictionary:
 		var d: Dictionary = devices[c]
 		devs[key_of(c)] = {"item": String(d.item), "on": bool(d.on), "facing": int(d.facing),
 				"setting": int(d.setting)}
+		if d.has("program"):
+			devs[key_of(c)]["program"] = (d.program as Array).duplicate()
 		WiringTraps.save_extra(d, devs[key_of(c)])
-	return {"cables": flat, "devices": devs}
+	var wflat: Array = []
+	for k in wires:
+		wflat.append_array([k.x, k.y, k.z])
+	return {"cables": flat, "devices": devs, "wires": wflat}
 
 
 func restore(saved) -> void:
@@ -2532,6 +3066,14 @@ func restore(saved) -> void:
 	if flat is Array:
 		for i in range(0, flat.size() - 2, 3):
 			place_cable(Vector3i(int(flat[i]), int(flat[i + 1]), int(flat[i + 2])), true)
+	# Wire bricks as saved (the ground may not be laid yet; the next check
+	# over them sets them right).
+	var wflat = saved.get("wires", [])
+	if wflat is Array:
+		for i in range(0, wflat.size() - 2, 3):
+			var wk := Vector3i(int(wflat[i]), int(wflat[i + 1]), int(wflat[i + 2]))
+			wires[wk] = true
+			_changed_cells.append(wk)
 	var devs = saved.get("devices", {})
 	if devs is Dictionary:
 		for k in devs:
@@ -2543,6 +3085,8 @@ func restore(saved) -> void:
 			if place_device(at, StringName(str(e.get("item", ""))),
 					bool(e.get("on", false)), true, int(e.get("facing", 0)), int(e.get("setting", -1))):
 				WiringTraps.restore_extra(devices[at], e)
+				if e.get("program") is Array:
+					set_program(at, e.program)
 	# Loading is not a change: no observer fires for it.
 	for c in devices:
 		if str(DEVICES[devices[c].item].kind) == "observer":

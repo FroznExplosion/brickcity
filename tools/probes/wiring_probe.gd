@@ -46,6 +46,26 @@ extends SceneTree
 ##   sequencer program [5, 5, 5]: 5 on, 5 off, 5 on, then off though its back
 ##             stays on; RMB picks the next program; it is saved.
 ##   display   shows the level beside it: 15 with the lever on, 0 off.
+## The gaps after stage 4 (Docs/MineWiring.md 21-27):
+##   creatures a creature's feet press a tile and cross a string as the
+##             player's do; a dead or held one does not; a far one counts
+##             where it was last (21).
+##   gate tile a bridge of gate tiles hanging off one that stands falls
+##             whole when that one's ground goes (check); taking the tile
+##             that joins it drops the rest the next tick, not the one on
+##             ground; a stack on a hanging tile goes with it (24).
+##   cave light wires laid with a light source take its levels per cell
+##             (dark under a roof, 15 in the open), drawn by the SKY_LIT wire
+##             shader with per-instance data; an edit asks the cells near it
+##             again; a device's glow and alpha change on a sky-lit copy as on
+##             its StandardMaterial3D (22).
+##   lamps     of 12 lit lamps only the 4 nearest the eye (the cap) hang a
+##             real light, from a pool; the eye moved, the nearest change; a
+##             lamp gone dark gives its light up; Off (0) hangs none; no lamp
+##             has a light of its own (23).
+##   sequencer a program of its own (2 on, 3 off, 1 on) runs exactly so; it
+##             is saved; RMB's preset step drops it; the panel shows its steps,
+##             adds and takes one, sets a preset, and closes (25).
 ## Stage 4 (Docs/MineWiring.md 18), on placed bricks of the probe's own:
 ##   piston    facing up, a 2x2 placed brick rises a course and is still one
 ##             brick; a plain piston leaves it, a sticky one pulls it back
@@ -57,6 +77,15 @@ extends SceneTree
 ##             the way stalls; power at its front does not count; 4 pushes
 ##             a tick, the fifth the next; laid facing up when looking down
 ##             (a gate not); the wrench's turn order; saved.
+## Stage 7 (Docs/MineWiring.md 20):
+##   wire brick a terrain material; a check over an edit finds wire bricks,
+##             a wall of them carries a lever's power up and along to a lamp,
+##             the wrench reads its net, one broken cuts the circuit, a wire
+##             on its top joins it, saved.
+##   links     a receiver 40 studs away follows its transmitter's channel;
+##             another channel stays dark; RMB / shift+RMB step the two
+##             colours; the readout names the channel; no latch beside its
+##             own transmitter; the channel is saved.
 
 var _pass := 0
 var _fail := 0
@@ -112,8 +141,10 @@ func _init() -> void:
 	_stage3(w)
 	_stage3b(w)
 	_stage4(w)
+	_stage7(w)
 	_save(w)
 	_save2(w)
+	_gaps(w)
 	_items()
 	w.queue_free()
 	print("WIRING-PROBE %s (%d ok, %d fail)" % ["PASS" if _fail == 0 else "FAIL", _pass, _fail])
@@ -656,8 +687,11 @@ func _items() -> void:
 	_ok("every device is an item of kind device, and the wrench", every and ItemCatalog.kind(&"wrench") == "wrench")
 	_ok("in game it is called Wire, and the ore Wire ore (names decided 2026-11-26)", str(ItemCatalog.get_def(&"cable").name) == "Wire"
 			and ItemCatalog.has(&"redstone_ore") and str(ItemCatalog.get_def(&"redstone_ore").name) == "Wire ore")
+	_ok("the wire brick is a block item named Wire brick", ItemCatalog.has(&"wire_brick")
+			and ItemCatalog.kind(&"wire_brick") == "block" and str(ItemCatalog.get_def(&"wire_brick").name) == "Wire brick"
+			and int(ItemCatalog.get_def(&"wire_brick").material) == BrickTerrain.MAT_WIRE_BRICK)
 	_ok("their kinds: wire, device", ItemCatalog.kind(&"cable") == "wire" and ItemCatalog.kind(&"lever") == "device")
-	for id in [&"cable", &"lever", &"lamp", &"button", &"pressure_tile", &"trip_hook", &"and_gate", &"wrench", &"piston", &"sticky_piston"]:
+	for id in [&"cable", &"lever", &"lamp", &"button", &"pressure_tile", &"trip_hook", &"and_gate", &"wrench", &"piston", &"sticky_piston", &"wire_transmitter", &"wire_receiver"]:
 		var m := ItemIcons._model(ItemCatalog.get_def(id))
 		_ok("%s has a model" % id, m != null and m.get_child(0).get_child_count() >= 2)
 		m.free()
@@ -962,3 +996,333 @@ func _stage4(w: MineWiring) -> void:
 			and w2.devices[p].item == &"sticky_piston")
 	w2.queue_free()
 	_reset(w)
+
+
+# --- stage 7: wireless links and wire bricks ---------------------------------
+
+## A wire brick's stud of a course: its three plates, as the builder lays it.
+func _wire(x: int, course: int, z: int) -> void:
+	for p in 3:
+		_holes.erase(Vector3i(x, course * 3 + p, z))
+		_extra[Vector3i(x, course * 3 + p, z)] = WiringLinks.wire_material()
+
+
+func _stage7(w: MineWiring) -> void:
+	print("stage 7: wireless links, wire bricks")
+	_ok("the wire brick is a terrain material (%d)" % WiringLinks.wire_material(),
+			WiringLinks.wire_material() == BrickTerrain.MAT_WIRE_BRICK and WiringLinks.wire_material() > 0)
+	# A wall of wire bricks: a lever at its foot, a lamp at its far side two
+	# courses up -- the signal runs up and along inside it.
+	_reset(w)
+	var lev := Vector3i(100, 0, 100)
+	var lamp := Vector3i(103, 3, 100)
+	_wire(101, 0, 100)
+	_wire(101, 1, 100)
+	_wire(102, 1, 100)
+	for y in 3:
+		_extra[Vector3i(103, y, 100)] = true    # the lamp's ground
+	w.check(Vector3i(99, -1, 99), Vector3i(104, 8, 101))
+	w.place_device(lev, &"lever")
+	w.place_device(lamp, &"lamp")
+	_ticks(w, 2)
+	_ok("the edit's check finds three wire bricks, one net", w.wires.size() == 3 and w.net_of.has(Vector3i(101, 0, 100))
+			and w.net_of[Vector3i(101, 0, 100)] == w.net_of[Vector3i(102, 3, 100)])
+	_ok("lever off: the lamp dark", not w.is_lit(lamp))
+	w.use_device(lev)
+	_ticks(w, 2)
+	_ok("lever on: up the wall and along it, the lamp lit", w.is_lit(lamp))
+	_ok("the wrench reads a wire brick's net", w.readout({"cell": Vector3i(101, 4, 100)}).contains("Wire brick")
+			and w.readout({"cell": Vector3i(101, 4, 100)}).contains("level 15"))
+	# A shot (or a pickaxe) breaks the middle one: the circuit is cut.
+	for p in 3:
+		_extra.erase(Vector3i(101, 3 + p, 100))
+		_holes[Vector3i(101, 3 + p, 100)] = true
+	w.check(Vector3i(101, 3, 100), Vector3i(101, 5, 100))
+	_ticks(w, 2)
+	_ok("the middle wire brick broken: gone from the nets, the lamp dark", not w.wires.has(Vector3i(101, 3, 100))
+			and not w.is_lit(lamp))
+	# A cable on a wire brick's top joins its net.
+	_reset(w)
+	_wire(110, 0, 100)
+	for y in 3:
+		_extra[Vector3i(111, y, 100)] = true
+	w.check(Vector3i(109, -1, 99), Vector3i(112, 3, 101))
+	w.place_cable(Vector3i(110, 3, 100))
+	w.place_device(Vector3i(109, 0, 100), &"lever", true)
+	w.place_device(Vector3i(111, 3, 100), &"lamp")
+	_ticks(w, 3)
+	_ok("a wire on a wire brick's top joins it: lit through both", w.is_lit(Vector3i(111, 3, 100)))
+	# Saved and back.
+	var saved: Variant = JSON.parse_string(JSON.stringify(w.to_save()))
+	var w2 := MineWiring.new()
+	w2.solid_fn = _solid
+	root.add_child(w2)
+	w2.restore(saved)
+	_ticks(w2, 3)
+	_ok("saved: the wire brick and the lit lamp come back", w2.wires.has(Vector3i(110, 0, 100))
+			and w2.is_lit(Vector3i(111, 3, 100)))
+	w2.queue_free()
+	# Wireless: a transmitter beside a lever, a receiver far away beside a lamp.
+	_reset(w)
+	var tx := Vector3i(120, 0, 100)
+	var rx := Vector3i(150, 0, 130)
+	var tl := Vector3i(119, 0, 100)
+	var rl := Vector3i(151, 0, 130)
+	w.place_device(tl, &"lever")
+	w.place_device(tx, &"wire_transmitter")
+	w.place_device(rx, &"wire_receiver")
+	w.place_device(rl, &"lamp")
+	_ticks(w, 2)
+	_ok("unpowered: the far lamp dark", not w.is_lit(rl))
+	w.use_device(tl)
+	_ticks(w, 3)
+	_ok("the lever on: the receiver 40 studs away lights its lamp", w.output_of(rx) == 15 and w.is_lit(rl))
+	w.use_device(rx)
+	_ticks(w, 3)
+	_ok("the receiver's first colour stepped: another channel, dark (%s)" % WiringLinks.channel_name(int(w.devices[rx].setting)),
+			not w.is_lit(rl) and int(w.devices[rx].setting) == 8)
+	w.use_device(tx, "use2")
+	w.use_device(tx)
+	w.use_device(rx, "use2")
+	_ticks(w, 3)
+	_ok("both on blue + blue (RMB, shift + RMB): lit again", int(w.devices[tx].setting) == 9
+			and int(w.devices[rx].setting) == 9 and w.is_lit(rl))
+	_ok("the wrench names the channel", w.readout({"device": rx}).contains("channel blue + blue"))
+	w.use_device(tl)
+	_ticks(w, 3)
+	_ok("the lever off: dark", not w.is_lit(rl))
+	# A receiver beside its own channel's transmitter does not hold it on.
+	_reset(w)
+	w.place_device(tl, &"lever")
+	w.place_device(tx, &"wire_transmitter")
+	var rnear := Vector3i(121, 0, 100)
+	w.place_device(rnear, &"wire_receiver")
+	w.use_device(tl)
+	_ticks(w, 3)
+	var on1 := w.output_of(rnear) == 15
+	w.use_device(tl)
+	_ticks(w, 4)
+	_ok("a receiver beside its own transmitter: on with the lever, off again (no latch)", on1 and w.output_of(rnear) == 0)
+	# The channel is saved.
+	w.use_device(rnear, "use2")
+	var saved2: Variant = JSON.parse_string(JSON.stringify(w.to_save()))
+	var w3 := MineWiring.new()
+	w3.solid_fn = _solid
+	root.add_child(w3)
+	w3.restore(saved2)
+	_ok("a receiver's channel comes back", int(w3.devices[rnear].setting) == 1)
+	w3.queue_free()
+	_reset(w)
+
+
+## A creature as MineWiring.creature_feet reads one (Mob's fields).
+class FakeMob:
+	extends RefCounted
+	var at := Vector3.ZERO
+	var last_feet := Vector3.ZERO
+	var far := false
+	var held := false
+	var dead := false
+
+	func is_dead() -> bool:
+		return dead
+
+	func feet() -> Vector3:
+		return at
+
+
+func _gaps(w: MineWiring) -> void:
+	print("gaps")
+	_gap_creatures(w)
+	_gap_gatetiles(w)
+	_gap_light()
+	_gap_lamps(w)
+	_gap_sequencer(w)
+
+
+func _gap_creatures(w: MineWiring) -> void:
+	w.clear()
+	_bodies = []
+	var tile := Vector3i(2, 0, 40)
+	var lamp := Vector3i(3, 0, 40)
+	w.place_device(tile, &"pressure_tile")
+	w.place_device(lamp, &"lamp")
+	var top := w.device_box(tile).end.y
+	var m := FakeMob.new()
+	m.at = Vector3(2.5 * 0.35, top, 40.5 * 0.35)
+	m.last_feet = Vector3(30.0, 0.0, 30.0)
+	_bodies = MineWiring.creature_feet([m])
+	_ticks(w, 3)
+	_ok("a creature on a pressure tile lights its lamp", w.is_lit(lamp))
+	m.dead = true
+	_bodies = MineWiring.creature_feet([m])
+	_ticks(w, 8)
+	_ok("a dead one does not", not w.is_lit(lamp))
+	m.dead = false
+	m.held = true
+	_ok("nor a held one", MineWiring.creature_feet([m]).is_empty())
+	m.held = false
+	m.far = true
+	_ok("a far one counts where it was last", MineWiring.creature_feet([m]) == [m.last_feet])
+	_bodies = []
+	w.clear()
+
+
+func _gap_gatetiles(w: MineWiring) -> void:
+	w.clear()
+	# A pit under x 41..44 at z 50: A stands at 40, B..D hang off it, E on D.
+	for x in range(41, 45):
+		_holes[Vector3i(x, -1, 50)] = true
+	var a := Vector3i(40, 0, 50)
+	var row: Array[Vector3i] = [a, Vector3i(41, 0, 50), Vector3i(42, 0, 50), Vector3i(43, 0, 50)]
+	var placed := true
+	for c in row:
+		placed = placed and w.place_device(c, &"gate_tile")
+	var e := Vector3i(43, 3, 50)
+	placed = placed and w.place_device(e, &"gate_tile")
+	w.check(Vector3i(39, -2, 49), Vector3i(45, 6, 51))
+	_ok("a bridge of gate tiles hangs off the one that stands", placed and w.devices.size() == 5)
+	# Taking the joining tile: what hangs past it falls the next tick.
+	w.remove_device(Vector3i(41, 0, 50))
+	w.tick()
+	_ok("the tile joining it taken: the rest falls, the standing one stays",
+			w.devices.size() == 1 and w.devices.has(a))
+	# Again, then the ground under the standing one goes.
+	for c in row.slice(1):
+		w.place_device(c, &"gate_tile")
+	w.place_device(e, &"gate_tile")
+	_holes[Vector3i(40, -1, 50)] = true
+	var gone := w.check(Vector3i(40, -1, 50), Vector3i(40, -1, 50))
+	_ok("the ground under the standing one gone: all five fall (%d)" % gone, w.devices.is_empty() and gone == 5)
+	for x in range(40, 45):
+		_holes.erase(Vector3i(x, -1, 50))
+	w.clear()
+
+
+func _gap_light() -> void:
+	# A wiring of its own: the sky light stays on it.
+	var w := MineWiring.new()
+	w.solid_fn = _solid
+	root.add_child(w)
+	var roof := {"z": 61}   # cells at z >= roof.z are under a roof: level 0
+	w.use_sky_light(func(p: Vector3) -> Vector2: return Vector2(0.0 if floori(p.z / 0.35) >= int(roof.z) else 15.0, 0.0))
+	for z in range(58, 64):
+		w.place_cable(Vector3i(5, 0, z))
+	w.ask_lights(true)
+	w.tick()
+	var mat := w._tiles_mi.material_override as ShaderMaterial
+	_ok("the wires draw with the sky-lit shader, data per instance", mat != null and mat.shader == MineWiring.wire_shader(true)
+			and w._tiles_mi.multimesh.use_custom_data and w._cable_mi.multimesh.use_custom_data)
+	_ok("open cells 15, roofed cells 0", w.cell_light.get(Vector3i(5, 0, 59), Vector2.ZERO).x == 15.0
+			and w.cell_light.get(Vector3i(5, 0, 62), Vector2.ONE).x == 0.0 and w.lights_asked == 6)
+	roof.z = 59
+	w.check(Vector3i(5, 0, 59), Vector3i(5, 2, 60))
+	w.ask_lights(true)
+	_ok("the roof grown (an edit): the cells near it asked again, now dark",
+			w.cell_light.get(Vector3i(5, 0, 59), Vector2.ONE).x == 0.0 and w.lights_asked == 12)
+	w.queue_free()
+	# Glow and alpha on either material.
+	var mi := MeshInstance3D.new()
+	var std := StandardMaterial3D.new()
+	mi.material_override = std
+	MineWiring.set_glow(mi, 3.0)
+	var sm := ShaderMaterial.new()
+	sm.shader = MineSkyLit.item_shader(true)
+	sm.set_shader_parameter(&"albedo", Color(0.2, 0.4, 0.5, 1.0))
+	var mi2 := MeshInstance3D.new()
+	mi2.material_override = sm
+	MineWiring.set_glow(mi2, 2.0)
+	MineWiring.set_alpha(mi2, 0.22)
+	_ok("glow and alpha set on a StandardMaterial3D and on a sky-lit copy", std.emission_energy_multiplier == 3.0
+			and float(sm.get_shader_parameter(&"emission_energy")) == 2.0
+			and is_equal_approx((sm.get_shader_parameter(&"albedo") as Color).a, 0.22))
+	mi.free()
+	mi2.free()
+
+
+func _gap_lamps(w: MineWiring) -> void:
+	w.clear()
+	var eye := {"p": Vector3(0.0, 0.0, 70.0 * 0.35)}
+	w.view_fn = func() -> Vector3: return eye.p
+	w.lamp_lights = 4
+	var lev := Vector3i(0, 0, 72)
+	var lamps: Array[Vector3i] = []
+	for x in range(0, 12):
+		w.place_cable(Vector3i(x, 0, 71))
+		var l := Vector3i(x, 0, 70)
+		w.place_device(l, &"lamp")
+		lamps.append(l)
+	w.place_device(lev, &"lever", true)
+	_ticks(w, 3)
+	w.place_lamp_lights()
+	var lit := lamps.filter(func(c): return w.is_lit(c)).size()
+	var shown := w._lamp_pool.filter(func(l): return l.visible).size()
+	_ok("12 lamps lit, 4 real lights, on the 4 nearest the eye (%d lit, %d lights)" % [lit, shown],
+			lit == 12 and shown == 4 and w.lamp_light_of.size() == 4
+			and lamps.slice(0, 4).all(func(c): return w.lamp_light_of.has(c)))
+	_ok("a lamp has no light of its own", (w.devices[lamps[0]].node as Node).find_children("*", "Light3D", true, false).is_empty())
+	eye.p = Vector3(11.0 * 0.35, 0.0, 70.0 * 0.35)
+	w.place_lamp_lights()
+	_ok("the eye at the other end: the lights there", lamps.slice(8).all(func(c): return w.lamp_light_of.has(c))
+			and w._lamp_pool.size() == 4)
+	w.use_device(lev)
+	_ticks(w, 3)
+	w.place_lamp_lights()
+	_ok("all dark: no light shows", w.lamp_light_of.is_empty() and w._lamp_pool.all(func(l): return not l.visible))
+	w.use_device(lev)
+	_ticks(w, 3)
+	w.lamp_lights = 0
+	w.place_lamp_lights()
+	_ok("Lamp Lights Off: none", w.lamp_light_of.is_empty())
+	w.lamp_lights = -1
+	w.view_fn = Callable()
+	w.clear()
+
+
+func _gap_sequencer(w: MineWiring) -> void:
+	w.clear()
+	var lev := Vector3i(9, 0, 90)
+	var sq := Vector3i(10, 0, 90)
+	w.place_device(lev, &"lever")
+	w.place_device(sq, &"sequencer", false, false, 0, 0)
+	_ok("set_program takes only a sequencer", w.set_program(sq, [2, 3, 1]) and not w.set_program(lev, [1]))
+	_ticks(w, 2)
+	w.use_device(lev)
+	var pattern := ""
+	for i in 10:
+		w.tick()
+		pattern += "1" if w.output_of(sq) > 0 else "0"
+	_ok("its own program 2 on, 3 off, 1 on runs so (%s)" % pattern, pattern == "1100010000")
+	_ok("the steps are kept to 1..%d ticks, %d steps" % [MineWiring.STEP_MAX, MineWiring.PROGRAM_STEPS],
+			w.set_program(sq, [0, 500] + range(30)) and w.program_of(sq).size() == MineWiring.PROGRAM_STEPS
+			and w.program_of(sq)[0] == 1 and w.program_of(sq)[1] == MineWiring.STEP_MAX)
+	w.set_program(sq, [4, 6, 8])
+	var saved: Variant = JSON.parse_string(JSON.stringify(w.to_save()))
+	var w2 := MineWiring.new()
+	w2.solid_fn = _solid
+	root.add_child(w2)
+	w2.restore(saved)
+	_ok("its own program comes back after a save", w2.program_of(sq) == [4, 6, 8])
+	w2.queue_free()
+	w.use_device(sq)
+	_ok("RMB's preset step drops it for the next preset", not w.devices[sq].has("program")
+			and w.program_of(sq) == MineWiring.PROGRAMS[1])
+	# The panel, on a host of the probe's own.
+	var host := Node.new()
+	root.add_child(host)
+	var p := SequencerPanel.open_on(host, w, sq)
+	_ok("the panel shows the preset's steps", p.steps() == MineWiring.PROGRAMS[1])
+	p.type_steps([3, 7])
+	p._add_step()
+	_ok("typed 3, 7, then + step: the sequencer's program is 3, 7, 5", w.program_of(sq) == [3, 7, 5]
+			and p.steps() == [3, 7, 5])
+	p._take_step()
+	p._take_step()
+	p._take_step()
+	_ok("- step down to one, no further", w.program_of(sq) == [3])
+	p._preset(3)
+	_ok("a preset button: that preset", w.program_of(sq) == MineWiring.PROGRAMS[3] and not w.devices[sq].has("program"))
+	p.close()
+	_ok("Done closes it", not p.is_open())
+	host.queue_free()
+	w.clear()

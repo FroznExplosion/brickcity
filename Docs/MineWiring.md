@@ -524,7 +524,7 @@ items in `content/base/data/items/wiring.json`.
   (`MineBuilder.rmb_repeat`): stage 1 turned a lever every 0.22 s while the
   button was held.
 - **Bodies** are the player's feet (`player_feet_local`); AI pawns do not
-  press tiles or trip strings yet.
+  press tiles or trip strings yet (creatures do since section 21).
 - Saved: each device's facing and setting beside its item and state.
 
 Tests: `wiring_probe` 82 ok (stage 2: the button's second, the tile on and
@@ -583,13 +583,12 @@ trapdoor over a dug pit opens from a lever; all back after a reload.
   each tick) -- so a lever at one end opens a whole wall, or drops a whole
   bridge. Held by ground under it or by another gate tile under or beside it
   (a bridge hangs off one that stands; a gate tile does not yet fall when
-  the one holding it goes).
+  the one holding it goes -- it does since section 24).
 - **Sequencer** (`sequencer`, a facing gate, Create's sequenced gearshift):
   its back turning on starts a program of steps out of its front -- ticks
   on, off, on, ... -- and a turn-on while it runs is ignored. RMB steps
   through `PROGRAMS` ([5,5,5], [10], [2,2,2,2,2], [20,10,20], seven 3s,
-  [10,30,10]); the wrench shows the program. A program editor panel is
-  later.
+  [10,30,10]); the wrench shows the program. A program editor panel: section 25.
 - **Number display** (`number_display`): a 2-stud brick facing a way with
   the level (0-15) of what touches it printed on its front (a Label3D). It
   drives nothing.
@@ -856,8 +855,8 @@ files). Wolves and boars are not called yet.
 **Not yet.** Placer and breaker bricks (5b); a shooter that aims; a recipe
 for arrows (creative catalog only); a bow; primed grenades (the grenade chute
 of section 8: a dropper drops grenades as pickups, a shooter throws them);
-AI pawns do not press tiles or trip strings
-(section 14); the alarm calls zombies only.
+creatures press tiles and trip strings since section 21 (the mine world has
+no AI pawns); the alarm calls zombies only.
 
 Tests: `tools/probes/wiring_traps_probe.gd` (headless, its own ground) -- 53
 ok: arrows shot one a turn-on, other items launched, a dropper dropping even
@@ -879,6 +878,258 @@ trench is dug: a zombie stood at the trench's edge, its way over the fallen
 bridge -- unverified, the creatures' nav), all
 back after generating again. Pictures `user://dev/wiring_traps.png`,
 `wiring_bridge.png`, `wiring_bridge_fell.png`.
+
+## 20. Stage 7, built (2026-11-27): wireless links and wire bricks
+
+`scripts/wiring/wiring_links.gd` (`WiringLinks`, static, `w` untyped as the
+traps kit's), hooked into `MineWiring` at links, side nets, the rebuild,
+`check`, the tick (step 3e), use, the look, the readout, drawing and saving.
+
+- **Wire brick** (3.3 point 2): a terrain material, `MAT_WIRE_BRICK` (42),
+  appended to the C++ `Material` enum (append only; name "wire brick", the
+  dark grey filament, the constant bound). That is the whole C++ change:
+  `ItemCatalog` makes every material a block item, so `wire_brick` ("Wire
+  brick", the override in `wiring.json`) is laid by the builder, bonded,
+  shot, dug and dropped like any brick, and a piston moves it. The terrain
+  shader is not touched: an unknown material draws plain (no PBR set).
+  - **In the nets:** a stud of a course of it is one node (`wires`, keyed
+    by its bottom plate cell; a cable never shares a cell with it, as the
+    wire brick is solid). It links to the wire bricks at its sides, over
+    and under it, the cable on its top and the cables at its sides (any of
+    its three plates); a cable to the wire brick it lies on and those at
+    its sides; a device reads and drives the wire bricks at its sides (at
+    any of its plates), not the one it stands on.
+  - **Found and lost** by `WiringLinks.scan` over every edit's box
+    (`check`, from `terrain_edited`): it reads the cells on the CPU
+    (`solid_at`), so a shot, a pickaxe, a blast, the collapse or a piston
+    moving one changes the net the next tick. A whole-world check (a box
+    over 400,000 course-studs) does not scan.
+  - **Drawn** with a copper band round each node's middle (one MultiMesh
+    with the cables' shader): dull copper, glowing while its net is on. No
+    tile rebakes for power.
+  - Saved in the wiring's record (`"wires"`), trusted on load and set right
+    by the next check over them.
+- **Wire transmitter / wire receiver** (`wire_transmitter`,
+  `wire_receiver`): a brick (a collider: found and shot) with two round
+  antennas on top. Their two colours are the **channel** -- red, blue,
+  yellow, green, white, black, orange, purple: 8 x 8 = 64 (Create's
+  Redstone Link pair, 12); `setting` = first x 8 + second. RMB steps the
+  first colour, **shift + RMB** the second (the builder sends "use2"); the
+  wrench shows "channel red + blue" and what it sends or gets. A
+  transmitter reads the level at its sides (a receiver of its own channel
+  aside, or a pair side by side would hold itself on); each receiver gives
+  the highest of its channel out of every side, a tick later (as a gate's
+  output). **Range: every link the wiring has, the whole loaded world -- no
+  distance limit.** A light on top shows sending / getting. Saved: the
+  channel is the device's `setting`.
+- Items and icons: `wire_transmitter`, `wire_receiver` (model `link`: a
+  brick, two antennas).
+- **Not yet:** a device does not read the wire brick it stands on; a
+  receiver feeding its own transmitter through a cable does hold itself on
+  (as any loop of drivers would); the band glows per node, not per face;
+  links do not reach past the loaded world (a far circuit is frozen, 4).
+
+Tests: `wiring_probe` 170 ok (stage 7: the material; a check over an
+edit finds three wire bricks as one net; a lever lights a lamp up and along
+a wire-brick wall; the wrench reads a wire brick's net; one broken cuts it;
+a cable on a wire brick's top joins it; saved; a receiver 40 studs away
+follows its channel, another channel stays dark, RMB / shift+RMB step the
+colours, the readout names the channel, no latch beside its own
+transmitter, the channel saved; the wire brick is a block item named Wire
+brick; the link models). `--gate=wiring` stage 7: a wire brick laid with
+the builder (a 2x2 block: four nodes) is known to the wiring; a wall of wire
+bricks, one up a course, carries a lever's power to a lamp; a real shot
+breaking its lower brick cuts it; a receiver 14 studs off lights its lamp
+from its transmitter, RMB on it steps its channel (dark), the transmitter
+stepped too (lit), a shot breaking the transmitter darkens it; the wire
+bricks and the receiver's channel back after a reload (`--gate=wiring` 120
+ok in all, the traps kit's sections included, 2026-11-27). Picture
+`user://dev/wiring_wire_bricks.png`. Not seen in a test: the copper band's
+look and glow, the antennas' colours.
+
+## 21. Creatures press tiles (2026-11-27)
+
+Pressure tiles and trip strings read every body's feet (`bodies_fn`); in the
+mine world that was only the player's. Now `_host_bodies` adds every living
+creature of `MineMobs` (zombies, pigs, the herds' kinds): `creature_feet`
+skips the dead and the held, and counts a far creature (its pawn asleep,
+MineMobs' far tier) where it was last (`last_feet`). The mine world has no AI
+pawns of its own (section 19), so creatures are all there is to add. A
+zombie walking onto a pressure tile springs the trap; the alarm (19) calling
+zombies onto one makes a loop the player can build.
+
+Tests: `wiring_probe` (gaps): a creature's feet light a tile's lamp, a dead
+one and a held one do not, a far one counts at `last_feet`. `--gate=wiring`
+(gaps): a real zombie spawned on a pressure tile lights its lamp; killed, the
+tile lets go.
+
+## 22. Sky light on wires and devices (2026-11-27)
+
+Section 13's "not yet": wires and devices were lit as outdoors, so in a dark
+cave they glowed against black walls. They now take the sky light of their
+cell the way chests and drops do (Docs/MineWorld.md 19), only in the mine
+world and only with sky light on (`MineSkyLit` exists).
+
+- **Wires** (tiles, wires, trip strings) are three MultiMeshes, so the level
+  is per instance, the falling sand's way: `INSTANCE_CUSTOM.r` the sky level,
+  `.g` the lava's block level (0..1). The wire shader is now a file,
+  `shaders/wiring.gdshader`; with `#define SKY_LIT` in front (`wire_shader`)
+  it includes `sky_lit.gdshaderinc` and writes AO, SPECULAR and the sun's
+  share as `sky_lit_item.gdshader` does. A powered wire's glow stays (light
+  of its own). The wrench's x-ray is unshaded and unchanged.
+- **Asking**: `cell_light` keeps each wire cell's levels, asked through
+  `light_fn` (MineSkyLit `levels_at`, its frame budget) when a wire is laid,
+  and again for every wire within 16 studs and 16 courses of a ground edit
+  (`check`'s box: light reaches 15), and once more 0.6 s later
+  (`LIGHT_AGAIN`), with MineSkyLit's `dirty_box` for the devices: the sky
+  level reads the tiles' baked tops, which lag an edit until the tile is
+  rebuilt (the gate's first run read a fresh closed room as open sky). Not
+  asked yet: drawn at the eye's level.
+  A level that changed redraws on the next tick. The lava's own relighting
+  (`lava_relit`) does not reach the wires (only an edit does): small.
+- **Devices** are tracked by MineSkyLit like chests (`_light_device`): their
+  StandardMaterial3Ds swapped for its sky-lit copies, shared per look. A
+  mesh whose glow or see-through changes (a lamp's glass, a gate's light, a
+  gate tile, the kit's glows) gets a copy of its own, and those changes now go
+  through `set_glow` / `set_alpha`, which work on either material
+  (`wiring_traps.gd` calls them through its `w`: it never names MineWiring),
+  and a stage 7 link's antenna colours go through `set_colour` (its antennas
+  get copies of their own too).
+- Without a MineSkyLit (other scenes, `--no-sky-light`, the probe's
+  wirings) nothing changes.
+
+Tests: `wiring_probe`: wires laid with a light source of the probe's own take
+its levels (15 open, 0 roofed), draw with the SKY_LIT shader and per-instance
+data, and an edit asks the cells near it again; `set_glow` and `set_alpha` on
+both materials. `--gate=wiring`: in a closed room (stone walls on the
+patch, one 6 x 6 placed brick for its roof) a wire and a lamp are at sky
+level 0, a wire outside at 15 (2026-11-27). The room took three tries: a
+roof course of loose stone over it fell to the collapse (a course is held
+through studs, not by its sides), and a pocket dug in the ground filled with
+the gravel over it.
+
+## 23. Lamp lights: the nearest few, the rest glow (2026-11-27)
+
+Each lamp had its own OmniLight3D: fine for tens, not hundreds (section 13).
+Now no lamp owns a light. The wiring keeps a pool of OmniLight3Ds (4.5 m, no
+shadow, the old values), made once each as needed and never freed, and
+`place_lamp_lights` hangs them on the lit lamps nearest the eye: when a lamp
+lights or goes dark, when one is taken, and every 0.25 s while any light is
+out (the eye moves). The rest of the lit lamps glow (their glass's emission,
+as before) and light nothing.
+
+How many: `lamp_light_cap()` -- `lamp_lights` if set, else Options > Video >
+Lamp Lights (`BrickGridLight.near_max`: Off, 2, 4, 8) times two: 8 by
+default, none with the option Off. The lighting rig's near lamps (Docs/
+Lighting.md 6.5) work on the city's brick grid, which the mine world does not
+have, so this is the same idea (the nearest N real, the rest a cheaper look)
+on the setting the player already has. The eye is the mine world's `_eye`
+(walking or flying). No frame times taken: the change only takes lights
+away.
+
+Tests: `wiring_probe`: of 12 lit lamps only the 4 nearest a probe eye (cap 4)
+have lights, the eye moved moves them, all dark shows none, Off hangs none,
+no lamp node holds a light. `--gate=wiring`: 12 lamps lit by a lever, as many
+lights as the cap (8 at the test window's default settings), on the 8 nearest
+the camera; the lamps taken, none.
+
+## 24. Gate tiles fall when nothing holds them (2026-11-27)
+
+Section 16 left a bridge of gate tiles hanging after the one holding it went.
+Now `drop_unheld_gatetiles` floods support over every gate tile: held are
+those standing on ground (and those riding a piston's move), then any gate
+tile touching a held one -- on it, under it, or with cells beside its cells --
+through any chain. The rest break (`remove_device`: their item drops in
+survival). It runs at the end of every `check` (any ground edit) and on the
+tick after any gate tile is taken (LMB, a shot, a blast, the wrench), so
+breaking the tile that joins a bridge to its standing end drops the rest.
+Placing is unchanged (`_supported`: ground under, or a gate tile under or
+beside).
+
+Tests: `wiring_probe`: a bridge of four tiles and one stacked on its far end
+hang off the one that stands; taking the second tile drops the three past it
+the next tick and keeps the standing one; with all five again, digging the
+standing one's ground drops all five in one `check`. `--gate=wiring`: a
+5-tile bridge over a dug trench falls whole when the ground under its
+standing end is dug out.
+
+## 25. The sequencer's program editor (2026-11-27)
+
+RMB on a sequencer now opens a panel (`scripts/wiring/sequencer_panel.gd`,
+`SequencerPanel`) instead of stepping to the next preset -- with anything in
+the hand but the wrench, whose RMB still turns it (and shift + RMB still takes
+it back). The key: RMB, because it is the device's own use (a delay and a
+pulse step their setting on RMB too) and no other key is free in build mode.
+
+- The panel: a row of number boxes, ticks on, off, on, ... (10 ticks = 1 s),
+  each 1-100 (`STEP_MAX`), up to 16 steps (`PROGRAM_STEPS`); "+ step" adds a
+  5, "- step" takes the last (never below one); a button for each of the six
+  presets (`PROGRAMS`); "Done" or Escape closes it (Escape is taken before the
+  pause menu sees it). Every change is the sequencer's at once
+  (`MineWiring.set_program`; a run under way stops). The title says whether it
+  runs its own program or a preset, and how long it is.
+- While it is open the mouse is free, the walker held, and the builder takes
+  no clicks (`MineWorld.inventory_open` is true); closing puts the mouse back.
+  A sequencer broken while it is open closes it.
+- **Saved**: a program of its own is the device's `program` (beside its
+  setting) in the world file; `program_of` is it, else the preset. A
+  sequencer given a preset again (a preset button, or `use_device`'s step,
+  still there for scripts) drops its own program. The wrench's readout says
+  "own program" or "program".
+
+Tests: `wiring_probe`: an own program 2 on, 3 off, 1 on runs exactly
+1100010000; steps are kept to 1..100 and 16; saved and restored; the preset
+step drops it; the panel shows a preset's steps, typed 3, 7 and "+ step"
+gives 3, 7, 5, "- step" stops at one, a preset button sets it, Done closes
+it. `--gate=wiring`: the builder's RMB on a sequencer (a wire in the hand)
+opens the panel with the mouse free and the builder held; a typed program
+3, 4, 3 runs out of its front in the real tick; a real Escape key closes it
+and does not pause; after generating the world again the program is kept.
+
+## 26. Trapdoor: a player on it falls (2026-11-27)
+
+A gate check only: section 15 tested that a trapdoor opens, not that it
+drops anyone. `--gate=wiring` (gaps) digs a 2 x 2 pit 3 courses deep, lays a
+trapdoor over it (held by the ground beside it) and a lever, puts the player
+ON FOOT on the trapdoor (feet on its top), and turns the lever: the trapdoor
+opens and the player's feet end up below the trapdoor's plate, in the pit.
+The pawn (radius 0.26 m) fits past the hanging panel (0.56 m left of the
+0.7 m pit).
+
+## 27. Pistons: the stand-in as bricks, fallen pieces shoved (2026-11-27)
+
+Section 18's two "not yet"s that were small:
+
+- **The stand-in as the bevelled bricks.** A sliding group was drawn as
+  plain boxes in a vertex-colour material. Now its bricks are one MultiMesh
+  of `BrickNear.bevel_box_mesh()` with the mine world's brick material
+  (`brick.gdshader`, the collapse pieces' look, its MineSkyLit copy with sky
+  light on), each instance its brick's colour (PLA, material 0) and its
+  middle in the custom data, as `brick_boxed.gdshaderinc` reads a box a
+  brick; its sky and lava levels painted on the instance, asked once over the
+  group's top as before. The studs on its tops stay the sky-lit cylinders.
+  Without the mine world's brick material (a scene of its own) it is the
+  plain boxes still (`standin_brick_material`).
+- **Fallen pieces shoved.** A push now finds the collapse pieces
+  (`host.collapse.pieces`, PlanetPieces bodies) in or touching the cells it
+  moves into -- the group's, or the head's when it goes out into the air --
+  wakes one that had settled, and gives it an impulse of the push's speed (a
+  step in 0.2 s: 1.75 m/s sideways with 1.2 m/s of lift so it rides over
+  studs, 2.1 m/s up). A piece resting on a lifted brick is thrown up a
+  little rather than carried. `pieces_shoved` counts them.
+- Still not done: a device riding is moved even if only one of its studs stood
+  on the group (18); the head's own collider does not push the player.
+
+Tests: `--gate=wiring` (gaps): a real push's stand-in is the bevelled box
+with the brick material; a 2 x 2 brick dropped from 5 courses lands as a
+piece in front of a piston, and the head going out wakes and moves it.
+
+**All seven (21-27), 2026-11-27:** with stage 7 merged in, `wiring_probe` 196
+ok, `wiring_traps_probe` 49 ok, `inventory_probe` 164 ok, `-- --gate=wiring`
+143 ok (its gaps section,
+`scripts/wiring/wiring_gaps_gate.gd`, runs before the traps kit; `--gaps`
+alone). The gaps section starts flying (the save section before it ends on
+foot) on a patch of its own 60 studs west of the eye.
 
 ## Sources
 

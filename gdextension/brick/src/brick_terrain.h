@@ -153,6 +153,11 @@ enum Material {
     /// passes it (the sky and block light fills), the overlay lays no brick
     /// of it, and the terrain shader draws it see-through (TERRAIN_GLASS).
     MAT_GLASS,
+    /// A WIRE BRICK (Docs/MineWiring.md 20): a placed brick that carries the
+    /// wiring's signal through itself (the wiring keeps its nets; the copper
+    /// stripe and its glow are the wiring's drawing). Solid and studded like
+    /// any brick; only the wiring treats it differently.
+    MAT_WIRE_BRICK,
     MATERIAL_COUNT
 };
 
@@ -239,6 +244,7 @@ inline int material_filament(int m) {
         case MAT_FARMLAND: return FIL_BROWN;      // dirt's; the shader furrows it
         case MAT_WET_FARMLAND: return FIL_BROWN;  // and darkens the wet one
         case MAT_GLASS: return 44;         // sky blue
+        case MAT_WIRE_BRICK: return FIL_DARK_GREY;   // the stripe is the wiring's
         default: return FIL_GREY;
     }
 }

@@ -2998,7 +2998,7 @@ PackedStringArray BrickTerrain::material_names() {
             "copper ore", "gold ore", "redstone ore", "lapis ore", "diamond ore", "podzol",
             "dry grass", "lush grass", "cold grass", "dark grass", "granite", "diorite", "ice", "obsidian",
             "wood", "leaves", "pale wood", "birch wood", "light leaves",
-            "autumn leaves", "red leaves", "farmland", "wet farmland", "glass" }) {
+            "autumn leaves", "red leaves", "farmland", "wet farmland", "glass", "wire brick" }) {
         out.push_back(n);
     }
     return out;
@@ -9117,6 +9117,7 @@ void BrickTerrain::_bind_methods() {
     ClassDB::bind_integer_constant("BrickTerrain", "Material", "MAT_ROAD", MAT_ROAD);
     ClassDB::bind_integer_constant("BrickTerrain", "Material", "MAT_FARMLAND", MAT_FARMLAND);
     ClassDB::bind_integer_constant("BrickTerrain", "Material", "MAT_WET_FARMLAND", MAT_WET_FARMLAND);
+    ClassDB::bind_integer_constant("BrickTerrain", "Material", "MAT_WIRE_BRICK", MAT_WIRE_BRICK);
     ClassDB::bind_integer_constant("BrickTerrain", "PieceKind", "PIECE_BRICK", PIECE_BRICK);
     ClassDB::bind_integer_constant("BrickTerrain", "PieceKind", "PIECE_TILE", PIECE_TILE);
     ClassDB::bind_integer_constant("BrickTerrain", "PieceKind", "PIECE_RAMP", PIECE_RAMP);

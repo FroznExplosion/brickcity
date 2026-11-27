@@ -54,6 +54,12 @@
 			"description": "A real brick of the ground, with a wire band round it: build on it. Powered, it lets go -- it turns to air and whatever it alone held falls (a bridge, a floor, a roof). It grips again 2 seconds after the power goes." },
 		"alarm": { "name": "Alarm", "kind": "device", "model": "alarm", "max_stack": 64, "hand": "any", "colour": "#c41a10", "glyph": "A",
 			"description": "Powered, it sounds and flashes, and calls every zombie within 48 m to it." },
+		"wire_transmitter": { "name": "Wire transmitter", "kind": "device", "model": "link", "max_stack": 64, "hand": "any", "colour": "#3d4250", "glyph": "T",
+			"description": "Sends the level at its sides to every wire receiver on its channel, however far. The channel is its two antenna colours: right-click steps the first, shift + right-click the second." },
+		"wire_receiver": { "name": "Wire receiver", "kind": "device", "model": "link", "max_stack": 64, "hand": "any", "colour": "#6b707a", "glyph": "R",
+			"description": "Gives out of every side the highest level of the wire transmitters on its channel (its two antenna colours: right-click, shift + right-click)." },
+		"wire_brick": { "name": "Wire brick",
+			"description": "A brick with a copper stripe that carries the wire's signal through itself: build wire inside a wall and up it. A shot or a pickaxe that breaks it cuts the circuit." },
 		"redstone_ore": { "name": "Wire ore",
 			"description": "Ore with copper-red veins: what wire is made from." }
 	}
