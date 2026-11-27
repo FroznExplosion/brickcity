@@ -817,7 +817,8 @@ func _stage4(w: MineWiring) -> void:
 	w.tick()
 	_ok("sideways: the 2x1 a stud over, the brick in its line pushed too", bool(w.devices[sp].on)
 			and _is_brick(62, 0, 80, 2, 1) and _is_brick(64, 0, 80, 1, 1) and _solid(61, 0, 80) == 0)
-	_ok("the cable on the pushed brick's old top broke", not w.cables.has(Vector3i(61, 3, 80)))
+	_ok("the wire on the pushed brick's top rode along", not w.cables.has(Vector3i(61, 3, 80))
+			and w.cables.has(Vector3i(62, 3, 80)))
 	# A lamp in the way stalls it.
 	_reset(w)
 	w.place_device(sp, &"piston", false, false, 0)
@@ -889,6 +890,43 @@ func _stage4(w: MineWiring) -> void:
 	w.use_device(sp, "turn")
 	_ok("the wrench turns -z to up, up to +x (%d, %d)" % [f1, int(w.devices[sp].facing)], f1 == up
 			and int(w.devices[sp].facing) == 0)
+	# What stands on a moved brick rides: a lever and a wire on a brick a
+	# piston lifts go up a course with it, and still work.
+	_reset(w)
+	w.place_device(p, &"piston", false, false, up)
+	w.place_device(lev, &"lever")
+	_brick(40, 1, 80, 3, 1)
+	var rider := Vector3i(40, 6, 80)
+	var rlev := Vector3i(42, 6, 80)
+	w.place_device(rider, &"lamp")
+	w.place_cable(Vector3i(41, 6, 80))
+	w.place_device(rlev, &"lever")
+	w.use_device(lev)
+	w.tick()
+	var up3 := Vector3i(0, 3, 0)
+	_ok("a lamp, a wire and a lever on the lifted brick ride up a course", _is_brick(40, 2, 80, 3, 1)
+			and w.devices.has(rider + up3) and not w.devices.has(rider) and w.devices.has(rlev + up3)
+			and w.cables.has(Vector3i(41, 9, 80)) and not w.cables.has(Vector3i(41, 6, 80)))
+	w.use_device(rlev + up3)
+	_ticks(w, 2)
+	_ok("and still work there: the lever lights the lamp through the wire", w.is_lit(rider + up3))
+	# An out head fills its stud: no wire, no device, no block there.
+	_reset(w)
+	w.place_device(sp, &"piston", false, false, 0)
+	w.place_device(slev, &"lever", true)
+	w.tick()
+	_ok("an out head's stud takes no wire, no device, no block", bool(w.devices[sp].on)
+			and not w.can_place_cable(Vector3i(61, 0, 80)) and not w.can_place_device(Vector3i(61, 0, 80), &"lamp")
+			and w.overlaps(AABB(Vector3(61 * 0.35, 0.0, 80 * 0.35), Vector3(0.35, 0.42, 0.35))))
+	# A sideways move hops over studs, slides on smooth tiles (road).
+	_reset(w)
+	_brick(61, 0, 80, 1, 1)
+	var b1 := w.brick_at(Vector3i(61, 0, 80))
+	var hop_stone := w.hops([b1])
+	for x in range(61, 62):
+		_extra[Vector3i(x, -1, 80)] = BrickTerrain.MAT_ROAD
+	var hop_road := w.hops([b1])
+	_ok("on studs it hops, on road it slides (%s, %s)" % [hop_stone, hop_road], hop_stone and not hop_road)
 	# Saved: facing up, out.
 	w.clear()
 	w.place_device(p, &"sticky_piston", true, false, up)
