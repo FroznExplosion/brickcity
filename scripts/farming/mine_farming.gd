@@ -1094,6 +1094,9 @@ func animal_eat(b: Vector3i) -> bool:
 	var plot := store.get_plot(b)
 	if plot.is_empty() or plot.crop == &"":
 		return false
+	# A giant is past trouble (Docs/MineFarming.md 20): animals leave it.
+	if int(plot.get("giant", 0)) != 0:
+		return false
 	FarmPlant.settle(plot, now())
 	if int(plot.stage) <= 0:
 		plot.crop = &""
