@@ -21,6 +21,10 @@ extends Node3D
 ## Preloaded by path, not named (see terrain_scene.gd).
 
 const WaterSeaFx := preload("res://scripts/water/water_sea.gd")
+## The sea's 1x1 brick pieces reach this far, its 2x2 ones this far (WaterSea
+## defaults 20 and 40 m); the smooth sheet beyond.
+const SEA_FINE_M := 12.0
+const SEA_NEAR_M := 24.0
 const FloatersFx := preload("res://scripts/water/floaters.gd")
 const LavaFireFx := preload("res://scripts/water/lava_fire.gd")
 ## The water meshes carry CUSTOM0 (how far each vertex moved since its tile's
@@ -244,6 +248,17 @@ func reset_world(sea_m: float, near_tiles: int, p_sea_on: bool, p_wave_scale := 
 		sea.see_through = true
 		sea.surface_collide = false     # a ceiling to a swimmer; nothing floats yet
 		sea.wave_gain = 2.2 * wave_scale
+		# The brick tiers' reach (the GPU's water cost is their pieces:
+		# --gate=gpu, 2026-11-27): 1x1 pieces to SEA_FINE_M, 2x2 to SEA_NEAR_M,
+		# the smooth sheet past it. --sea-tiers=FINE,NEAR to compare.
+		sea.fine_radius = SEA_FINE_M
+		sea.near_radius = SEA_NEAR_M
+		for a in OS.get_cmdline_user_args():
+			if a.begins_with("--sea-tiers="):
+				var v := a.get_slice("=", 1).split(",")
+				if v.size() == 2:
+					sea.fine_radius = float(v[0])
+					sea.near_radius = float(v[1])
 		add_child(sea)
 		sea.build_at(FIELD_HALF, SEA_OUTER_M, FIELD_STEP, c, f)
 		sea.push_waves()
