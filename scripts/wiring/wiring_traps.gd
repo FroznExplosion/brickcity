@@ -593,7 +593,7 @@ static func build(w, root: Node3D, k: String, box: AABB, facing: int) -> void:
 
 
 ## A kit device's look follows its state.
-static func show(w, c: Vector3i, d: Dictionary, node: Node3D) -> void:
+static func show(w, _c: Vector3i, d: Dictionary, node: Node3D) -> void:
 	match kind(d.item):
 		"dispenser", "dropper":
 			var turn := node.get_node_or_null("Turn") as Node3D

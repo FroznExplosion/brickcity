@@ -41,6 +41,8 @@ extends RefCounted
 ##   display   a number display laid with the builder reads 15 beside a lever.
 ##   sequencer a sequencer's program runs out of its front in the real tick:
 ##             its lamp is lit, then dark, then lit.
+## Stages 5-6 (Docs/MineWiring.md 19): the traps kit, its own file
+## (wiring_traps_gate.gd), at the end; `-- --gate=wiring --traps` runs it alone.
 ## Preloaded by mine_world.gd (`--gate=wiring`).
 
 var w: Node = null
@@ -62,6 +64,10 @@ func run(host: Node) -> void:
 	w.set_on_foot(false)
 	await w._frames(30)
 	w.builder.aim_trees = false
+	if "--traps" in OS.get_cmdline_user_args():
+		await _traps()   # the traps kit alone (Docs/MineWiring.md 19)
+		_finish()
+		return
 
 	# A flat patch by the spawn: 18 x 12 studs of stone, its top a course's
 	# top, nothing over it.
@@ -362,6 +368,16 @@ func run(host: Node) -> void:
 	check("the gate tile wall is back, solid; the display reads 15", wall.all(func(t): return wr.devices.has(t) and not wr.is_open(t))
 			and wr.output_of(disp) == 15)
 
+	await _traps()
+	_finish()
+
+
+## Stages 5-6, the traps kit: scripts/wiring/wiring_traps_gate.gd.
+func _traps() -> void:
+	await preload("res://scripts/wiring/wiring_traps_gate.gd").new().run(self)
+
+
+func _finish() -> void:
 	print("[wiring-gate] %s" % ("WIRING-GATE PASS" if fails.is_empty() else "WIRING-GATE FAIL: " + "; ".join(fails)))
 	w.get_tree().quit(0 if fails.is_empty() else 1)
 
