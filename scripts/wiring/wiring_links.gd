@@ -257,18 +257,18 @@ static func build(w, root: Node3D, k: String, box: AABB) -> void:
 	dot.name = "Glow"
 
 
-static func show(_w, d: Dictionary, node: Node3D) -> void:
+static func show(w, d: Dictionary, node: Node3D) -> void:
 	@warning_ignore("integer_division")
 	var a := clampi(int(d.setting) / N, 0, N - 1)
 	var b := posmod(int(d.setting), N)
 	for i in 2:
 		var ant := node.get_node_or_null("Ant%d" % i) as MeshInstance3D
 		if ant != null:
-			(ant.material_override as StandardMaterial3D).albedo_color = COLOURS[a if i == 0 else b]
+			w.set_colour(ant, COLOURS[a if i == 0 else b])   # either material (sky light, MineWiring.md 22)
 	var g := node.get_node_or_null("Glow") as MeshInstance3D
 	if g != null:
 		var on := bool(d.lit) if kind(d.item) == "transmitter" else int(d.out) > 0
-		(g.material_override as StandardMaterial3D).emission_energy_multiplier = 3.0 if on else 0.0
+		w.set_glow(g, 3.0 if on else 0.0)
 
 
 static func readout(w, c: Vector3i, d: Dictionary) -> Array[String]:

@@ -1820,7 +1820,22 @@ func inventory_closed() -> void:
 
 
 func inventory_open() -> bool:
-	return _inv_screen != null
+	return _inv_screen != null or (seq_panel != null and is_instance_valid(seq_panel))
+
+
+## RMB on a sequencer: its program editor (Docs/MineWiring.md 25).
+var seq_panel: SequencerPanel = null
+
+
+func open_sequencer(c: Vector3i) -> void:
+	if wiring == null or not wiring.devices.has(c) or _menu != null or inventory_open():
+		return
+	seq_panel = SequencerPanel.open_on(self, wiring, c)
+
+
+func sequencer_closed(p: SequencerPanel) -> void:
+	if seq_panel == p:
+		seq_panel = null
 
 
 ## RMB on a chest: its slots borrowed by the inventory, the screen open on it.

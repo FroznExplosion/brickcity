@@ -46,6 +46,26 @@ extends SceneTree
 ##   sequencer program [5, 5, 5]: 5 on, 5 off, 5 on, then off though its back
 ##             stays on; RMB picks the next program; it is saved.
 ##   display   shows the level beside it: 15 with the lever on, 0 off.
+## The gaps after stage 4 (Docs/MineWiring.md 21-27):
+##   creatures a creature's feet press a tile and cross a string as the
+##             player's do; a dead or held one does not; a far one counts
+##             where it was last (21).
+##   gate tile a bridge of gate tiles hanging off one that stands falls
+##             whole when that one's ground goes (check); taking the tile
+##             that joins it drops the rest the next tick, not the one on
+##             ground; a stack on a hanging tile goes with it (24).
+##   cave light wires laid with a light source take its levels per cell
+##             (dark under a roof, 15 in the open), drawn by the SKY_LIT wire
+##             shader with per-instance data; an edit asks the cells near it
+##             again; a device's glow and alpha change on a sky-lit copy as on
+##             its StandardMaterial3D (22).
+##   lamps     of 12 lit lamps only the 4 nearest the eye (the cap) hang a
+##             real light, from a pool; the eye moved, the nearest change; a
+##             lamp gone dark gives its light up; Off (0) hangs none; no lamp
+##             has a light of its own (23).
+##   sequencer a program of its own (2 on, 3 off, 1 on) runs exactly so; it
+##             is saved; RMB's preset step drops it; the panel shows its steps,
+##             adds and takes one, sets a preset, and closes (25).
 ## Stage 4 (Docs/MineWiring.md 18), on placed bricks of the probe's own:
 ##   piston    facing up, a 2x2 placed brick rises a course and is still one
 ##             brick; a plain piston leaves it, a sticky one pulls it back
@@ -124,6 +144,7 @@ func _init() -> void:
 	_stage7(w)
 	_save(w)
 	_save2(w)
+	_gaps(w)
 	_items()
 	w.queue_free()
 	print("WIRING-PROBE %s (%d ok, %d fail)" % ["PASS" if _fail == 0 else "FAIL", _pass, _fail])
@@ -1092,3 +1113,216 @@ func _stage7(w: MineWiring) -> void:
 	_ok("a receiver's channel comes back", int(w3.devices[rnear].setting) == 1)
 	w3.queue_free()
 	_reset(w)
+
+
+## A creature as MineWiring.creature_feet reads one (Mob's fields).
+class FakeMob:
+	extends RefCounted
+	var at := Vector3.ZERO
+	var last_feet := Vector3.ZERO
+	var far := false
+	var held := false
+	var dead := false
+
+	func is_dead() -> bool:
+		return dead
+
+	func feet() -> Vector3:
+		return at
+
+
+func _gaps(w: MineWiring) -> void:
+	print("gaps")
+	_gap_creatures(w)
+	_gap_gatetiles(w)
+	_gap_light()
+	_gap_lamps(w)
+	_gap_sequencer(w)
+
+
+func _gap_creatures(w: MineWiring) -> void:
+	w.clear()
+	_bodies = []
+	var tile := Vector3i(2, 0, 40)
+	var lamp := Vector3i(3, 0, 40)
+	w.place_device(tile, &"pressure_tile")
+	w.place_device(lamp, &"lamp")
+	var top := w.device_box(tile).end.y
+	var m := FakeMob.new()
+	m.at = Vector3(2.5 * 0.35, top, 40.5 * 0.35)
+	m.last_feet = Vector3(30.0, 0.0, 30.0)
+	_bodies = MineWiring.creature_feet([m])
+	_ticks(w, 3)
+	_ok("a creature on a pressure tile lights its lamp", w.is_lit(lamp))
+	m.dead = true
+	_bodies = MineWiring.creature_feet([m])
+	_ticks(w, 8)
+	_ok("a dead one does not", not w.is_lit(lamp))
+	m.dead = false
+	m.held = true
+	_ok("nor a held one", MineWiring.creature_feet([m]).is_empty())
+	m.held = false
+	m.far = true
+	_ok("a far one counts where it was last", MineWiring.creature_feet([m]) == [m.last_feet])
+	_bodies = []
+	w.clear()
+
+
+func _gap_gatetiles(w: MineWiring) -> void:
+	w.clear()
+	# A pit under x 41..44 at z 50: A stands at 40, B..D hang off it, E on D.
+	for x in range(41, 45):
+		_holes[Vector3i(x, -1, 50)] = true
+	var a := Vector3i(40, 0, 50)
+	var row: Array[Vector3i] = [a, Vector3i(41, 0, 50), Vector3i(42, 0, 50), Vector3i(43, 0, 50)]
+	var placed := true
+	for c in row:
+		placed = placed and w.place_device(c, &"gate_tile")
+	var e := Vector3i(43, 3, 50)
+	placed = placed and w.place_device(e, &"gate_tile")
+	w.check(Vector3i(39, -2, 49), Vector3i(45, 6, 51))
+	_ok("a bridge of gate tiles hangs off the one that stands", placed and w.devices.size() == 5)
+	# Taking the joining tile: what hangs past it falls the next tick.
+	w.remove_device(Vector3i(41, 0, 50))
+	w.tick()
+	_ok("the tile joining it taken: the rest falls, the standing one stays",
+			w.devices.size() == 1 and w.devices.has(a))
+	# Again, then the ground under the standing one goes.
+	for c in row.slice(1):
+		w.place_device(c, &"gate_tile")
+	w.place_device(e, &"gate_tile")
+	_holes[Vector3i(40, -1, 50)] = true
+	var gone := w.check(Vector3i(40, -1, 50), Vector3i(40, -1, 50))
+	_ok("the ground under the standing one gone: all five fall (%d)" % gone, w.devices.is_empty() and gone == 5)
+	for x in range(40, 45):
+		_holes.erase(Vector3i(x, -1, 50))
+	w.clear()
+
+
+func _gap_light() -> void:
+	# A wiring of its own: the sky light stays on it.
+	var w := MineWiring.new()
+	w.solid_fn = _solid
+	root.add_child(w)
+	var roof := {"z": 61}   # cells at z >= roof.z are under a roof: level 0
+	w.use_sky_light(func(p: Vector3) -> Vector2: return Vector2(0.0 if floori(p.z / 0.35) >= int(roof.z) else 15.0, 0.0))
+	for z in range(58, 64):
+		w.place_cable(Vector3i(5, 0, z))
+	w.ask_lights(true)
+	w.tick()
+	var mat := w._tiles_mi.material_override as ShaderMaterial
+	_ok("the wires draw with the sky-lit shader, data per instance", mat != null and mat.shader == MineWiring.wire_shader(true)
+			and w._tiles_mi.multimesh.use_custom_data and w._cable_mi.multimesh.use_custom_data)
+	_ok("open cells 15, roofed cells 0", w.cell_light.get(Vector3i(5, 0, 59), Vector2.ZERO).x == 15.0
+			and w.cell_light.get(Vector3i(5, 0, 62), Vector2.ONE).x == 0.0 and w.lights_asked == 6)
+	roof.z = 59
+	w.check(Vector3i(5, 0, 59), Vector3i(5, 2, 60))
+	w.ask_lights(true)
+	_ok("the roof grown (an edit): the cells near it asked again, now dark",
+			w.cell_light.get(Vector3i(5, 0, 59), Vector2.ONE).x == 0.0 and w.lights_asked == 12)
+	w.queue_free()
+	# Glow and alpha on either material.
+	var mi := MeshInstance3D.new()
+	var std := StandardMaterial3D.new()
+	mi.material_override = std
+	MineWiring.set_glow(mi, 3.0)
+	var sm := ShaderMaterial.new()
+	sm.shader = MineSkyLit.item_shader(true)
+	sm.set_shader_parameter(&"albedo", Color(0.2, 0.4, 0.5, 1.0))
+	var mi2 := MeshInstance3D.new()
+	mi2.material_override = sm
+	MineWiring.set_glow(mi2, 2.0)
+	MineWiring.set_alpha(mi2, 0.22)
+	_ok("glow and alpha set on a StandardMaterial3D and on a sky-lit copy", std.emission_energy_multiplier == 3.0
+			and float(sm.get_shader_parameter(&"emission_energy")) == 2.0
+			and is_equal_approx((sm.get_shader_parameter(&"albedo") as Color).a, 0.22))
+	mi.free()
+	mi2.free()
+
+
+func _gap_lamps(w: MineWiring) -> void:
+	w.clear()
+	var eye := {"p": Vector3(0.0, 0.0, 70.0 * 0.35)}
+	w.view_fn = func() -> Vector3: return eye.p
+	w.lamp_lights = 4
+	var lev := Vector3i(0, 0, 72)
+	var lamps: Array[Vector3i] = []
+	for x in range(0, 12):
+		w.place_cable(Vector3i(x, 0, 71))
+		var l := Vector3i(x, 0, 70)
+		w.place_device(l, &"lamp")
+		lamps.append(l)
+	w.place_device(lev, &"lever", true)
+	_ticks(w, 3)
+	w.place_lamp_lights()
+	var lit := lamps.filter(func(c): return w.is_lit(c)).size()
+	var shown := w._lamp_pool.filter(func(l): return l.visible).size()
+	_ok("12 lamps lit, 4 real lights, on the 4 nearest the eye (%d lit, %d lights)" % [lit, shown],
+			lit == 12 and shown == 4 and w.lamp_light_of.size() == 4
+			and lamps.slice(0, 4).all(func(c): return w.lamp_light_of.has(c)))
+	_ok("a lamp has no light of its own", (w.devices[lamps[0]].node as Node).find_children("*", "Light3D", true, false).is_empty())
+	eye.p = Vector3(11.0 * 0.35, 0.0, 70.0 * 0.35)
+	w.place_lamp_lights()
+	_ok("the eye at the other end: the lights there", lamps.slice(8).all(func(c): return w.lamp_light_of.has(c))
+			and w._lamp_pool.size() == 4)
+	w.use_device(lev)
+	_ticks(w, 3)
+	w.place_lamp_lights()
+	_ok("all dark: no light shows", w.lamp_light_of.is_empty() and w._lamp_pool.all(func(l): return not l.visible))
+	w.use_device(lev)
+	_ticks(w, 3)
+	w.lamp_lights = 0
+	w.place_lamp_lights()
+	_ok("Lamp Lights Off: none", w.lamp_light_of.is_empty())
+	w.lamp_lights = -1
+	w.view_fn = Callable()
+	w.clear()
+
+
+func _gap_sequencer(w: MineWiring) -> void:
+	w.clear()
+	var lev := Vector3i(9, 0, 90)
+	var sq := Vector3i(10, 0, 90)
+	w.place_device(lev, &"lever")
+	w.place_device(sq, &"sequencer", false, false, 0, 0)
+	_ok("set_program takes only a sequencer", w.set_program(sq, [2, 3, 1]) and not w.set_program(lev, [1]))
+	_ticks(w, 2)
+	w.use_device(lev)
+	var pattern := ""
+	for i in 10:
+		w.tick()
+		pattern += "1" if w.output_of(sq) > 0 else "0"
+	_ok("its own program 2 on, 3 off, 1 on runs so (%s)" % pattern, pattern == "1100010000")
+	_ok("the steps are kept to 1..%d ticks, %d steps" % [MineWiring.STEP_MAX, MineWiring.PROGRAM_STEPS],
+			w.set_program(sq, [0, 500] + range(30)) and w.program_of(sq).size() == MineWiring.PROGRAM_STEPS
+			and w.program_of(sq)[0] == 1 and w.program_of(sq)[1] == MineWiring.STEP_MAX)
+	w.set_program(sq, [4, 6, 8])
+	var saved: Variant = JSON.parse_string(JSON.stringify(w.to_save()))
+	var w2 := MineWiring.new()
+	w2.solid_fn = _solid
+	root.add_child(w2)
+	w2.restore(saved)
+	_ok("its own program comes back after a save", w2.program_of(sq) == [4, 6, 8])
+	w2.queue_free()
+	w.use_device(sq)
+	_ok("RMB's preset step drops it for the next preset", not w.devices[sq].has("program")
+			and w.program_of(sq) == MineWiring.PROGRAMS[1])
+	# The panel, on a host of the probe's own.
+	var host := Node.new()
+	root.add_child(host)
+	var p := SequencerPanel.open_on(host, w, sq)
+	_ok("the panel shows the preset's steps", p.steps() == MineWiring.PROGRAMS[1])
+	p.type_steps([3, 7])
+	p._add_step()
+	_ok("typed 3, 7, then + step: the sequencer's program is 3, 7, 5", w.program_of(sq) == [3, 7, 5]
+			and p.steps() == [3, 7, 5])
+	p._take_step()
+	p._take_step()
+	p._take_step()
+	_ok("- step down to one, no further", w.program_of(sq) == [3])
+	p._preset(3)
+	_ok("a preset button: that preset", w.program_of(sq) == MineWiring.PROGRAMS[3] and not w.devices[sq].has("program"))
+	p.close()
+	_ok("Done closes it", not p.is_open())
+	host.queue_free()
+	w.clear()
