@@ -1,5 +1,10 @@
 # Handoff: brick patterns (replace the region fit's picking)
 
+**State (2026-11-27): DONE**, merged from `terrain-patterns`: the pattern
+library is the game's default; see Docs/TerrainRegions.md 13 for what was
+built and measured. Still deferred (the user): the fitted top course, juts,
+slopes, tall collapse bodies. Open: shares 2x2 / 1x1 a point past +-5.
+
 For the chat that takes this over (2026-11-26). Background: Docs/TerrainRegions.md
 (sections 11 = the user's decisions, 12.x = what was built and measured).
 Worktree that built the region fit: `C:\Users\lbaun\bc-regions`, branch

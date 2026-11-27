@@ -22,6 +22,8 @@ extends SceneTree
 ##   * across tile edges, in 4 tiles, across section boundaries, chunks a
 ##     brick: what a break rebuilds.
 ##   * fit ms a tile, us a region: the cost (debug build: ratios only).
+##   * PATTERNS: the game's picking (the library, Docs/HandoffBrickPatterns.md)
+##     on the same ground; `-- --lookup` runs only its consistency check.
 ## Pictures (first area): a wall seen face on, user://dev/region_fit/.
 
 const Presets := preload("res://scripts/terrain/worldgen_presets.gd")
@@ -86,6 +88,9 @@ func _initialize() -> void:
 		_with(chosen, {"name": "one material a brick", "mixed": false}),
 		_with(chosen, {"name": "mixed, aim 0"}).merged({"aim": 0.0}, true),
 		_with(chosen, {"name": "CHOSEN: mixed, aim +30%"}),
+		_with(chosen, {"name": "PATTERNS: library (the game's)", "mode": "patterns"}),
+		_with(chosen, {"name": "patterns, not calibrated", "mode": "patterns", "calibrate": false}),
+		_with(chosen, {"name": "patterns, 6 calibration steps", "mode": "patterns", "calibrate_steps": 6}),
 		_with(chosen, {"name": "mixed, aim +60%", "aim": 0.6}),
 		_with(chosen, {"name": "chosen, caves strong too", "cave_stagger": 0.0}),
 		_with(chosen, {"name": "chosen + deep band (from %.0f m)" % DEEP_M,
@@ -174,32 +179,50 @@ func _pick_areas() -> Array:
 	return best
 
 
-## THE LOOKUP (Docs/TerrainRegions.md 12) the game asks: regions fitted on a
-## miss and kept. It must give exactly the batch fit's bricks, asked from 4
-## threads in any tile order (a region is fitted by whichever tile asks
-## first), at the surface and deep in the deep tier.
+## THE PATTERN LIBRARY (Docs/HandoffBrickPatterns.md) the game asks: a
+## cell's brick is the brick over it in the pattern its region picks. Every
+## cell of a brick must name that same brick -- across the odd courses'
+## shifted squares and up a tall brick's courses -- or two tiles (or the
+## mesher and the collapse) would disagree on it. Asked over a box at the
+## surface and deep down, both depth bands.
 func _check_lookup(areas: Array) -> void:
 	TerrainFit.configure(Presets.complete_bricks({}))
+	TerrainFit.set_enabled(true)
 	for a: Vector2i in areas:
 		for depth in [0, 200]:
-			var r: Dictionary = TerrainFit.check_lookup(a, 4, depth)
-			if r.has("error"):
-				print("[fit] lookup %s: %s" % [a, r.error])
+			var x0: int = a.x * 32 + 64
+			var z0: int = a.y * 32 + 64
+			var c0: int = BrickTerrain.height_at(x0, z0) - 12 - depth
+			var checked := 0
+			var wrong := 0
+			var seen := {}
+			for c in range(c0, c0 + 9):
+				for z in range(z0, z0 + 40):
+					for x in range(x0, x0 + 40):
+						var b: Dictionary = TerrainFit.brick_at(x, c, z)
+						if b.is_empty():
+							wrong += 1
+							continue
+						var key := Vector3i(b.x, b.c, b.z)
+						if seen.has(key):
+							continue
+						seen[key] = true
+						if x < b.x or x >= b.x + b.sx or z < b.z or z >= b.z + b.sz or c < b.c or c >= b.c + b.h:
+							wrong += 1
+						for cc in range(b.c, b.c + b.h):
+							for zz in range(b.z, b.z + b.sz):
+								for xx in range(b.x, b.x + b.sx):
+									checked += 1
+									if TerrainFit.brick_at(xx, cc, zz) != b:
+										wrong += 1
+			print("[fit] patterns %s %s: %d bricks, %d cells checked, %d wrong" % [
+					a, "surface" if depth == 0 else "%d courses down" % depth, seen.size(), checked, wrong])
+			if wrong > 0 or checked == 0:
 				failures += 1
-				continue
-			var st: Dictionary = r.stats
-			print("[fit] lookup %s %s: %d cells checked, %d wrong, %d not answered; %d regions in %d jobs, %.0f us a region (sampling %.0f%%), %.0f cells sampled a region, %.0f B a region kept" % [
-					a, "surface" if depth == 0 else "%d courses down" % depth, r.checked, r.wrong, r.missing,
-					st.fitted, st.jobs, st.us_region, 100.0 * st.sample_ms / maxf(0.001, st.sample_ms + st.fit_ms),
-					st.sampled_per_region, float(st.bytes) / maxf(1.0, float(st.kept))])
-			if int(r.wrong) > 0:
-				print("[fit]     even layers wrong: %d" % r.wrong_even)
-			for e in r.get("examples", []):
-				print("[fit]     ", e)
-			if int(r.wrong) > 0 or int(r.missing) > 0 or int(r.checked) == 0:
-				failures += 1
-	# The fit's cells made straight from the generator equal the kept ones
-	# (tile and deep sections, built first so they are kept).
+	print("[fit] library: %s" % TerrainFit.get_calibration())
+	TerrainFit.set_enabled(false)
+	# The calibration's cells made straight from the generator equal the
+	# kept ones (tile and deep sections, built first so they are kept).
 	var sp := BrickTerrain.get_deep_section_plates()
 	for a: Vector2i in areas:
 		var t: Vector2i = a + Vector2i(2, 2)
@@ -212,7 +235,7 @@ func _check_lookup(areas: Array) -> void:
 		print("[fit] generated cells %s: %d of %d differ, %d tops differ" % [t, g.cells_differ, g.cells, g.tops_differ])
 		if int(g.cells_differ) > 0 or int(g.tops_differ) > 0:
 			failures += 1
-	print("[fit] lookup %s" % ("PASS" if failures == 0 else "FAIL (%d areas disagree)" % failures))
+	print("[fit] patterns %s" % ("PASS" if failures == 0 else "FAIL (%d areas disagree)" % failures))
 
 
 func _with(base: Dictionary, over: Dictionary) -> Dictionary:

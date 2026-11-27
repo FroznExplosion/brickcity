@@ -347,6 +347,11 @@ struct Field {
 /// a function, and only the difference from it is written down.
 int64_t pack_cell(int x, int yp, int z);
 int edit_at(int64_t key);          ///< -1 when there is no edit
+/// Cell (x, course, z) BUILT by an edit: a solid edit on one of its plates
+/// (filled in, a landed pile), not ground as generated. The pattern library's
+/// bricks are the generated ground's; built ground takes the old pattern
+/// among its own cells (Docs/HandoffBrickPatterns.md, TerrainRegions.md 13).
+bool built_cell(int x, int course, int z);
 /// A PLACED brick over cell (x, course, z) -- a block the player laid, which
 /// keeps its own shape (Docs/TerrainBond.md 1): false when none. Its
 /// rectangle in studs. Safe from any thread, like the edits.
