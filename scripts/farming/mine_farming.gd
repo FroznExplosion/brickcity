@@ -87,6 +87,8 @@ var tilled := 0
 var planted := 0
 var harvested := 0
 var trampled := 0
+## Bites real animals took (animal_eat, Docs/MineCreatures.md).
+var eaten := 0
 var trees_grown := 0
 var fertilised := 0
 var weeded := 0
@@ -1026,6 +1028,63 @@ func landed(fall: float, feet: Vector3) -> void:
 	if plot.is_empty():
 		return
 	trample(plot)
+
+
+## A creature landed on the plot under `feet` (terrain frame) from a fall at
+## least its own trample height (Docs/MineCreatures.md 5.3: a zombie 3 bricks,
+## a pig 2; the creature decides). True if a plot was trampled.
+func creature_landed(feet: Vector3) -> bool:
+	if feet == Vector3.INF:
+		return false
+	var cell := Vector3i(floori(feet.x / _stud), floori((feet.y - 0.02) / _plate), floori(feet.z / _stud))
+	var plot := plot_at_cell(cell - Vector3i(0, 2, 0))
+	if plot.is_empty() or plot.crop == &"":
+		return false
+	trample(plot)
+	return true
+
+
+## Planted plots within `r` metres of `at` (terrain frame), of these crops
+## (empty: any), nearest first: [{"b": Vector3i, "at": top middle, "crop"}].
+func crops_near(at: Vector3, r: float, crops: Array = []) -> Array:
+	var out := []
+	var r2 := r * r
+	for b in store.plots:
+		var plot: Dictionary = store.plots[b]
+		if plot.crop == &"" or (not crops.is_empty() and not crops.has(plot.crop)):
+			continue
+		var top := _top_middle(b)
+		var d2 := Vector2(top.x - at.x, top.z - at.z).length_squared()
+		if d2 <= r2 and absf(top.y - at.y) < 8.0:
+			out.append({"b": b, "at": top, "crop": plot.crop, "d2": d2})
+	out.sort_custom(func(a, c) -> bool: return a.d2 < c.d2)
+	return out
+
+
+## An animal standing on plot `b` takes a bite: settled first, then eaten back
+## two stages (FarmPlant's animals event, done by a real animal). At sprout
+## already: the crop is eaten up. True if there was a crop to eat.
+func animal_eat(b: Vector3i) -> bool:
+	var plot := store.get_plot(b)
+	if plot.is_empty() or plot.crop == &"":
+		return false
+	FarmPlant.settle(plot, now())
+	if int(plot.stage) <= 0:
+		plot.crop = &""
+		plot.p = 0.0
+		plot.stress = 0
+		plot.last_event = "eaten up by an animal"
+	else:
+		plot.stage = maxi(0, int(plot.stage) - 2)
+		plot.p = 0.0
+		plot.stress = int(plot.stress) + 1
+		plot.last_event = "eaten back by an animal"
+	plot.event_at = now()
+	store.touch(b)
+	_draw_dirty = true
+	eaten += 1
+	log_lines.append("eaten %s" % b)
+	return true
 
 
 ## The crop is lost (its seed pops out) and the tilled brick is dirt again.
