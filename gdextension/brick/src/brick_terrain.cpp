@@ -6079,6 +6079,9 @@ static bool sample_section(int tx, int sy, int tz, TileSample &out) {
 // bound plate) -- not a whole sample with its derived arrays, nor a section's
 // flood fill, which a neighbour's slice was costing.
 static thread_local bool t_gen_made_only = false;
+/// generated_cells samples a missing tile whole and keeps it (shared with
+/// the bake), rather than making only the slice it needs.
+static bool g_gen_share = false;
 void brick::set_generated_made_only(bool on) { t_gen_made_only = on; }
 
 bool brick::generated_cells(int tx, int tz, int y_lo, int y_hi, std::vector<uint8_t> &vox,
@@ -6111,6 +6114,14 @@ bool brick::generated_cells(int tx, int tz, int y_lo, int y_hi, std::vector<uint
     };
     const uint64_t gkey = (uint64_t)tile_key(tx, tz);
     std::shared_ptr<const GenTile> gen = t_gen_made_only ? nullptr : gen_find(g_gen, gkey, field);
+    if (!gen && !t_gen_made_only && g_gen_share && y_hi > INT_MIN / 2) {
+        // The tile's own sample makes its generated cells and KEEPS them
+        // (the noise is ~all of a sample): its bake, soon after, reuses them
+        // instead of making the same noise again.
+        TileSample tmp;
+        sample_tile(g_field, tx, tz, tmp);
+        gen = gen_find(g_gen, gkey, field);
+    }
     if (gen) {
         for (int lz = lz0; lz < lz1; ++lz) {
             for (int lx = lx0; lx < lx1; ++lx) {
