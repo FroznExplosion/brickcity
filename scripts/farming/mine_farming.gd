@@ -134,7 +134,8 @@ func setup(p_host: Node) -> void:
 	draw = FarmDraw.new()
 	draw.name = "Crops"
 	add_child(draw)
-	draw.setup()
+	# Crops lit like the cave they are in when the world draws sky light.
+	draw.setup(host.get("sky_lit") != null)
 	FarmCrops.load_all()
 
 
@@ -531,6 +532,7 @@ func till(target: Dictionary) -> bool:
 	var n: Vector3i = target.get("normal", Vector3i.ZERO)
 	if n != Vector3i.UP:
 		log_lines.append("till refused: not a top face")
+		refuse("Hoe: the top of soil, not its side")
 		return false
 	var cell: Vector3i = target.cell
 	if not plot_at_cell(cell).is_empty():
@@ -548,16 +550,19 @@ func till(target: Dictionary) -> bool:
 			for yy in range(ytop + 1, ytop + 4):
 				if BrickTerrain.solid_at(x, yy, z) != 0:
 					log_lines.append("till refused: something on it")
+					refuse("Hoe: clear what stands on it first")
 					return false
 			var m := BrickTerrain.solid_at(x, top, z)
 			for yy in range(top + 1, ytop + 1):
 				m = BrickTerrain.solid_at(x, yy, z) if BrickTerrain.solid_at(x, yy, z) != 0 else m
 			if not _soil.has(m):
 				log_lines.append("till refused: not soil (%d)" % m)
+				refuse("Hoe: only grass, dirt or podzol can be tilled")
 				return false
 			for yy in range(c * 3, top + 1):
 				if BrickTerrain.solid_at(x, yy, z) == 0 and yy < top:
 					log_lines.append("till refused: not flat")
+					refuse("Hoe: the 2x2 under it must be flat")
 					return false
 			fert += float(_soil[m])
 			count += 1
@@ -595,15 +600,19 @@ func plant(target: Dictionary, item: StringName, data := {}) -> bool:
 	var cdef := FarmCrops.get_crop(crop)
 	if plot.is_empty() and str(cdef.ground) == "soil":
 		plot = _soil_plot(target)
+	if plot.is_empty() and str(cdef.ground) == "farm":
+		refuse("%s go on tilled soil: use a hoe first" % ItemCatalog.get_def(item).get("name", "Seeds"))
+		return false
 	if plot.is_empty() or plot.crop != &"":
 		return false
 	# A crop wants tilled soil: a sapling's plain-soil plot takes only saplings.
 	if str(cdef.ground) == "farm" and str(plot.get("ground", "farm")) != "farm":
+		refuse("%s go on tilled soil: use a hoe first" % ItemCatalog.get_def(item).get("name", "Seeds"))
 		return false
 	# A biome crop grows only in its biomes (stage 6).
 	if not grows_here(cdef, int(plot.biome)):
 		log_lines.append("%s refused at %s: only in %s" % [crop, plot.b, ", ".join(cdef.only)])
-		last_refusal = "%s only grows in %s" % [cdef.name, ", ".join(cdef.only)]
+		refuse("%s only grows in %s" % [cdef.name, ", ".join(cdef.only)])
 		return false
 	FarmPlant.plant(plot, crop, now(), FarmPlant.traits_of(data))
 	store.touch(plot.b)
@@ -661,8 +670,25 @@ func _replant(plot: Dictionary, got: Dictionary) -> void:
 # ---------------------------------------------------------------------------
 # Depth (stage 6, Docs/MineFarming.md 20)
 
-## The last thing planting refused, for the HUD (a biome crop elsewhere).
+## The last thing tilling or planting refused, and when (ms), for the HUD:
+## shown over the hotbar for REFUSAL_MS (Docs/MineFarming.md 22).
 var last_refusal := ""
+var _refusal_at := -100000
+const REFUSAL_MS := 3000
+
+
+func refuse(why: String) -> void:
+	last_refusal = why
+	_refusal_at = Time.get_ticks_msec()
+
+
+## The line over the hotbar: why the last till or plant was refused (for a
+## few seconds), then the plot or crop looked at.
+func hud_text(target: Dictionary) -> String:
+	var look := look_text(target)
+	if last_refusal != "" and Time.get_ticks_msec() - _refusal_at < REFUSAL_MS:
+		return last_refusal + ("\n" + look if look != "" else "")
+	return look
 
 
 ## Does crop `c` grow in biome `biome` at all? (Its `only` list; empty: anywhere.)
@@ -1068,6 +1094,9 @@ func animal_eat(b: Vector3i) -> bool:
 	var plot := store.get_plot(b)
 	if plot.is_empty() or plot.crop == &"":
 		return false
+	# A giant is past trouble (Docs/MineFarming.md 20): animals leave it.
+	if int(plot.get("giant", 0)) != 0:
+		return false
 	FarmPlant.settle(plot, now())
 	if int(plot.stage) <= 0:
 		plot.crop = &""
@@ -1190,6 +1219,7 @@ func refresh(b: Vector3i) -> void:
 	plot.scared = scared
 	if changed:
 		store.touch(b)
+		_draw_dirty = true            # its light is drawn on it (FarmDraw)
 	var u6 := Time.get_ticks_usec()
 	_set_soil(plot, t)
 	_prof("soil swap", Time.get_ticks_usec() - u6)

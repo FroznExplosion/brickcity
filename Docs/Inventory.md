@@ -656,8 +656,9 @@ fire. Pictures: user://dev/inv_furnace, inv_furnace_done.
 ## 16. Shaped crafting, the recipe editor, armour and the figure (2026-11-26)
 
 **Status:** 16.1-16.3 built (shaped recipes, the real grid, the result onto
-the cursor, the recipe editor); 16.4 (armour, the figure) not started --
-waits on open question 3. Built as below, with these choices for the open
+the cursor, the recipe editor); 16.4 not built: the user, 2026-11-26, will
+not use Minecraft's armour system (armour, if any, is its own design later),
+and the player figure waits with it. Built as below, with these choices for the open
 questions: (1) a new **Workshop table** station (`grid: 4`, `counts_as:
 workbench`) gives the 4x4 grid, made at a workbench from 8 wood + an iron
 ingot; no recipe needs 4x4 yet. (2) The editor saves into the base pack's
