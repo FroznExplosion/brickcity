@@ -918,6 +918,23 @@ func _stage4(w: MineWiring) -> void:
 	_ok("an out head's stud takes no wire, no device, no block", bool(w.devices[sp].on)
 			and not w.can_place_cable(Vector3i(61, 0, 80)) and not w.can_place_device(Vector3i(61, 0, 80), &"lamp")
 			and w.overlaps(AABB(Vector3(61 * 0.35, 0.0, 80 * 0.35), Vector3(0.35, 0.42, 0.35))))
+	# Sand (generated, loose) a course deep moves as a 1x1 and stays loose;
+	# sand only part of a course is ground: it stalls.
+	_reset(w)
+	w.place_device(sp, &"piston", false, false, 0)
+	for y in 3:
+		_extra[Vector3i(61, y, 80)] = BrickTerrain.MAT_SAND
+	w.place_device(slev, &"lever", true)
+	w.tick()
+	_ok("a course of sand pushed a stud over, still sand, still loose (not placed)", bool(w.devices[sp].on)
+			and _solid(61, 0, 80) == 0 and _solid(62, 2, 80) == BrickTerrain.MAT_SAND and _rect(62, 0, 80) == Vector4i())
+	_reset(w)
+	w.place_device(sp, &"piston", false, false, 0)
+	_extra[Vector3i(61, 0, 80)] = BrickTerrain.MAT_SAND
+	_extra[Vector3i(61, 1, 80)] = true
+	w.place_device(slev, &"lever", true)
+	w.tick()
+	_ok("sand under stone in one course: ground, it stalls", not bool(w.devices[sp].on))
 	# A sideways move hops over studs, slides on smooth tiles (road).
 	_reset(w)
 	_brick(61, 0, 80, 1, 1)

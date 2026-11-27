@@ -1199,7 +1199,7 @@ func brick_at(k: Vector3i) -> Dictionary:
 	var course := floori(float(k.y) / COURSE)
 	var r: Vector4i = rect_fn.call(k.x, course, k.z)
 	if r.z <= 0 or r.w <= 0:
-		return {}
+		return _loose_at(k, course)
 	var cols: Array[Vector2i] = []
 	for bx in range(r.x, r.x + r.z):
 		for bz in range(r.y, r.y + r.w):
@@ -1207,6 +1207,32 @@ func brick_at(k: Vector3i) -> Dictionary:
 				cols.append(Vector2i(bx, bz))
 	return {"key": Vector3i(r.x, course, r.y), "rect": r, "course": course, "cols": cols,
 			"mat": int(solid_fn.call(k.x, course * COURSE, k.z))}
+
+
+## Sand, red sand or gravel filling a whole course of a stud (generated, not
+## placed): a 1x1 unit a piston moves, laid loose again (not marked), so it
+## still falls as sand does. {} for anything else.
+func _loose_at(k: Vector3i, course: int) -> Dictionary:
+	var m := int(solid_fn.call(k.x, k.y, k.z))
+	if not is_loose(m):
+		return {}
+	for p in COURSE:
+		if int(solid_fn.call(k.x, course * COURSE + p, k.z)) != m:
+			return {}
+	var cols: Array[Vector2i] = [Vector2i(k.x, k.z)]
+	return {"key": Vector3i(k.x, course, k.z), "rect": Vector4i(k.x, k.z, 1, 1), "course": course,
+			"cols": cols, "mat": m, "loose": true}
+
+
+static var _loose_ids: Array = []
+
+
+## Does terrain material `m` fall loose (terrain_bond.h BOND_LOOSE)?
+static func is_loose(m: int) -> bool:
+	if _loose_ids.is_empty():
+		var names := Array(BrickTerrain.material_names())
+		_loose_ids = [names.find("sand"), names.find("red sand"), names.find("gravel")]
+	return m > 0 and _loose_ids.has(m)
 
 
 static func brick_cells(b: Dictionary) -> Array[Vector3i]:
@@ -1579,6 +1605,8 @@ func _land(m: Dictionary) -> void:
 		for bx in _boxes_of(b, step):
 			out = _merge(out, lay_fn.call(bx[0], bx[1], int(b.mat)))
 	for b in m.bricks:
+		if bool(b.get("loose", false)):
+			continue
 		var r: Vector4i = b.rect
 		var lo := Vector3i(r.x, int(b.course) * COURSE, r.y) + step
 		mark_fn.call(lo, lo + Vector3i(r.z - 1, COURSE - 1, r.w - 1), int(b.mat))
@@ -1851,6 +1879,14 @@ func _standin(bricks: Array) -> Node3D:
 			if not src.has(Vector3i(c2.x, top_y, c2.y)):
 				tops.append([Transform3D(Basis(), Vector3((c2.x + 0.5) * _stud, top_y * _plate + stud_h * 0.5,
 						(c2.y + 0.5) * _stud)), col])
+	# Lit where it is (a cave is dark): the falling sand's material, its sky and
+	# lava levels per instance, asked once just over the group's top.
+	var sky: MineSkyLit = host.get("sky_lit") if host != null else null
+	var light := Color()
+	if sky != null:
+		var gb := _bricks_box(bricks)
+		var lv := sky.levels_at(Vector3(gb.get_center().x, gb.end.y + _plate * 0.5, gb.get_center().z))
+		light = Color(lv.x / 15.0, lv.y / 15.0, 0.0, 0.0)
 	var cyl := CylinderMesh.new()
 	cyl.top_radius = _stud * 0.3
 	cyl.bottom_radius = _stud * 0.3
@@ -1860,15 +1896,18 @@ func _standin(bricks: Array) -> Node3D:
 		var mm := MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
 		mm.use_colors = true
+		mm.use_custom_data = sky != null
 		mm.mesh = pair[0]
 		var list: Array = pair[1]
 		mm.instance_count = list.size()
 		for k in list.size():
 			mm.set_instance_transform(k, list[k][0])
 			mm.set_instance_color(k, list[k][1])
+			if sky != null:
+				mm.set_instance_custom_data(k, light)
 		var mi := MultiMeshInstance3D.new()
 		mi.multimesh = mm
-		mi.material_override = mat
+		mi.material_override = MineSkyLit.sand_material() if sky != null else mat
 		root.add_child(mi)
 	return root
 
