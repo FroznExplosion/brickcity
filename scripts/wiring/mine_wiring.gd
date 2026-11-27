@@ -1238,11 +1238,38 @@ func _reserved(k: Vector3i) -> bool:
 	return false
 
 
-## A chest in `box` (metres, terrain frame)?
-func _chest_in(box: AABB) -> bool:
-	if host == null or not ("chests" in host) or host.chests == null:
+func _chests() -> MineChests:
+	if host == null or not ("chests" in host):
+		return null
+	return host.chests
+
+
+## A chest in `box` (metres, terrain frame), but those in `except` (keys)?
+func _chest_in(box: AABB, except: Array = []) -> bool:
+	var ch := _chests()
+	if ch == null:
 		return false
-	return host.chests.overlaps(box)
+	for key in ch.chests:
+		if not except.has(key) and ch.box_of(ch.chests[key].block).grow(-0.01).intersects(box):
+			return true
+	return false
+
+
+## The chests (keys) standing on any of the cells in `src`.
+func _chests_on(src: Dictionary) -> Array:
+	var ch := _chests()
+	var out: Array = []
+	if ch == null:
+		return out
+	for key in ch.chests:
+		var lo: Vector3i = ch.lo_cell(ch.chests[key].block)
+		var on := false
+		for x in MineChests.STUDS:
+			for z in MineChests.STUDS:
+				on = on or src.has(Vector3i(lo.x + x, lo.y - 1, lo.z + z))
+		if on:
+			out.append(key)
+	return out
 
 
 func _cell_box(k: Vector3i) -> AABB:
@@ -1323,6 +1350,18 @@ func piston_group(seeds: Array, step: Vector3i, line: bool, pusher := Vector3i(W
 				r_devices.append(dc)
 				for k in cells_of(dc, devices[dc].item, int(devices[dc].facing)):
 					riding[k] = true
+	# A chest on the group rides a move up or down; sideways it would leave
+	# its 2-stud grid, so it stalls the push.
+	var r_chests := _chests_on(src)
+	if not r_chests.is_empty() and step.y == 0:
+		return {"stall": "a chest stands on it"}
+	var ch := _chests()
+	for key in r_chests:
+		var lo: Vector3i = ch.lo_cell(ch.chests[key].block)
+		for x in MineChests.STUDS:
+			for z in MineChests.STUDS:
+				for p in MineChests.PLATES:
+					riding[lo + Vector3i(x, p, z)] = true
 	for b in order:
 		for k in brick_cells(b):
 			var d: Vector3i = k + step
@@ -1335,7 +1374,7 @@ func piston_group(seeds: Array, step: Vector3i, line: bool, pusher := Vector3i(W
 			if _reserved(d):
 				return {"stall": "a move under way"}
 		var dst := _bricks_box([b])
-		if _chest_in(AABB(dst.position + _metres(step), dst.size).grow(-0.01)):
+		if _chest_in(AABB(dst.position + _metres(step), dst.size).grow(-0.01), r_chests):
 			return {"stall": "a chest in the way"}
 	for k in riding:
 		var d: Vector3i = k + step
@@ -1347,7 +1386,11 @@ func piston_group(seeds: Array, step: Vector3i, line: bool, pusher := Vector3i(W
 			return {"stall": "a device in the way of what rides at %s" % key_of(d)}
 		if _reserved(d):
 			return {"stall": "a move under way"}
-	return {"bricks": order, "cables": r_cables, "devices": r_devices}
+	for key in r_chests:
+		var cb: AABB = ch.box_of(ch.chests[key].block)
+		if _chest_in(AABB(cb.position + _metres(step), cb.size).grow(-0.01), r_chests):
+			return {"stall": "a chest in the way of what rides"}
+	return {"bricks": order, "cables": r_cables, "devices": r_devices, "chests": r_chests}
 
 
 ## Does a loose group the collapse found rest on a piston -- on its body's
@@ -1466,9 +1509,22 @@ func _move(g: Dictionary, step: Vector3i) -> void:
 			cells[k + step] = true
 		if is_instance_valid(devices[dc].node):
 			base[dc] = (devices[dc].node as Node3D).position
+	var r_chests: Array = g.get("chests", [])
+	var chest_base := {}
+	var ch := _chests()
+	for key in r_chests:
+		var clo: Vector3i = ch.lo_cell(ch.chests[key].block)
+		for x in MineChests.STUDS:
+			for z in MineChests.STUDS:
+				for p in MineChests.PLATES:
+					cells[clo + Vector3i(x, p, z)] = true
+					cells[clo + Vector3i(x, p, z) + step] = true
+		ch.riding[key] = true
+		if is_instance_valid(ch.chests[key].node):
+			chest_base[key] = (ch.chests[key].node as Node3D).position
 	var m := {"bricks": bricks, "step": step, "cells": cells, "lo": lo, "hi": hi, "phase": 0, "t": 0.0,
 			"wait": 0.0, "off": Vector3.ZERO, "box": _bricks_box(bricks), "node": null, "rect": Rect2i(),
-			"cables": r_cables, "devices": r_devices, "base": base}
+			"cables": r_cables, "devices": r_devices, "base": base, "chests": r_chests, "chest_base": chest_base}
 	if host == null or not animate or not is_inside_tree():
 		_lift(bricks)
 		_land(m)
@@ -1568,8 +1624,14 @@ func _shift_riders(m: Dictionary) -> void:
 		if is_instance_valid(d.node):
 			var box := device_box(nc)
 			(d.node as Node3D).position = Vector3(box.get_center().x, box.position.y, box.get_center().z)
+	var ch := _chests()
+	for key in m.get("chests", []):
+		if ch != null:
+			ch.riding.erase(key)
+			ch.move(key, step.y)
 	m.devices = []
 	m.cables = []
+	m.chests = []
 	if not moved_cables.is_empty() or not moved.is_empty():
 		_pairs_dirty = true
 		_logic_dirty = true
@@ -1675,6 +1737,11 @@ func _step_moves(delta: float) -> void:
 				for dc in m.devices:
 					if devices.has(dc) and is_instance_valid(devices[dc].node) and (m.base as Dictionary).has(dc):
 						(devices[dc].node as Node3D).position = m.base[dc] + off
+				var chs := _chests()
+				for key in m.chests:
+					if chs != null and chs.chests.has(key) and is_instance_valid(chs.chests[key].node) \
+							and (m.chest_base as Dictionary).has(key):
+						(chs.chests[key].node as Node3D).position = m.chest_base[key] + off
 				if float(m.t) >= MOVE_TIME:
 					_land(m)
 			2:

@@ -465,6 +465,35 @@ func run(host: Node) -> void:
 			and _is_brick(p6 + Vector3i(1, 0, 0), 1, 1) and _is_brick(p6 + Vector3i(1, 3, 0), 1, 1)
 			and BrickTerrain.solid_at(p6.x + 2, y, p6.z) == 0)
 
+	# A chest on a lifted brick rides up; on one pushed sideways it stalls
+	# the push (chests keep to their 2-stud grid).
+	var ch: MineChests = w.chests
+	var bx := floori((x0 + 14) / 2.0)
+	var bz := floori(zp / 2.0)
+	var p7 := Vector3i(bx * 2, y, bz * 2)
+	wr.place_device(p7, &"piston", false, false, up)
+	_lay_brick(p7 + Vector3i(0, 3, 0), 2, 2, dark)
+	var cblock := Vector3i(bx, y + 6, bz)
+	check("a chest on the brick over a piston", ch.place(cblock, [], true))
+	var lev7 := Vector3i(p7.x - 1, y, p7.z)
+	wr.place_device(lev7, &"lever")
+	await _settle()
+	wr.use_device(lev7)
+	await _settle()
+	check("the lever on: the chest rode up a course with the brick (stall '%s')" % wr.last_stall,
+			ch.chests.has(MineChests.key_of(cblock + Vector3i(0, 3, 0))) and _is_brick(p7 + Vector3i(0, 6, 0), 2, 2))
+	var bx2 := floori((x0 + 4) / 2.0)
+	var bz2 := floori((zp + 10) / 2.0)
+	var blo := Vector3i(bx2 * 2, y, bz2 * 2)
+	var p8 := blo + Vector3i(-1, 0, 0)
+	wr.place_device(p8, &"piston", false, false, 0)
+	_lay_brick(blo, 2, 2, dark)
+	ch.place(Vector3i(bx2, y + 3, bz2), [], true)
+	wr.place_device(p8 + Vector3i(-1, 0, 0), &"lever", true)
+	await _settle()
+	check("a chest on a brick pushed sideways stalls it (%s)" % wr.last_stall, not bool(wr.devices[p8].on)
+			and _is_brick(blo, 2, 2) and ch.chests.has(MineChests.key_of(Vector3i(bx2, y + 3, bz2))))
+
 	# --- save: generated again
 	var n_cables: int = wr.cables.size()
 	var n_dev: int = wr.devices.size()

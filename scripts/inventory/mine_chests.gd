@@ -35,6 +35,9 @@ var sky: MineSkyLit = null
 ## state, settled to the world time here every SETTLE_EVERY seconds.
 var chests := {}
 const SETTLE_EVERY := 0.25
+## Chests riding a piston's move (Docs/MineWiring.md 18): `check` leaves them
+## be while the ground under them is cleared and they slide.
+var riding := {}
 var _settle_in := 0.0
 var _stud := 0.35
 var _plate := 0.14
@@ -293,6 +296,8 @@ func break_chest(key: String, drop_self: bool) -> void:
 func check() -> void:
 	var gone: Array[String] = []
 	for key in chests:
+		if riding.has(key):
+			continue
 		var b: Vector3i = chests[key].block
 		if not _supported(b) or _any_solid(b):
 			gone.append(key)
@@ -300,7 +305,25 @@ func check() -> void:
 		break_chest(key, inv != null and not inv.creative)
 
 
+## Move a chest `dy` plates up or down (a piston lifting the brick it stands
+## on, Docs/MineWiring.md 18). Its new key, or "" if there is no such chest.
+func move(key: String, dy: int) -> String:
+	if not chests.has(key):
+		return ""
+	var e: Dictionary = chests[key]
+	chests.erase(key)
+	var b: Vector3i = e.block + Vector3i(0, dy, 0)
+	e.block = b
+	var nk := key_of(b)
+	chests[nk] = e
+	if is_instance_valid(e.node):
+		(e.node as Node3D).position = box_of(b).get_center()
+	_changed()
+	return nk
+
+
 func clear() -> void:
+	riding.clear()
 	for key in chests:
 		var n = chests[key].node
 		if is_instance_valid(n):
