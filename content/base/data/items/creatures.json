@@ -27,6 +27,41 @@
 			"colour": "#e07a86",
 			"glyph": "P",
 			"description": "From a pig."
+		},
+		"fence_gate": {
+			"name": "Fence gate",
+			"kind": "fence",
+			"gate": true,
+			"plates": 6,
+			"material": "wood",
+			"max_stack": 64,
+			"colour": "#b08a58",
+			"glyph": "=",
+			"description": "Right-click: a fence panel that opens. Right-click it again to open or shut it. 2 bricks high."
+		},
+		"venison": {
+			"name": "Venison",
+			"kind": "misc",
+			"max_stack": 64,
+			"colour": "#a04a3a",
+			"glyph": "V",
+			"description": "From a deer."
+		},
+		"rabbit_meat": {
+			"name": "Rabbit meat",
+			"kind": "misc",
+			"max_stack": 64,
+			"colour": "#d08a80",
+			"glyph": "R",
+			"description": "From a rabbit."
+		},
+		"hide": {
+			"name": "Hide",
+			"kind": "misc",
+			"max_stack": 64,
+			"colour": "#8a6a4a",
+			"glyph": "H",
+			"description": "From a deer, a boar or a wolf."
 		}
 	}
 }

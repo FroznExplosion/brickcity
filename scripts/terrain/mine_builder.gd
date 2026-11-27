@@ -860,6 +860,11 @@ func place_target() -> bool:
 			log_blocks.append("use device %s" % dev)
 		target = {}
 		return used
+	# A fence gate opens or shuts (Docs/MineCreatures.md 11), whatever is in the hand.
+	if host.mobs != null and not rmb_repeat and host.mobs.use_gate(target.get("cell", Vector3i(1 << 30, 0, 0))):
+		log_blocks.append("gate %s" % target.get("cell"))
+		target = {}
+		return true
 	var d := hand_def()
 	var k := str(d.get("kind", ""))
 	if k == "wire" or k == "device":
@@ -912,6 +917,21 @@ func place_target() -> bool:
 				log_blocks.append("plant %s %s" % [d.id, target.cell])
 			target = {}
 			return ok2
+	if k == "spawner":
+		# A creature on the face aimed at (Docs/MineCreatures.md 12).
+		if host.mobs == null or rmb_repeat:
+			return false
+		var c: Vector3i = (target.cell as Vector3i) + (target.normal as Vector3i)
+		var stud := BrickWorld.get_stud_metres()
+		var plate := BrickWorld.get_plate_metres()
+		var made: bool = host.mobs.spawn_one(StringName(str(d.get("creature", ""))),
+				Vector3((c.x + 0.5) * stud, c.y * plate, (c.z + 0.5) * stud))
+		if made:
+			inv.consume_hand(1)
+			placed += 1
+			log_blocks.append("spawn %s %s" % [d.get("creature", ""), c])
+		target = {}
+		return made
 	if k == "fence":
 		return _place_fence(d)      # a panel of posts and rails (MineFences)
 	if k == "chest" or k == "station" or k == "backpack":
@@ -968,11 +988,15 @@ func _place_fence(d: Dictionary) -> bool:
 				Vector3((hi.x - lo.x + 1) * stud, (hi.y - lo.y + 1) * plate, (hi.z - lo.z + 1) * stud))
 		if _box_hits_player(box):
 			return false
-	var res := MineFences.place(at, along_x, plates, lay_material(d))
-	if res.is_empty():
-		return false
-	for r in res:
-		host.terrain_edited(r)
+	if bool(d.get("gate", false)) and host.mobs != null:
+		if not host.mobs.place_gate(at, along_x, plates, lay_material(d)):
+			return false
+	else:
+		var res := MineFences.place(at, along_x, plates, lay_material(d))
+		if res.is_empty():
+			return false
+		for r in res:
+			host.terrain_edited(r)
 	inv.consume_hand(1)
 	placed += 1
 	log_blocks.append("fence %s %s" % [at, "x" if along_x else "z"])
@@ -1142,7 +1166,7 @@ func _place_wiring(k: String, id: StringName) -> bool:
 	else:
 		# A device faces away from the player placing it.
 		var cam: Camera3D = host._eye_camera()
-		var f := MineWiring.facing_of(host.global_transform.basis.inverse() * -cam.global_transform.basis.z) if cam != null else 0
+		var f := MineWiring.facing_for(id, host.global_transform.basis.inverse() * -cam.global_transform.basis.z) if cam != null else 0
 		var dbox: AABB = host.wiring.device_box(cell, id, f)
 		if not _box_hits_player(dbox) and not host.chests.overlaps(dbox):
 			ok = host.wiring.place_device(cell, id, false, false, f)

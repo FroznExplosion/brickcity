@@ -154,6 +154,9 @@ void apply_gen_dict(GenParams &p, const Dictionary &d) {
     GP_FLOAT("continent_scale_m", continent_scale_m)
     GP_FLOAT("ocean_threshold", ocean_threshold)
     GP_FLOAT("ocean_depth_m", ocean_depth_m)
+    GP_FLOAT("deep_ocean_from", deep_ocean_from)
+    GP_FLOAT("deep_ocean_m", deep_ocean_m)
+    GP_FLOAT("trench_m", trench_m)
     GP_FLOAT("base_height_m", base_height_m)
     GP_FLOAT("cont_weight_m", cont_weight_m)
     GP_FLOAT("erosion_scale_m", erosion_scale_m)
@@ -261,6 +264,9 @@ Dictionary gen_params_to_dict() {
     d["continent_scale_m"] = p.continent_scale_m;
     d["ocean_threshold"] = p.ocean_threshold;
     d["ocean_depth_m"] = p.ocean_depth_m;
+    d["deep_ocean_from"] = p.deep_ocean_from;
+    d["deep_ocean_m"] = p.deep_ocean_m;
+    d["trench_m"] = p.trench_m;
     d["base_height_m"] = p.base_height_m;
     d["cont_weight_m"] = p.cont_weight_m;
     d["erosion_scale_m"] = p.erosion_scale_m;
@@ -418,8 +424,19 @@ static BColumn column_base(const GenParams &p, uint32_t seed, int x, int z) {
     float river = 0.0f;
     const bool ocean = c < p.ocean_threshold;
     if (ocean) {
-        const float t = smooth01((p.ocean_threshold - c) / 0.30f);
+        const float out = p.ocean_threshold - c;
+        const float t = smooth01(out / 0.30f);
         h = -1.2f - p.ocean_depth_m * t + hn * 1.5f;
+        // The deep ocean (Docs/MineOcean.md 2.1): past the shelf a drop-off
+        // to the deep plains, which roll more, and trenches along the ridges.
+        if (p.deep_ocean_m > p.ocean_depth_m) {
+            const float dd = smoothstep(p.deep_ocean_from, p.deep_ocean_from + 0.10f, out);
+            if (dd > 0.0f) {
+                const float tr = clampf((ridge - 0.78f) / 0.22f, 0.0f, 1.0f);
+                h -= dd * ((p.deep_ocean_m - p.ocean_depth_m) + p.trench_m * tr * tr + hn * 4.0f);
+                h = std::max(h, p.bedrock_m + 24.0f);
+            }
+        }
     } else {
         const float land = c - p.ocean_threshold;
         const float hill_mult = climate_hilliness(p, temp, humid, weird);

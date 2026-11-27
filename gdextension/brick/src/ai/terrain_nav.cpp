@@ -6,17 +6,22 @@
 
 #include <algorithm>
 #include <climits>
-#include <cstring>
 #include <cmath>
+#include <cstring>
 #include <queue>
 #include <unordered_set>
 
 // brick_terrain.cpp: one column of the field, 1 solid / 0 air.
 void terrain_column_solid(int x, int z, int y0, int n, uint8_t *out);
+// brick_fluid.cpp: courses of a column, 0 dry / 1 water / 2 lava.
+void fluid_column(int x, int z, int b0, int nb, uint8_t *out);
+// brick_fluid.cpp: the log's changed cells since a write count.
+bool fluid_changes_since(int64_t since, int64_t &now, std::vector<int> &out);
 
 namespace {
 
 constexpr int NO_LAND = INT32_MIN;
+constexpr int PLATES_PER_COURSE = 3;
 const int DIRS[8][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } };
 
 inline int fdiv(int a, int b) {
@@ -31,6 +36,11 @@ inline int unpack21(int64_t v) {
     return (int)v;
 }
 
+/// A body is never in solid or lava.
+inline bool blocks(uint8_t c) {
+    return c == TerrainNav::SOLID || c == TerrainNav::LAVA;
+}
+
 } // namespace
 
 void TerrainNav::_bind_methods() {
@@ -40,11 +50,16 @@ void TerrainNav::_bind_methods() {
     ClassDB::bind_method(D_METHOD("field_cost", "id", "from"), &TerrainNav::field_cost);
     ClassDB::bind_method(D_METHOD("field_size", "id"), &TerrainNav::field_size);
     ClassDB::bind_method(D_METHOD("release_field", "id"), &TerrainNav::release_field);
+    ClassDB::bind_method(D_METHOD("free_reach", "from", "body", "reach", "max_nodes"), &TerrainNav::free_reach);
     ClassDB::bind_method(D_METHOD("line_clear", "from", "to"), &TerrainNav::line_clear);
     ClassDB::bind_method(D_METHOD("stand_near", "at", "body", "radius"), &TerrainNav::stand_near);
     ClassDB::bind_method(D_METHOD("fits", "at", "body"), &TerrainNav::fits);
+    ClassDB::bind_method(D_METHOD("code_at", "at"), &TerrainNav::code_at);
     ClassDB::bind_method(D_METHOD("invalidate_box", "lo", "hi"), &TerrainNav::invalidate_box);
     ClassDB::bind_method(D_METHOD("clear"), &TerrainNav::clear);
+    ClassDB::bind_method(D_METHOD("set_fluid", "on"), &TerrainNav::set_fluid);
+    ClassDB::bind_method(D_METHOD("set_fluid_version", "v"), &TerrainNav::set_fluid_version);
+    ClassDB::bind_method(D_METHOD("update_fluid"), &TerrainNav::update_fluid);
     ClassDB::bind_method(D_METHOD("set_obstacles", "id", "lo_hi"), &TerrainNav::set_obstacles);
     ClassDB::bind_method(D_METHOD("remove_obstacles", "id"), &TerrainNav::remove_obstacles);
     ClassDB::bind_method(D_METHOD("obstacle_count"), &TerrainNav::obstacle_count);
@@ -67,7 +82,7 @@ const TerrainNav::Section *TerrainNav::Reader::_at(int sx, int sy, int sz) {
     return sec;
 }
 
-uint8_t TerrainNav::Reader::solid(int x, int y, int z) {
+uint8_t TerrainNav::Reader::code(int x, int y, int z) {
     const int sx = fdiv(x, SX), sy = fdiv(y, SY), sz = fdiv(z, SX);
     const Section *s = _at(sx, sy, sz);
     const int lx = x - sx * SX, ly = y - sy * SY, lz = z - sz * SX;
@@ -90,25 +105,66 @@ void TerrainNav::Reader::column(int x, int z, int y0, int n, uint8_t *out) {
     }
 }
 
+void TerrainNav::_fill_fluid(Section &s, int sx, int sy, int sz) {
+    std::memcpy(s.cells, s.solid, sizeof(s.cells));
+    s.fver = fluid_ver.load();
+    if (!fluid_on.load()) {
+        return;
+    }
+    const int x0 = sx * SX, y0 = sy * SY, z0 = sz * SX;
+    const int b0 = fdiv(y0, PLATES_PER_COURSE);
+    const int b1 = fdiv(y0 + SY - 1, PLATES_PER_COURSE);
+    const int nb = b1 - b0 + 1;
+    uint8_t f[32];
+    for (int lz = 0; lz < SX; ++lz) {
+        for (int lx = 0; lx < SX; ++lx) {
+            fluid_column(x0 + lx, z0 + lz, b0, nb, f);
+            uint8_t *col = &s.cells[(lz * SX + lx) * SY];
+            for (int ly = 0; ly < SY; ++ly) {
+                if (col[ly] != AIR) {
+                    continue;
+                }
+                const uint8_t w = f[fdiv(y0 + ly, PLATES_PER_COURSE) - b0];
+                if (w == 1) {
+                    col[ly] = WATER;
+                } else if (w == 2) {
+                    col[ly] = LAVA;
+                }
+            }
+        }
+    }
+    fluid_refreshes.fetch_add(1, std::memory_order_relaxed);
+}
+
 std::shared_ptr<const TerrainNav::Section> TerrainNav::_section(int sx, int sy, int sz) {
     const int64_t k = _key(sx, sy, sz);
+    std::shared_ptr<const Section> old;
     {
         std::lock_guard<std::mutex> lk(sec_lock);
         auto it = sections.find(k);
         if (it != sections.end()) {
-            return it->second;
+            auto d = fluid_dirty.find(k);
+            if (it->second->fver == fluid_ver.load() && d == fluid_dirty.end()) {
+                return it->second;
+            }
+            if (d != fluid_dirty.end()) {
+                fluid_dirty.erase(d);
+            }
+            old = it->second;   // its fluid is stale: read again below
         }
     }
-    // Made outside the lock: two searches may make the same one, the first kept.
+    // Made outside the lock: two searches may make the same one, the last kept.
     auto s = std::make_shared<Section>();
     const int x0 = sx * SX, y0 = sy * SY, z0 = sz * SX;
-    for (int lz = 0; lz < SX; ++lz) {
-        for (int lx = 0; lx < SX; ++lx) {
-            terrain_column_solid(x0 + lx, z0 + lz, y0, SY, &s->cells[(lz * SX + lx) * SY]);
+    if (old) {
+        std::memcpy(s->solid, old->solid, sizeof(s->solid));
+    } else {
+        for (int lz = 0; lz < SX; ++lz) {
+            for (int lx = 0; lx < SX; ++lx) {
+                terrain_column_solid(x0 + lx, z0 + lz, y0, SY, &s->solid[(lz * SX + lx) * SY]);
+            }
         }
-    }
-    {
-        // Trunks and the like over this section.
+        // Trunks, shut doors and the like over this section.
         std::lock_guard<std::mutex> ol(ob_lock);
         auto it = ob_index.find(_key(sx, 0, sz));
         if (it != ob_index.end()) {
@@ -116,20 +172,21 @@ std::shared_ptr<const TerrainNav::Section> TerrainNav::_section(int sx, int sy, 
                 for (int z = std::max(b.z0, z0); z <= std::min(b.z1, z0 + SX - 1); ++z) {
                     for (int x = std::max(b.x0, x0); x <= std::min(b.x1, x0 + SX - 1); ++x) {
                         for (int y = std::max(b.y0, y0); y <= std::min(b.y1, y0 + SY - 1); ++y) {
-                            s->cells[((z - z0) * SX + (x - x0)) * SY + (y - y0)] = 1;
+                            s->solid[((z - z0) * SX + (x - x0)) * SY + (y - y0)] = 1;
                         }
                     }
                 }
             }
         }
+        sections_made.fetch_add(1, std::memory_order_relaxed);
     }
-    sections_made.fetch_add(1, std::memory_order_relaxed);
+    _fill_fluid(*s, sx, sy, sz);
     std::lock_guard<std::mutex> lk(sec_lock);
     if ((int)sections.size() >= MAX_SECTIONS) {
         sections.clear();
     }
-    auto ins = sections.emplace(k, s);
-    return ins.first->second;
+    sections[k] = s;
+    return s;
 }
 
 void TerrainNav::invalidate_box(const Vector3i &lo, const Vector3i &hi) {
@@ -155,6 +212,57 @@ void TerrainNav::invalidate_box(const Vector3i &lo, const Vector3i &hi) {
                 sections.erase(_key(x, y, z));
             }
         }
+    }
+}
+
+void TerrainNav::clear() {
+    std::lock_guard<std::mutex> lk(sec_lock);
+    sections.clear();
+}
+
+void TerrainNav::set_fluid(bool on) {
+    fluid_on.store(on);
+    fluid_ver.fetch_add(1);
+}
+
+int TerrainNav::update_fluid() {
+    if (!fluid_on.load()) {
+        return 0;
+    }
+    std::vector<int> cells;
+    int64_t now = 0;
+    const bool ok = fluid_changes_since(fluid_seen, now, cells);
+    if (fluid_seen < 0 || !ok) {
+        fluid_seen = now;
+        if (!ok) {
+            fluid_ver.fetch_add(1);   // too far back: every section reads again
+        }
+        return -1;
+    }
+    fluid_seen = now;
+    std::lock_guard<std::mutex> lk(sec_lock);
+    for (size_t i = 0; i + 2 < cells.size(); i += 3) {
+        const int x = cells[i], b = cells[i + 1], z = cells[i + 2];
+        for (int yp = b * PLATES_PER_COURSE; yp < (b + 1) * PLATES_PER_COURSE; yp += SY) {
+            const int64_t k = _key(fdiv(x, SX), fdiv(yp, SY), fdiv(z, SX));
+            if (sections.count(k)) {
+                fluid_dirty.insert(k);
+            }
+        }
+        // A course can straddle two sections in y.
+        const int64_t k2 = _key(fdiv(x, SX), fdiv((b + 1) * PLATES_PER_COURSE - 1, SY), fdiv(z, SX));
+        if (sections.count(k2)) {
+            fluid_dirty.insert(k2);
+        }
+    }
+    return (int)(cells.size() / 3);
+}
+
+void TerrainNav::set_fluid_version(int64_t v) {
+    // Kept apart from set_fluid's bumps: a version only ever goes forward.
+    const int64_t want = v * 2 + 1000000;
+    if (fluid_ver.load() != want) {
+        fluid_ver.store(want);
     }
 }
 
@@ -222,11 +330,6 @@ int TerrainNav::obstacle_count() {
     return n;
 }
 
-void TerrainNav::clear() {
-    std::lock_guard<std::mutex> lk(sec_lock);
-    sections.clear();
-}
-
 Dictionary TerrainNav::get_stats() {
     Dictionary d;
     {
@@ -238,6 +341,8 @@ Dictionary TerrainNav::get_stats() {
         d["fields"] = (int64_t)fields.size();
     }
     d["sections_made"] = (int64_t)sections_made.load();
+    d["fluid_refreshes"] = (int64_t)fluid_refreshes.load();
+    d["obstacles"] = obstacle_count();
     return d;
 }
 
@@ -277,9 +382,12 @@ bool TerrainNav::_fit(Reader &r, int x, int y, int z, const Body &b) {
     for (int cz = z; cz < z + b.w; ++cz) {
         for (int cx = x; cx < x + b.w; ++cx) {
             for (int yy = y + 1; yy <= y + b.h; ++yy) {
-                if (r.solid(cx, yy, cz)) {
+                if (blocks(r.code(cx, yy, cz))) {
                     return false;
                 }
+            }
+            if (r.code(cx, y + b.h, cz) == WATER) {
+                return false;   // the head under water
             }
             if (!support && r.solid(cx, y, cz)) {
                 support = true;
@@ -322,9 +430,12 @@ int TerrainNav::_land(Reader &r, int x, int y, int z, int nx, int nz, const Body
         for (int cx = nx; cx < nx + b.w; ++cx, ++ci) {
             r.column(cx, cz, bot, nn, buf[ci]);
             for (int i = top - bot; i >= 0 && bot + i > support; --i) {
-                if (buf[ci][i]) {
+                if (buf[ci][i] == SOLID) {
                     support = bot + i;
                     break;
+                }
+                if (buf[ci][i] == LAVA) {
+                    break;   // under lava is never where it lands
                 }
             }
         }
@@ -332,14 +443,19 @@ int TerrainNav::_land(Reader &r, int x, int y, int z, int nx, int nz, const Body
     if (support == NO_LAND) {
         return NO_LAND;   // a drop deeper than it takes
     }
-    // Air for the body over the landing, up to where its head was if it drops.
+    // Room for the body over the landing, up to where its head was if it drops.
     const int head = std::max(y, support) + b.h;
     for (int c = 0; c < ci; ++c) {
         for (int yy = support + 1; yy <= head; ++yy) {
             const int i = yy - bot;
-            if (i < nn ? buf[c][i] : r.solid(nx + c % b.w, yy, nz + c / b.w)) {
+            const uint8_t v = i < nn ? buf[c][i] : r.code(nx + c % b.w, yy, nz + c / b.w);
+            if (blocks(v)) {
                 return NO_LAND;
             }
+        }
+        const int hi = support + b.h - bot;
+        if ((hi < nn ? buf[c][hi] : r.code(nx + c % b.w, support + b.h, nz + c / b.w)) == WATER) {
+            return NO_LAND;   // the head under water
         }
     }
     // Stepping up: room over where it stands for the head to rise.
@@ -347,7 +463,7 @@ int TerrainNav::_land(Reader &r, int x, int y, int z, int nx, int nz, const Body
         for (int cz = z; cz < z + b.w; ++cz) {
             for (int cx = x; cx < x + b.w; ++cx) {
                 for (int yy = y + b.h + 1; yy <= support + b.h; ++yy) {
-                    if (r.solid(cx, yy, cz)) {
+                    if (blocks(r.code(cx, yy, cz))) {
                         return NO_LAND;
                     }
                 }
@@ -366,7 +482,18 @@ int TerrainNav::_move(Reader &r, int x, int y, int z, int dx, int dz, const Body
     return _land(r, x, y, z, x + dx, z + dz, b);
 }
 
-float TerrainNav::_edge_cost(int dx, int dz, int y0, int y1) {
+bool TerrainNav::_wet_feet(Reader &r, int x, int y, int z, const Body &b) {
+    for (int cz = z; cz < z + b.w; ++cz) {
+        for (int cx = x; cx < x + b.w; ++cx) {
+            if (r.code(cx, y + 1, cz) == WATER) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+float TerrainNav::_edge_cost(Reader &r, int x, int z, int dx, int dz, int y0, int y1, const Body &b) {
     float c = (dx != 0 && dz != 0) ? 1.41421f : 1.0f;
     const int dy = y1 - y0;
     if (dy > 0) {
@@ -375,6 +502,9 @@ float TerrainNav::_edge_cost(int dx, int dz, int y0, int y1) {
         c += HURT_COST;
     } else {
         c += -dy * 0.03f;
+    }
+    if (_wet_feet(r, x + dx, y1, z + dz, b)) {
+        c += WADE_COST;
     }
     return c;
 }
@@ -387,6 +517,12 @@ bool TerrainNav::fits(const Vector3 &at, const Vector4i &body) {
     int x, y, z;
     _snap(at, b, x, y, z);
     return _fit(r, x, y, z, b);
+}
+
+int TerrainNav::code_at(const Vector3 &at) {
+    Reader r(this);
+    return r.code((int)std::floor(at.x / brick::STUD_M), (int)std::floor(at.y / brick::PLATE_M),
+            (int)std::floor(at.z / brick::STUD_M));
 }
 
 Vector3 TerrainNav::stand_near(const Vector3 &at, const Vector4i &body, int radius) {
@@ -433,6 +569,41 @@ bool TerrainNav::line_clear(const Vector3 &from, const Vector3 &to) {
         }
     }
     return true;
+}
+
+bool TerrainNav::free_reach(const Vector3 &from, const Vector4i &body, int reach, int max_nodes) {
+    const Body b = _body(body);
+    Reader r(this);
+    int sx, sy, sz;
+    _snap(from, b, sx, sy, sz);
+    if (!_find_node(r, sx, sy, sz, b, 6, 3)) {
+        return false;   // stuck where it stands: as trapped as it gets
+    }
+    std::unordered_set<int64_t> seen;
+    std::vector<int64_t> q;
+    q.push_back(_key(sx, sy, sz));
+    seen.insert(q.back());
+    for (size_t head = 0; head < q.size(); ++head) {
+        if ((int)seen.size() > max_nodes) {
+            return true;   // that much room is not a pen
+        }
+        int x, y, z;
+        _unkey(q[head], x, y, z);
+        if (std::max(std::abs(x - sx), std::abs(z - sz)) > reach) {
+            return true;
+        }
+        for (int i = 0; i < 4; ++i) {
+            const int ny = _move(r, x, y, z, DIRS[i][0], DIRS[i][1], b);
+            if (ny == NO_LAND) {
+                continue;
+            }
+            const int64_t nk = _key(x + DIRS[i][0], ny, z + DIRS[i][1]);
+            if (seen.insert(nk).second) {
+                q.push_back(nk);
+            }
+        }
+    }
+    return false;
 }
 
 Dictionary TerrainNav::find_path(const Vector3 &from, const Vector3 &to, const Vector4i &body, int max_nodes) {
@@ -495,7 +666,7 @@ Dictionary TerrainNav::find_path(const Vector3 &from, const Vector3 &to, const V
             if (closed.count(nk)) {
                 continue;
             }
-            const float ng = gk + _edge_cost(d[0], d[1], y, ny);
+            const float ng = gk + _edge_cost(r, x, z, d[0], d[1], y, ny, b);
             auto it = g.find(nk);
             if (it == g.end() || ng < it->second) {
                 g[nk] = ng;
@@ -573,12 +744,12 @@ int TerrainNav::build_field(const Vector3 &goal, int radius, const Vector4i &bod
                 for (int cx = ax; cx < ax + b.w; ++cx) {
                     uint8_t *col = &buf[(size_t)ci * n];
                     r.column(cx, cz, lo, n, col);
-                    // above[i]: the first solid plate over i (n: none in the copy).
+                    // above[i]: the first plate over i a body cannot be in (n: none).
                     int16_t *ab = &above[(size_t)ci * n];
                     int16_t next = (int16_t)n;
                     for (int i = n - 1; i >= 0; --i) {
                         ab[i] = next;
-                        if (col[i]) {
+                        if (blocks(col[i])) {
                             next = (int16_t)i;
                         }
                     }
@@ -589,7 +760,7 @@ int TerrainNav::build_field(const Vector3 &goal, int radius, const Vector4i &bod
                 const int i0 = ya - lo;
                 bool support = false, clear = true;
                 for (int cc = 0; cc < cols; ++cc) {
-                    support = support || buf[(size_t)cc * n + i0];
+                    support = support || buf[(size_t)cc * n + i0] == SOLID;
                     if (above[(size_t)cc * n + i0] <= i0 + b.h) {
                         clear = false;
                         break;
@@ -602,7 +773,7 @@ int TerrainNav::build_field(const Vector3 &goal, int radius, const Vector4i &bod
                     continue;
                 }
                 const int64_t ak = _key(ax, ya, az);
-                const float nc = c + _edge_cost(d[0], d[1], ya, y);
+                const float nc = c + _edge_cost(r, ax, az, d[0], d[1], ya, y, b);
                 auto it = cost.find(ak);
                 if (it == cost.end() || nc < it->second) {
                     cost[ak] = nc;

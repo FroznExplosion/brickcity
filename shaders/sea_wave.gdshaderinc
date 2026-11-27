@@ -128,15 +128,15 @@ float pool_calm_at(vec2 p) {
 // and the ripple along its banks toward the wider water.
 float river_shape(vec2 p, float dist, float t, out float narrow) {
     narrow = 1.0;
-    if (!river_calm || dist >= 12.0) {
+    if (!river_calm || dist >= 16.0) {
         return 0.0;
     }
     float open = dist;
-    open = max(open, lattice_distance(p + vec2(12.0, 0.0)));
-    open = max(open, lattice_distance(p - vec2(12.0, 0.0)));
-    open = max(open, lattice_distance(p + vec2(0.0, 12.0)));
-    open = max(open, lattice_distance(p - vec2(0.0, 12.0)));
-    narrow = smoothstep(3.5, 9.0, open);
+    open = max(open, lattice_distance(p + vec2(16.0, 0.0)));
+    open = max(open, lattice_distance(p - vec2(16.0, 0.0)));
+    open = max(open, lattice_distance(p + vec2(0.0, 16.0)));
+    open = max(open, lattice_distance(p - vec2(0.0, 16.0)));
+    narrow = smoothstep(5.0, 12.0, open);
     if (narrow >= 1.0) {
         return 0.0;
     }
@@ -174,6 +174,6 @@ float surface_offset(vec2 p, float t, float taper, float cell_m) {
     float calm = shore_calm.x + (1.0 - shore_calm.x) * smoothstep(0.0, shore_calm.y, dist);
     float narrow;
     float ripple = river_shape(p, dist, t, narrow);
-    return (wave_raw_lod(p, t, cell_m, dist) * taper * group_factor(p, t) * calm * narrow + band + ripple)
+    return (wave_raw_lod(p, t, cell_m, dist) * taper * group_factor(p, t) * calm * narrow + band * narrow + ripple)
             * pool_calm_at(p) - max(above, 0.0) * swash_loss;
 }

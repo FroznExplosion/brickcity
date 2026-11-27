@@ -991,6 +991,9 @@ public:
     /// The placed bricks, 4 ints a cell (x, course, z, code), for a save; and
     /// back (after set_edits).
     static PackedInt32Array get_placed();
+    /// The placed brick holding cell (x, course, z): Vector4i(rx, rz, sx, sz),
+    /// its rectangle's low corner and size in studs; all zeros if none.
+    static Vector4i placed_rect(int x, int course, int z);
     static int set_placed(const PackedInt32Array &cells);
     static int material_at(int x, int z);
     static bool is_plate(int x, int z);

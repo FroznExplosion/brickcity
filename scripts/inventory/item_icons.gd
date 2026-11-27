@@ -156,6 +156,21 @@ static func _cyl(top: float, bottom: float, h: float, seg := 20) -> CylinderMesh
 	return c
 
 
+## Every mesh under `n` as a plain child of `into`, where it stands (`xf`).
+static func _flatten(into: Node3D, n: Node, xf: Transform3D) -> void:
+	for c in n.get_children():
+		if not (c is Node3D):
+			continue
+		var t := xf * (c as Node3D).transform
+		if c is MeshInstance3D and (c as MeshInstance3D).mesh != null:
+			var mi := MeshInstance3D.new()
+			mi.mesh = (c as MeshInstance3D).mesh
+			mi.material_override = (c as MeshInstance3D).material_override
+			mi.transform = t
+			into.add_child(mi)
+		_flatten(into, c, t)
+
+
 ## A brick shield, fitted to about 1.0 tall, its face toward -Z, its handle
 ## behind (+Z) at `SHIELD_GRIP`: a board of the item's colour, a grey rim and
 ## a boss -- the icon's model and the one the off-hand holds (MineHands).
@@ -376,6 +391,10 @@ static func _model(d: Dictionary) -> Node3D:
 				_part(inner, _box(Vector3(0.35, 0.8, 1.0)), _mat(Color(0.12, 0.13, 0.15), 0.5), Vector3(0, 0.4, 0))
 				_part(inner, _box(Vector3(0.04, 0.4, 0.14)), _mat(col, 0.3, 1.0, true), Vector3(0.18, 0.4, -0.12))
 				_part(inner, _box(Vector3(0.04, 0.4, 0.14)), _mat(col, 0.3, 1.0, true), Vector3(0.18, 0.4, 0.12))
+			elif dm == "piston":
+				# A grey body, the head plate (the item's colour) at the front.
+				_part(inner, _box(Vector3(0.65, 0.9, 0.9)), _mat(Color(0.33, 0.34, 0.37), 0.6), Vector3(-0.17, 0.45, 0))
+				_part(inner, _box(Vector3(0.22, 0.95, 0.95)), _mat(col, 0.55), Vector3(0.3, 0.45, 0))
 			elif dm == "button":
 				_part(inner, _box(Vector3(0.9, 0.4, 0.9)), _mat(Color(0.5, 0.5, 0.52), 0.6), Vector3(0, 0.2, 0))
 				_part(inner, _box(Vector3(0.5, 0.2, 0.5)), _mat(col, 0.35), Vector3(0, 0.5, 0))
@@ -392,6 +411,13 @@ static func _model(d: Dictionary) -> Node3D:
 				var lean := Basis(Vector3.BACK, deg_to_rad(-30.0))
 				_part(inner, _box(Vector3(0.12, 0.7, 0.12)), _mat(Color(0.45, 0.3, 0.16), 0.7), Vector3(0.15, 0.55, 0), lean)
 				_part(inner, _box(Vector3(0.22, 0.22, 0.22)), _mat(Color(0.75, 0.1, 0.08), 0.4), Vector3(0.33, 0.86, 0))
+		"spawner":
+			# The creature itself, its block-out (Docs/MineCreatures.md 12),
+			# turned a little to show its side; flattened into plain meshes.
+			var cr := StringName(str(d.get("creature", "")))
+			var look := MobLooks.make(cr, CreatureBook.get_def(cr))
+			_flatten(inner, look, Transform3D(Basis(Vector3.UP, deg_to_rad(-60.0)), Vector3.ZERO))
+			look.free()
 		_:
 			_part(inner, _box(Vector3(0.8, 0.8, 0.8)), _mat(col, 0.5), Vector3.ZERO)
 	# Fit: the biggest extent 1.0, the middle on the origin.

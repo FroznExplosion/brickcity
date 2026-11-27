@@ -1,37 +1,58 @@
 class_name MineMobs
 extends Node3D
-## The mine world's creatures (Docs/MineCreatures.md): a zombie and a herd of
-## pigs for now, on TerrainNav.
+## The mine world's creatures (Docs/MineCreatures.md): zombies and herds of
+## animals (CreatureBook: pig, deer, rabbit, boar, wolf), on TerrainNav.
 ##
-##   nav        one TerrainNav for every body (the field read once, kept in
-##              sections, forgotten where an edit lands: terrain_edited)
+##   nav        one TerrainNav for every body: the field read once, kept in
+##              sections, forgotten where an edit lands (terrain_edited);
+##              water and lava read again when the fluid changes; tree trunks
+##              and shut doors as obstacles
 ##   the field  ONE flow field out from the player for every zombie, built on
 ##              a worker when the player has moved or the ground changed, taken
 ##              when done (never waited for)
 ##   wind       turns slowly; carries the player's scent to the animals
-##              downwind (PigHerd). Shown top right, as an arrow in the view
-##   life       one zombie and one herd near the player, made again a while
-##              after they die; asleep (no physics) far off, gone farther
+##              downwind (Herd). Shown top right, as an arrow in the view
+##   tiers      near: a Pawn walking; FAR (past the terrain's colliders): the
+##              creature rides the nav; asleep past SLEEP_AT; wild ones gone
+##              past GONE_AT, penned ones PARKED (a record) and back when near
+##   life       a zombie and two wild groups near the player, made again a
+##              while after they go
+##   saving     (section 11) animals PENNED in -- a fence, a building, a pit,
+##              anything they cannot walk 32 studs out of (TerrainNav.free_reach)
+##              -- are saved with the world, parked ones too; zombies within
+##              ZOMBIE_SAVE_M of the player are saved, but only by the host
+##              (a client leaving a game saves no enemies)
+##   gates      fence gates (MineFences): which panels open, saved here
 ##
 ## A child of the mine world node, so the origin shift moves it and every
 ## creature with it; positions here are that node's (the terrain frame).
-## F7: a zombie. Shift+F7: a herd of pigs.
+## F7: a zombie. Shift+F7: a group of the next kind of animal.
 
 const ZOMBIE_BODY := MobZombie.BODY
 const FIELD_RADIUS := 96          # studs (33.6 m)
 const FIELD_NODES := 90000
 const FIELD_EVERY := 1.0
 const FIELD_MOVE := 1.5           # metres the player moves before a new field
-const SLEEP_AT := 80.0
-const WAKE_AT := 70.0
-const GONE_AT := 150.0
+const SLEEP_AT := 128.0
+const WAKE_AT := 118.0
+const GONE_AT := 170.0
+const UNPARK_AT := 140.0
 const ZOMBIE_AGAIN := 25.0
-const HERD_AGAIN := 60.0
+const WILD_GROUPS := 2
+## A spawned animal joins a herd of its kind this near.
+const JOIN_HERD := 16.0
+const WILD_EVERY := 45.0
+const ZOMBIE_SAVE_M := 48.0
+const PEN_REACH := 32             # studs out of which it cannot walk: penned
+const PEN_NODES := 9000
+const PEN_EVERY := 8.0
 const KNOCK := 5.5
 const WIND_TURN := 0.05           # rad/s at most
 ## Tree cells whose trunks the nav is told about (TerrainTrees' trunks are
 ## physics boxes, not terrain: without this a zombie walks into them).
 const TREES_NEAR := 100.0
+## Which wild group comes next, by weight.
+const WILD_KINDS := {&"pig": 3, &"deer": 3, &"rabbit": 2, &"boar": 1, &"wolf": 1}
 
 var host: Node = null
 var nav := TerrainNav.new()
@@ -40,12 +61,22 @@ var herds: Array = []
 ## Auto spawning (off for a gate, which spawns its own).
 var auto := true
 var populated := false
+## Past this a creature rides the nav (the terrain's colliders end about here).
+var far_at := 56.0
 ## The way the wind blows TO, flat and unit.
 var wind := Vector3.RIGHT
 var wind_angle := 0.0
 var wind_hold := false
+## Fence gates: key -> {at: Vector3i (lattice anchor), x: bool, plates, open, mat}.
+var gates := {}
+## Penned animals far away, as records: {kind, p: Vector3, hp, herd}.
+var parked: Array = []
+## -1: ask the multiplayer API; 0 / 1: a gate's answer.
+var host_override := -1
 ## For gates and the readout.
 var hits_on_player := 0
+## Of those, how many a raised shield took (no shove).
+var hits_blocked := 0
 var fields_built := 0
 var last_field_ms := 0.0
 var log_lines: Array[String] = []
@@ -59,17 +90,30 @@ var _next_field := 0.0
 var _field_t0 := 0
 var _play_t := 0.0
 var _zombie_gone_at := -INF
-var _herd_gone_at := -INF
-var _herd_alive := false
-var _herd_ever := false
+var _next_wild := 0.0
 var _herd_t := 0.0
 var _wind_noise := FastNoiseLite.new()
 var _label: Label = null
 var _gun_hooked = null
 var _rng := RandomNumberGenerator.new()
 var _tree_groups := {}   # tree cell -> [obstacle group, trunks]
+var _door_groups := {}   # device cell -> obstacle group
 var _next_group := 1
 var _next_trees := 0.0
+var _next_doors := 0.0
+var _next_fluid := 0.0
+var _pending := {}
+var _pen_job := -1
+var _pen_out := []
+var _pen_mob = null
+var _pen_i := 0
+var _next_pen := 0.0
+var _next_herd_uid := 1
+var _key_kind := 0
+## The player's feet and whether this is the host, as of the last step: the
+## save at the world's close runs with the bodies already out of the tree.
+var _last_player := Vector3.INF
+var _host_seen := true
 
 
 func setup(p_host: Node) -> void:
@@ -79,6 +123,8 @@ func setup(p_host: Node) -> void:
 	wind_angle = _rng.randf() * TAU
 	_wind_noise.seed = _rng.randi()
 	_wind_noise.frequency = 0.01
+	nav.set_fluid(true)
+	BrickFluid.set_change_log(true)
 	if host.get("_gate"):
 		auto = false
 	var layer: CanvasLayer = host.get("_hud_layer")
@@ -87,7 +133,7 @@ func setup(p_host: Node) -> void:
 		_label.name = "WindLabel"
 		_label.anchor_left = 1.0
 		_label.anchor_right = 1.0
-		_label.offset_left = -330.0
+		_label.offset_left = -420.0
 		_label.offset_right = -12.0
 		_label.offset_top = 8.0
 		_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -105,7 +151,11 @@ func reset() -> void:
 			m.pawn.body.queue_free()
 	mobs.clear()
 	herds.clear()
+	parked.clear()
+	gates.clear()
+	_pending = {}
 	_take_field_job(true)
+	_take_pen_job(true)
 	if field_id != 0:
 		nav.release_field(field_id)
 	field_id = 0
@@ -113,13 +163,15 @@ func reset() -> void:
 	for c in _tree_groups:
 		nav.remove_obstacles(int(_tree_groups[c][0]))
 	_tree_groups.clear()
+	for c in _door_groups:
+		nav.remove_obstacles(int(_door_groups[c]))
+	_door_groups.clear()
 	_next_trees = 0.0
 	nav.clear()
 	populated = false
 	_play_t = 0.0
-	_herd_alive = false
-	_herd_ever = false
 	_zombie_gone_at = -INF
+	_next_wild = 0.0
 
 
 func now() -> float:
@@ -136,9 +188,19 @@ func to_world(local: Vector3) -> Vector3:
 
 func log_line(s: String) -> void:
 	log_lines.append(s)
-	if log_lines.size() > 200:
+	if log_lines.size() > 300:
 		log_lines.remove_at(0)
 	print("[mobs] %s" % s)
+
+
+## The one who saves the world: no network peer, or the server.
+func is_host() -> bool:
+	if host_override >= 0:
+		return host_override == 1
+	if not is_inside_tree():
+		return _host_seen
+	var mp := multiplayer
+	return mp == null or not mp.has_multiplayer_peer() or mp.is_server()
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +208,13 @@ func log_line(s: String) -> void:
 
 func player_feet() -> Vector3:
 	return host.player_feet_local()
+
+
+func player_health_frac() -> float:
+	var p: Pawn = host.pawn
+	if p == null or not is_instance_valid(p) or p.health == null:
+		return 1.0
+	return clampf(p.health.get_layer_fraction(0), 0.0, 1.0)
 
 
 ## {} with no player. Else feet, chest (terrain frame), crouched, speed (m/s
@@ -171,78 +240,123 @@ func player_info() -> Dictionary:
 			"sprinting": sprinting, "light": maxf(sky * sun, lamp)}
 
 
-## A zombie's blow: a shove (the player cannot be hurt yet).
-func hit_player(z, dir: Vector3) -> void:
+## A blow on the player: a shove always; health too in survival (MineSurvival
+## takes it from there) -- unless a raised shield faces it (the pawn's
+## HealthPool.guard, MineHands; Docs/Inventory.md round four): then the
+## shield takes it, worn by its damage, and there is no shove and no harm.
+func hurt_player(m, dmg: float, dir: Vector3) -> void:
 	hits_on_player += 1
 	var p: Pawn = host.pawn if host.on_foot else null
 	if p != null and is_instance_valid(p):
+		if p.health != null and p.health.guard.is_valid():
+			var pk := DamagePacket.new(dmg, null, m)
+			pk.melee = true
+			pk.hit_position = (host as Node3D).to_global(m.feet() + Vector3(0, 1.2, 0))
+			if float(p.health.guard.call(pk)) <= 0.0:
+				hits_blocked += 1
+				log_line("a %s hit the player's shield (%.0f)" % [m.kind, dmg])
+				return
 		p.shove = Vector3(dir.x, 0.0, dir.z) * KNOCK + Vector3.UP * 2.5
-	log_line("%s hit the player" % z.kind)
+		if bool(host.get("survival")) and p.health != null and not p.health.is_dead():
+			p.health.apply_impact(dmg, &"")
+	log_line("a %s hit the player (%.0f)" % [m.kind, dmg])
 
 
 ## A loud thing at `at` (terrain frame) heard within `radius` m.
 func noise(at: Vector3, radius: float, why: String) -> void:
 	for h in herds:
-		if (h as PigHerd).centre().distance_to(at) <= radius:
-			(h as PigHerd).startle(at, why)
+		if (h as Herd).centre().distance_to(at) <= radius:
+			(h as Herd).startle(at, why)
 
 
 func on_died(m) -> void:
-	log_line("%s died" % m.kind)
+	log_line("a %s died" % m.kind)
 	if m.kind == &"zombie":
 		_zombie_gone_at = now()
-	elif m.kind == &"pig":
-		if host.get("drops") != null:
-			host.drops.spawn(ItemStack.make(&"raw_pork", 2), m.feet() + Vector3(0, 0.4, 0))
-		for h in herds:
-			if (h as PigHerd).members.has(m):
-				(h as PigHerd).startle(m.feet(), "one was killed")
+		return
+	var drops: Dictionary = m.def.get("drops", {}) if m.get("def") != null else {}
+	if host.get("drops") != null:
+		for id in drops:
+			if ItemCatalog.has(StringName(id)):
+				host.drops.spawn(ItemStack.make(StringName(id), int(drops[id])), m.last_feet + Vector3(0, 0.4, 0))
 
 
 ## A push away from creatures closer than a body: flat, up to 1 long.
 func separation(m) -> Vector3:
-	var f: Vector3 = m.feet()
+	var f: Vector3 = m.last_feet
 	var push := Vector3.ZERO
+	var r: float = maxf(0.85, m.body.x * 0.35)
 	for o in mobs:
 		if o == m or not is_instance_valid(o) or o.dead:
 			continue
-		var d: Vector3 = f - o.feet()
+		var d: Vector3 = f - o.last_feet
 		d.y = 0.0
 		var l := d.length()
-		if l < 0.85 and l > 0.001:
-			push += d / l * (0.85 - l) / 0.85
+		if l < r and l > 0.001:
+			push += d / l * (r - l) / r
 	return push.limit_length(1.0)
 
 
 # ---------------------------------------------------------------------------
 # Spawning
 
-func spawn_zombie(at: Vector3) -> MobZombie:
+func spawn_zombie(at: Vector3, hp := -1.0) -> MobZombie:
 	var p := Pawn.spawn(self, to_world(at), 3, true, MobZombie.HP)
 	var z := MobZombie.new()
-	z.attach(self, p, MobLooks.zombie())
+	z.attach(self, p, MobLooks.make(&"zombie", {}))
+	if hp > 0.0 and hp < MobZombie.HP:
+		p.health.apply_impact(MobZombie.HP - hp, &"")
 	mobs.append(z)
 	log_line("a zombie at %s" % at)
 	return z
 
 
-func spawn_herd(at: Vector3, n := 3) -> PigHerd:
-	var h := PigHerd.new(self, at, _rng.randi())
-	for i in n:
-		var spot := nav.stand_near(h.slot(i, at), MobPig.BODY, 6)
+## A group of `kind` round `at` (n of them), or at `points` (a saved herd).
+func spawn_herd(kind: StringName, at: Vector3, n := 3, points: Array = [], hps: Array = [], uid := 0) -> Herd:
+	var def := CreatureBook.get_def(kind)
+	if def.is_empty():
+		push_warning("[mobs] no creature %s" % kind)
+		return null
+	var h := Herd.new(self, kind, at, _rng.randi())
+	h.set_meta(&"uid", uid if uid > 0 else _next_herd_uid)
+	_next_herd_uid = maxi(_next_herd_uid, int(h.get_meta(&"uid"))) + 1
+	var count := points.size() if not points.is_empty() else n
+	for i in count:
+		var spot: Vector3 = points[i] if not points.is_empty() else nav.stand_near(h.slot(i, at), def.body, 6)
 		if spot == Vector3.INF:
 			continue
-		var p := Pawn.spawn(self, to_world(spot), 4, true, MobPig.HP)
-		p.resize(MobPig.HEIGHT, 0.3)
-		var pig := MobPig.new()
-		pig.herd = h
-		pig.index = h.members.size()
-		pig.attach(self, p, MobLooks.pig())
-		h.members.append(pig)
-		mobs.append(pig)
+		_add_member(h, spot, float(hps[i]) if i < hps.size() else -1.0)
+	h.started = h.members.size()
 	herds.append(h)
-	log_line("a herd of %d pigs at %s" % [h.members.size(), at])
+	log_line("a group of %d %s at %s" % [h.members.size(), kind, at])
 	return h
+
+
+## One creature of `kind` at `at` (a spawn item's RMB, Docs/MineCreatures.md
+## 12): on the nearest floor it fits. An animal joins a herd of its kind
+## within JOIN_HERD m, or starts one. True if one was made.
+func spawn_one(kind: StringName, at: Vector3) -> bool:
+	if kind == &"zombie":
+		var s := nav.stand_near(at, ZOMBIE_BODY, 4)
+		if s == Vector3.INF:
+			return false
+		spawn_zombie(s)
+		return true
+	var def := CreatureBook.get_def(kind)
+	if def.is_empty():
+		return false
+	var spot := nav.stand_near(at, def.body, 4)
+	if spot == Vector3.INF:
+		return false
+	for h in herds:
+		var o := h as Herd
+		if o.kind == kind and not o.alive().is_empty() and o.centre().distance_to(spot) < JOIN_HERD:
+			_add_member(o, spot, -1.0)
+			o.started = maxi(o.started, o.alive().size())
+			log_line("a %s joined its herd at %s" % [kind, spot])
+			return true
+	spawn_herd(kind, spot, 0, [spot])
+	return true
 
 
 ## A floor `dist` m from the player in a random way for `body`, or INF.
@@ -266,25 +380,61 @@ func spot_from_player(dist: float, body: Vector4i) -> Vector3:
 	return Vector3.INF
 
 
+## One more animal of herd `h` at `spot`, with `hp` (< 0: whole).
+func _add_member(h: Herd, spot: Vector3, hp: float) -> MobAnimal:
+	var def := h.def
+	var b: Vector4i = def.body
+	var p := Pawn.spawn(self, to_world(spot), 4, true, float(def.hp))
+	var height := float(b.y) * Pawn.PLATE_M
+	p.resize(height, minf(b.x * 0.35 * 0.45, height * 0.5))
+	var a := MobAnimal.new()
+	a.setup_kind(h.kind)
+	a.herd = h
+	a.index = h.members.size()
+	a.attach(self, p, MobLooks.make(h.kind, def))
+	if hp > 0.0 and hp < float(def.hp):
+		p.health.apply_impact(float(def.hp) - hp, &"")
+	h.members.append(a)
+	mobs.append(a)
+	return a
+
+
+func _wild_kind() -> StringName:
+	var total := 0
+	for k in WILD_KINDS:
+		if CreatureBook.has(k):
+			total += int(WILD_KINDS[k])
+	var r := _rng.randi_range(0, maxi(total - 1, 0))
+	for k in WILD_KINDS:
+		if not CreatureBook.has(k):
+			continue
+		r -= int(WILD_KINDS[k])
+		if r < 0:
+			return k
+	return &"pig"
+
+
 func _populate() -> void:
 	var t := now()
 	if _count(&"zombie") == 0 and t - _zombie_gone_at > ZOMBIE_AGAIN:
 		var s := spot_from_player(28.0, ZOMBIE_BODY)
 		if s != Vector3.INF:
 			spawn_zombie(s)
-	var pigs := 0
+	if t < _next_wild:
+		return
+	var wild := 0
 	for h in herds:
-		pigs += (h as PigHerd).alive().size()
-	if pigs == 0:
-		if _herd_alive:
-			_herd_alive = false
-			_herd_gone_at = t
-		if not _herd_ever or t - _herd_gone_at > HERD_AGAIN:
-			herds.clear()
-			var s2 := spot_from_player(24.0, MobPig.BODY)
-			if s2 != Vector3.INF and spawn_herd(s2, 3).members.size() > 0:
-				_herd_alive = true
-				_herd_ever = true
+		if not (h as Herd).penned and not (h as Herd).alive().is_empty():
+			wild += 1
+	if wild < WILD_GROUPS:
+		# The first group is pigs (the farm's trouble); then any kind.
+		var kind: StringName = &"pig" if not populated else _wild_kind()
+		var def := CreatureBook.get_def(kind)
+		var g: Vector2i = def.group
+		var s2 := spot_from_player(_rng.randf_range(24.0, 40.0), def.body)
+		if s2 != Vector3.INF:
+			spawn_herd(kind, s2, _rng.randi_range(g.x, g.y))
+		_next_wild = t + (4.0 if not populated else WILD_EVERY)
 	populated = true
 
 
@@ -303,9 +453,15 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not k.pressed or k.echo or k.keycode != KEY_F7:
 		return
 	if k.shift_pressed:
-		var s := spot_from_player(14.0, MobPig.BODY)
+		var kinds := CreatureBook.ids()
+		if kinds.is_empty():
+			return
+		var kind: StringName = kinds[_key_kind % kinds.size()]
+		_key_kind += 1
+		var def := CreatureBook.get_def(kind)
+		var s := spot_from_player(14.0, def.body)
 		if s != Vector3.INF:
-			spawn_herd(s, 3)
+			spawn_herd(kind, s, Vector2i(def.group).y)
 	else:
 		var s2 := spot_from_player(14.0, ZOMBIE_BODY)
 		if s2 != Vector3.INF:
@@ -320,36 +476,80 @@ func step(delta: float) -> void:
 	_hook_gun()
 	_wind_step(delta)
 	var f := player_feet()
+	_last_player = f
+	_host_seen = is_host()
 	if f != Vector3.INF and host.on_foot:
 		_play_t += delta
+	if not _pending.is_empty() and _play_t > 1.0:
+		_spawn_saved(_pending)
+		_pending = {}
 	if auto and _play_t > 4.0:
 		_populate()
-	# Sleep far off, gone farther; the dead are let go.
+	_tiers(f)
+	_unpark(f)
+	_trees_step(f)
+	_doors_step()
+	_fluid_step()
+	_field_step(f)
+	_pen_step()
+	_herd_t += delta
+	if _herd_t >= 1.0 / Herd.HZ:
+		for h in herds:
+			(h as Herd).think(_herd_t)
+		_herd_t = 0.0
+	_update_label()
+
+
+## Near, far, asleep, gone or parked, by distance to the player.
+func _tiers(f: Vector3) -> void:
 	for m in mobs.duplicate():
 		if not is_instance_valid(m) or m.pawn == null or not is_instance_valid(m.pawn):
 			mobs.erase(m)
 			continue
 		if m.dead or f == Vector3.INF:
 			continue
-		var d: float = (m.feet() as Vector3).distance_to(f)
-		if d > GONE_AT and auto:
+		var d: float = (m.last_feet as Vector3).distance_to(f)
+		if d > GONE_AT and (auto or m.penned):
+			if m.kind != &"zombie" and m.penned:
+				parked.append({"kind": m.kind, "p": m.last_feet, "hp": m.hp(), "herd": int(m.herd.get_meta(&"uid"))})
+				log_line("a penned %s parked" % m.kind)
+			elif m.kind == &"zombie":
+				_zombie_gone_at = now() - ZOMBIE_AGAIN + 5.0
 			m.pawn.body.queue_free()
 			mobs.erase(m)
-			if m.kind == &"zombie":
-				_zombie_gone_at = now() - ZOMBIE_AGAIN + 5.0
+			if m.get("herd") != null:
+				m.herd.members.erase(m)
 			continue
 		var sleep: bool = d > (WAKE_AT if m.asleep else SLEEP_AT)
 		if sleep != m.asleep:
 			m.asleep = sleep
 			m.pawn.body.process_mode = Node.PROCESS_MODE_DISABLED if sleep else Node.PROCESS_MODE_INHERIT
-	_trees_step(f)
-	_field_step(f)
-	_herd_t += delta
-	if _herd_t >= 1.0 / PigHerd.HZ:
-		for h in herds:
-			(h as PigHerd).think(_herd_t)
-		_herd_t = 0.0
-	_update_label()
+		m.set_far(d > far_at)
+	for h in herds.duplicate():
+		if (h as Herd).members.is_empty():
+			herds.erase(h)
+
+
+## Parked animals come back when the player is near their place again.
+func _unpark(f: Vector3) -> void:
+	if parked.is_empty() or f == Vector3.INF:
+		return
+	var groups := {}
+	for r in parked.duplicate():
+		if (r.p as Vector3).distance_to(f) < UNPARK_AT:
+			parked.erase(r)
+			var key := "%s/%d" % [r.kind, int(r.herd)]
+			if not groups.has(key):
+				groups[key] = {"kind": r.kind, "herd": int(r.herd), "points": [], "hps": []}
+			groups[key].points.append(r.p)
+			groups[key].hps.append(r.hp)
+	for key in groups:
+		var g: Dictionary = groups[key]
+		var h := spawn_herd(StringName(g.kind), g.points[0], 0, g.points, g.hps, int(g.herd))
+		if h != null:
+			h.penned = true
+			for m in h.members:
+				m.penned = true
 
 
 func _hook_gun() -> void:
@@ -396,14 +596,193 @@ func _update_label() -> void:
 	if z > 0:
 		parts.append("%d zombie%s" % [z, "" if z == 1 else "s"])
 	for h in herds:
-		var n: int = (h as PigHerd).alive().size()
+		var n: int = (h as Herd).alive().size()
 		if n > 0:
-			parts.append("%d pig%s (%s)" % [n, "" if n == 1 else "s", (h as PigHerd).alert_name()])
+			parts.append("%d %s%s (%s%s)" % [n, (h as Herd).kind, "" if n == 1 else "s", (h as Herd).alert_name(),
+					", penned" if (h as Herd).penned else ""])
 	_label.text = " · ".join(parts)
 
 
 # ---------------------------------------------------------------------------
-# Tree trunks into the nav
+# Saving (section 11)
+
+## What goes into the world file under "mobs".
+func to_save() -> Dictionary:
+	var animals := []
+	for h in herds:
+		var uid := int((h as Herd).get_meta(&"uid", 0))
+		for m in (h as Herd).alive():
+			if m.penned and m.last_feet != Vector3.INF:
+				animals.append({"kind": String(m.kind), "p": _v(m.last_feet), "hp": m.hp(), "herd": uid})
+	for r in parked:
+		animals.append({"kind": String(r.kind), "p": _v(r.p), "hp": r.hp, "herd": int(r.herd)})
+	var zombies := []
+	if is_host():
+		var f := _last_player
+		for m in mobs:
+			if is_instance_valid(m) and not m.dead and m.kind == &"zombie" and f != Vector3.INF \
+					and (m.last_feet as Vector3).distance_to(f) <= ZOMBIE_SAVE_M:
+				zombies.append({"p": _v(m.last_feet), "hp": m.hp()})
+	var g := []
+	for k in gates:
+		var e: Dictionary = gates[k]
+		g.append([e.at.x, e.at.y, e.at.z, e.x, e.plates, e.open, e.mat])
+	return {"v": 1, "animals": animals, "zombies": zombies, "gates": g}
+
+
+static func _v(p: Vector3) -> Array:
+	return [snappedf(p.x, 0.01), snappedf(p.y, 0.01), snappedf(p.z, 0.01)]
+
+
+static func _p(a) -> Vector3:
+	return Vector3(float(a[0]), float(a[1]), float(a[2])) if a is Array and (a as Array).size() == 3 else Vector3.INF
+
+
+## Anything to save (the world file is written when there is).
+func wants_save() -> bool:
+	var d := to_save()
+	return not (d.animals as Array).is_empty() or not (d.zombies as Array).is_empty() or not (d.gates as Array).is_empty()
+
+
+## The world file's "mobs": the gates at once; the creatures once the player
+## stands in the world (their floors need the ground loaded).
+func restore(d) -> void:
+	if not (d is Dictionary):
+		return
+	for g in d.get("gates", []):
+		if g is Array and (g as Array).size() >= 7:
+			var at := Vector3i(int(g[0]), int(g[1]), int(g[2]))
+			gates[MineFences.gate_key(at, bool(g[3]))] = {"at": at, "x": bool(g[3]), "plates": int(g[4]),
+					"open": bool(g[5]), "mat": int(g[6])}
+	_pending = d
+
+
+func _spawn_saved(d: Dictionary) -> void:
+	var groups := {}
+	for a in d.get("animals", []):
+		if not (a is Dictionary) or not CreatureBook.has(StringName(str(a.get("kind", "")))):
+			continue
+		var p := _p(a.get("p"))
+		if p == Vector3.INF:
+			continue
+		var key := "%s/%d" % [a.kind, int(a.get("herd", 0))]
+		if not groups.has(key):
+			groups[key] = {"kind": a.kind, "herd": int(a.get("herd", 0)), "points": [], "hps": []}
+		groups[key].points.append(p)
+		groups[key].hps.append(float(a.get("hp", 0.0)))
+	var f := player_feet()
+	for key in groups:
+		var g: Dictionary = groups[key]
+		if f != Vector3.INF and (g.points[0] as Vector3).distance_to(f) > UNPARK_AT:
+			for i in g.points.size():
+				parked.append({"kind": StringName(g.kind), "p": g.points[i], "hp": g.hps[i], "herd": g.herd})
+			continue
+		var h := spawn_herd(StringName(g.kind), g.points[0], 0, g.points, g.hps, int(g.herd))
+		if h != null:
+			h.penned = true
+			for m in h.members:
+				m.penned = true
+	for z in d.get("zombies", []):
+		var p2 := _p(z.get("p") if z is Dictionary else null)
+		if p2 != Vector3.INF:
+			spawn_zombie(p2, float(z.get("hp", 0.0)))
+	log_line("restored %d animals, %d zombies, %d gates" % [(d.get("animals", []) as Array).size(),
+			(d.get("zombies", []) as Array).size(), gates.size()])
+
+
+## One animal at a time, on a worker: can it walk out (32 studs)? If not it
+## is penned (fence, building, pit) and the world keeps it.
+func _pen_step() -> void:
+	_take_pen_job(false)
+	if _pen_job >= 0 or now() < _next_pen:
+		return
+	var animals := []
+	for m in mobs:
+		if is_instance_valid(m) and not m.dead and m.kind != &"zombie" and not m.asleep:
+			animals.append(m)
+	if animals.is_empty():
+		return
+	_pen_i = (_pen_i + 1) % animals.size()
+	if _pen_i == 0:
+		_next_pen = now() + PEN_EVERY
+	var m = animals[_pen_i]
+	_pen_mob = m
+	var out := []
+	_pen_out = out
+	var n := nav
+	var from: Vector3 = m.last_feet
+	var b: Vector4i = m.body
+	_pen_job = WorkerThreadPool.add_task(func() -> void:
+			out.append(n.free_reach(from, b, PEN_REACH, PEN_NODES)), true, "animal pen")
+
+
+func _take_pen_job(wait: bool) -> void:
+	if _pen_job < 0:
+		return
+	if not wait and not WorkerThreadPool.is_task_completed(_pen_job):
+		return
+	WorkerThreadPool.wait_for_task_completion(_pen_job)   # done (or leaving)
+	_pen_job = -1
+	if wait or _pen_out.is_empty() or _pen_mob == null or not is_instance_valid(_pen_mob):
+		return
+	var was: bool = _pen_mob.penned
+	_pen_mob.penned = not bool(_pen_out[0])
+	if _pen_mob.penned != was:
+		log_line("a %s is %s" % [_pen_mob.kind, "penned in" if _pen_mob.penned else "free"])
+	var h = _pen_mob.get("herd")
+	if h != null:
+		var any := false
+		for o in (h as Herd).alive():
+			any = any or o.penned
+		(h as Herd).penned = any
+
+
+## Every pen judged now (a gate; a final save is fine with the last answers).
+func judge_pens_now() -> void:
+	_take_pen_job(true)
+	for h in herds:
+		var any := false
+		for m in (h as Herd).alive():
+			m.penned = not nav.free_reach(m.last_feet, m.body, PEN_REACH, PEN_NODES)
+			any = any or m.penned
+		(h as Herd).penned = any
+
+
+# ---------------------------------------------------------------------------
+# Fence gates (MineFences)
+
+## Lay a fence gate (closed) through `at`; true if laid.
+func place_gate(at: Vector3i, along_x: bool, plates: int, mat: int) -> bool:
+	var res := MineFences.place(at, along_x, plates, mat)
+	if res.is_empty():
+		return false
+	for r in res:
+		host.terrain_edited(r)
+	var a0 := MineFences.anchor(at, along_x)
+	gates[MineFences.gate_key(a0, along_x)] = {"at": a0, "x": along_x, "plates": plates, "open": false, "mat": mat}
+	log_line("a fence gate at %s" % a0)
+	return true
+
+
+## RMB on plate cell `cell`: a gate holding it opens or shuts. True if one did.
+func use_gate(cell: Vector3i) -> bool:
+	for k in gates.keys():
+		var g: Dictionary = gates[k]
+		if not MineFences.gate_has(g.at, g.x, g.plates, cell):
+			continue
+		if not MineFences.posts_stand(g.at, g.x, g.plates):
+			gates.erase(k)      # broken up: no gate any more
+			return false
+		g.open = not g.open
+		for r in MineFences.set_gate(g.at, g.x, g.plates, g.mat, g.open):
+			host.terrain_edited(r)
+		log_line("a fence gate %s" % ("opened" if g.open else "shut"))
+		return true
+	return false
+
+
+# ---------------------------------------------------------------------------
+# Tree trunks and shut doors into the nav
 
 func _trees_step(f: Vector3) -> void:
 	var t := now()
@@ -451,6 +830,56 @@ static func trunk_boxes(rows: Array) -> PackedVector3Array:
 		out.append(lo)
 		out.append(hi)
 	return out
+
+
+## Wiring doors and trapdoors are colliders, not cells: a shut one is an
+## obstacle to the nav, an open one is not.
+func _doors_step() -> void:
+	var t := now()
+	if t < _next_doors:
+		return
+	_next_doors = t + 0.5
+	var w = host.get("wiring")
+	if w == null:
+		return
+	var seen := {}
+	for c in w.devices:
+		var d: Dictionary = w.devices[c]
+		var kind := str(MineWiring.DEVICES.get(d.item, {}).get("kind", ""))
+		if kind != "door" and kind != "trapdoor":
+			continue
+		var shut := not bool(d.on)
+		if not shut:
+			continue
+		seen[c] = true
+		if _door_groups.has(c):
+			continue
+		var boxes := PackedVector3Array()
+		var plates := MineWiring.plates_of(d.item)
+		for b in MineWiring.footprint(c, d.item, int(d.facing)):
+			boxes.append(Vector3(b))
+			boxes.append(Vector3(b + Vector3i(0, plates - 1, 0)))
+		_door_groups[c] = _next_group
+		nav.set_obstacles(_next_group, boxes)
+		_next_group += 1
+		_field_dirty = true
+	for c in _door_groups.keys():
+		if not seen.has(c):
+			nav.remove_obstacles(int(_door_groups[c]))
+			_door_groups.erase(c)
+			_field_dirty = true
+
+
+## Water and lava move: the nav reads them again where it looks next.
+func _fluid_step() -> void:
+	var t := now()
+	if t < _next_fluid:
+		return
+	_next_fluid = t + 1.0
+	# The water's change log (on for this): only the sections a changed cell
+	# is in read their fluid again -- the sea and rain change cells all the
+	# time, and reading every section's water again cost a field 2 s.
+	nav.update_fluid()
 
 
 # ---------------------------------------------------------------------------
@@ -522,3 +951,4 @@ func terrain_edited(res: Dictionary) -> void:
 
 func _exit_tree() -> void:
 	_take_field_job(true)
+	_take_pen_job(true)

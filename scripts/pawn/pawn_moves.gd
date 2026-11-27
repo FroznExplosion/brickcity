@@ -164,6 +164,8 @@ const FLOAT_ACCEL := 4.0
 const SWIM_DEPTH := 1.05
 const SWIM_SPEED := Pawn.WALK_SPEED * 0.75
 const SWIM_ACCEL := 3.0
+## Run held while swimming: diving fast (Docs/MineOcean.md 2.2).
+const SWIM_DIVE := 2.0
 ## An idle swimmer floats with its eye this far over the surface.
 const SWIM_EYE_OVER := 0.12
 const WADE_SLOW := 0.7
@@ -618,7 +620,8 @@ func _swim_tick(delta: float, wish: Vector3, top: float) -> void:
 	var it := pawn.intents
 	var up := pawn.up
 	var rise := (1.0 if it.jump_held else 0.0) - (1.0 if it.crouch else 0.0)
-	var want := wish * SWIM_SPEED + up * rise * SWIM_SPEED
+	var sp := SWIM_SPEED * (SWIM_DIVE if it.run else 1.0)
+	var want := wish * sp + up * rise * sp
 	if rise == 0.0:
 		# Buoyancy: toward the float height, gently.
 		var eye_y := Gravity.vert(pawn.feet(), up) + pawn.eye_height()

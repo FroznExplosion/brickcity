@@ -193,7 +193,7 @@ func step(delta: float, eye: Vector3) -> void:
 				var t0 := Time.get_ticks_usec()
 				refresh(b)
 				worst_refresh_us = maxi(worst_refresh_us, Time.get_ticks_usec() - t0)
-	fields.step(delta, store, eye, _stud, _apply_field)
+	fields.step(delta, store, _apply_field)
 	if _draw_dirty or _drawn_eye == Vector3.INF or Vector2(eye.x - _drawn_eye.x, eye.z - _drawn_eye.z).length() > 8.0:
 		_draw_dirty = false
 		_drawn_eye = eye
@@ -229,19 +229,19 @@ func settle_all() -> void:
 # ---------------------------------------------------------------------------
 # Trouble (stage 5, Docs/MineFarming.md 9)
 
-## A field's answer is in: its plots open to animals or not, one-crop or not
-## -- each settled first, so what grew before grew under the old flags.
+## A field worked out again: its plots one-crop or not -- each settled first,
+## so what grew before grew under the old flag. (`open` is no longer set:
+## real animals decide for themselves, section 23; an old save's is cleared.)
 func _apply_field(f: Dictionary) -> void:
 	var t := now()
 	for b in f.plots:
 		var plot := store.get_plot(b)
 		if plot.is_empty():
 			continue
-		var open := bool(f.open)
 		var mono: bool = f.mono != &"" and plot.crop == f.mono
-		if open != bool(plot.get("open", false)) or mono != bool(plot.get("mono", false)):
+		if mono != bool(plot.get("mono", false)) or bool(plot.get("open", false)):
 			FarmPlant.settle(plot, t)
-			plot.open = open
+			plot.open = false
 			plot.mono = mono
 			store.touch(b)
 
@@ -249,7 +249,6 @@ func _apply_field(f: Dictionary) -> void:
 ## The ground near the farms changed (MineWorld.terrain_edited): fields are
 ## looked at again (a wall built or broken).
 func terrain_changed() -> void:
-	fields.dirty = true
 	_terrain_ver += 1
 
 
@@ -265,13 +264,27 @@ func _packed(plot: Dictionary) -> void:
 ## Is a scarecrow standing within SCARE_M of the plot? (From the list
 ## gathered once a second: the chests were walked for every plot.)
 func _scared(b: Vector3i) -> bool:
-	if host.chests != null and host.chests.count() != _scare_count:
-		_gather_scarecrows()     # one put down or taken away just now
+	_ensure_gathered()
 	var at := _top_middle(b)
 	for sc in _scarecrows:
 		if sc.distance_to(at) <= SCARE_M:
 			return true
 	return false
+
+
+## The scarecrows, sprinklers and collectors gathered again once a frame (a
+## few chests walked) and whenever the number of placed things changed (one
+## put down this frame). Only on the count it missed a swap: a floating
+## station broken and a collector put down kept the count, and the collector
+## was never seen (--gate=farm, 2026-11-27).
+var _gather_frame := -1
+
+
+func _ensure_gathered() -> void:
+	var fr := Engine.get_process_frames()
+	if fr != _gather_frame or (host.chests != null and host.chests.count() != _scare_count):
+		_gather_frame = fr
+		_gather_scarecrows()
 
 
 func _gather_scarecrows() -> void:
@@ -299,8 +312,7 @@ func _in_reach(block: Vector3i, b: Vector3i, plots: int) -> bool:
 
 ## A sprinkler within reach of plot `b`?
 func _sprinkled(b: Vector3i) -> bool:
-	if host.chests != null and host.chests.count() != _scare_count:
-		_gather_scarecrows()
+	_ensure_gathered()
 	for sp in _sprinklers:
 		if _in_reach(sp, b, SPRINKLER_PLOTS):
 			return true
@@ -309,6 +321,7 @@ func _sprinkled(b: Vector3i) -> bool:
 
 ## The key of a collector with plot `b` in reach, or "".
 func _collector_for(b: Vector3i) -> String:
+	_ensure_gathered()
 	for c in _collectors:
 		if _in_reach(c[0], b, COLLECTOR_PLOTS):
 			return str(c[1])

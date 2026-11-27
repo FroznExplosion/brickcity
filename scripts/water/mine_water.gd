@@ -21,6 +21,10 @@ extends Node3D
 ## Preloaded by path, not named (see terrain_scene.gd).
 
 const WaterSeaFx := preload("res://scripts/water/water_sea.gd")
+## The sea's 1x1 brick pieces reach this far, its 2x2 ones this far (WaterSea
+## defaults 20 and 40 m); the smooth sheet beyond.
+const SEA_FINE_M := 12.0
+const SEA_NEAR_M := 24.0
 const FloatersFx := preload("res://scripts/water/floaters.gd")
 const LavaFireFx := preload("res://scripts/water/lava_fire.gd")
 ## The water meshes carry CUSTOM0 (how far each vertex moved since its tile's
@@ -117,6 +121,10 @@ var fires: Node3D = null
 ## Weather: storms born by the biomes' climate, drifting, raining water
 ## (mine_rain.gd, R10).
 var rain: MineRain = null
+## Under water: the look by depth, breath (mine_dive.gd), and the deep
+## ocean's currents (mine_currents.gd; Docs/MineOcean.md).
+var dive: MineDive = null
+var currents: MineCurrents = null
 var _lights := {}                      ## Vector2i -> OmniLight3D
 var _burn_in := 0.0
 var _queued_meshes := {}               ## Vector2i -> a take()'s mesh entry
@@ -167,6 +175,14 @@ func setup(p_host: Node) -> void:
 	rain.name = "Rain"
 	add_child(rain)
 	rain.setup(host)
+	dive = MineDive.new()
+	dive.name = "Dive"
+	add_child(dive)
+	dive.setup(host, self)
+	currents = MineCurrents.new()
+	currents.name = "Currents"
+	add_child(currents)
+	currents.setup(host)
 	reset_world(20.0, 4, false)
 	set_process(true)
 
@@ -205,6 +221,8 @@ func reset_world(sea_m: float, near_tiles: int, p_sea_on: bool, p_wave_scale := 
 		fires.clear()
 	if rain != null:
 		rain.reset_world()
+	if currents != null:
+		currents.reset_world()
 	primed_count = 0
 	if sea != null:
 		remove_child(sea)
@@ -230,6 +248,17 @@ func reset_world(sea_m: float, near_tiles: int, p_sea_on: bool, p_wave_scale := 
 		sea.see_through = true
 		sea.surface_collide = false     # a ceiling to a swimmer; nothing floats yet
 		sea.wave_gain = 2.2 * wave_scale
+		# The brick tiers' reach (the GPU's water cost is their pieces:
+		# --gate=gpu, 2026-11-27): 1x1 pieces to SEA_FINE_M, 2x2 to SEA_NEAR_M,
+		# the smooth sheet past it. --sea-tiers=FINE,NEAR to compare.
+		sea.fine_radius = SEA_FINE_M
+		sea.near_radius = SEA_NEAR_M
+		for a in OS.get_cmdline_user_args():
+			if a.begins_with("--sea-tiers="):
+				var v := a.get_slice("=", 1).split(",")
+				if v.size() == 2:
+					sea.fine_radius = float(v[0])
+					sea.near_radius = float(v[1])
 		add_child(sea)
 		sea.build_at(FIELD_HALF, SEA_OUTER_M, FIELD_STEP, c, f)
 		sea.push_waves()
@@ -296,6 +325,11 @@ func _process_body(delta: float) -> void:
 	_swap_some()
 	_copy_sea_waves(delta)
 	_underwater(eye)
+	if dive != null:
+		var rig = host.get("_rig")
+		dive.frame(delta, eye, _under_mode == 1, rig.env if rig != null else null, _dry_ambient)
+	if currents != null and sea_on:
+		currents.frame(eye)
 	_burn_in -= delta
 	if _burn_in <= 0.0:
 		# Lava burns at ten checks a second: every pawn every frame was waste.
@@ -434,7 +468,10 @@ func surface_at(p: Vector3) -> float:
 
 
 func flow_at(p: Vector3) -> Vector3:
-	return BrickFluid.flow_at(p)
+	var f := BrickFluid.flow_at(p)
+	if currents != null and sea_on and p.y < BrickFluid.get_sea_level() - 4.0:
+		f += currents.push_at(p)
+	return f
 
 
 ## How freely a body moves in the fluid at a point: 1 water, less in lava.

@@ -40,6 +40,10 @@
 			"description": "When its back turns on, it runs a program of on and off steps out of its front (the arrow). Right-click to pick the program; the wrench shows it. Placed facing away from you." },
 		"number_display": { "name": "Number display", "kind": "device", "model": "display", "max_stack": 64, "hand": "any", "colour": "#66ff73", "glyph": "#",
 			"description": "A 2-stud brick that shows the level (0-15) of what touches it, on its front." },
+		"piston": { "name": "Piston", "kind": "device", "model": "piston", "max_stack": 64, "hand": "any", "colour": "#c29e66", "glyph": "P",
+			"description": "Powered from a side or its back, it pushes the placed block in front one stud (or one brick up, laid looking down), with the blocks clutched on top and any in its way: up to 12. Ground of the world does not move." },
+		"sticky_piston": { "name": "Sticky piston", "kind": "device", "model": "piston", "max_stack": 64, "hand": "any", "colour": "#5ca84d", "glyph": "P",
+			"description": "A piston whose studded head holds the block it pushed: when the power goes, it pulls it back." },
 		"redstone_ore": { "name": "Wire ore",
 			"description": "Ore with copper-red veins: what wire is made from." }
 	}

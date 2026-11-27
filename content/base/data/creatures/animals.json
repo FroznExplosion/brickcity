@@ -1,0 +1,82 @@
+{
+	"animals": {
+		"pig": {
+			"name": "Pig",
+			"body": [2, 6, 3, 9],
+			"hp": 30,
+			"group": [3, 4],
+			"temper": "prey",
+			"trample_bricks": 2,
+			"speed": {"graze": 0.4, "alarm": 0.55, "flee": 0.85},
+			"sight": 30,
+			"scent": 44,
+			"wary": 1.0,
+			"likes": ["potato", "carrot", "beetroot", "wheat", "pumpkin", "melon", "corn", "cabbage", "beans"],
+			"drops": {"raw_pork": 2},
+			"look": {"len": 3, "legs": 2, "colour": "#e89aa8", "dark": "#c97585", "snout": true}
+		},
+		"deer": {
+			"name": "Deer",
+			"body": [2, 11, 6, 19],
+			"hp": 35,
+			"group": [3, 6],
+			"temper": "prey",
+			"jump": true,
+			"trample_bricks": 2,
+			"speed": {"graze": 0.45, "alarm": 0.7, "flee": 1.15},
+			"sight": 40,
+			"scent": 56,
+			"wary": 1.4,
+			"likes": ["carrot", "beans", "cabbage", "wheat"],
+			"drops": {"venison": 2, "hide": 1},
+			"look": {"len": 3, "legs": 6, "colour": "#9a6a40", "dark": "#5e3e22", "antlers": true}
+		},
+		"rabbit": {
+			"name": "Rabbit",
+			"body": [1, 3, 3, 6],
+			"hp": 8,
+			"group": [1, 3],
+			"temper": "prey",
+			"zigzag": true,
+			"trample_bricks": -1,
+			"speed": {"graze": 0.35, "alarm": 0.6, "flee": 1.2},
+			"sight": 20,
+			"scent": 24,
+			"wary": 1.6,
+			"likes": ["carrot", "cabbage", "beans", "wheat"],
+			"drops": {"rabbit_meat": 1},
+			"look": {"len": 1, "legs": 1, "colour": "#c8b8a0", "dark": "#8a7a64", "ears": true}
+		},
+		"boar": {
+			"name": "Boar",
+			"body": [3, 8, 3, 9],
+			"hp": 50,
+			"group": [2, 4],
+			"temper": "boar",
+			"trample_bricks": 1,
+			"speed": {"graze": 0.4, "alarm": 0.6, "flee": 0.95, "charge": 1.1},
+			"sight": 26,
+			"scent": 40,
+			"wary": 0.8,
+			"charge_damage": 8,
+			"likes": ["potato", "pumpkin", "melon", "corn"],
+			"drops": {"raw_pork": 3, "hide": 1},
+			"look": {"len": 4, "legs": 2, "colour": "#5a4636", "dark": "#2e241c", "tusks": true}
+		},
+		"wolf": {
+			"name": "Wolf",
+			"body": [2, 7, 3, 12],
+			"hp": 40,
+			"group": [3, 5],
+			"temper": "predator",
+			"trample_bricks": 2,
+			"speed": {"graze": 0.45, "alarm": 0.8, "flee": 1.0, "stalk": 0.5, "hunt": 1.05},
+			"sight": 36,
+			"scent": 60,
+			"bite_damage": 6,
+			"hunts": ["deer", "pig", "rabbit"],
+			"drops": {"hide": 1},
+			"look": {"len": 3, "legs": 4, "colour": "#7a7a80", "dark": "#3c3c42", "ears": true, "tail": true}
+		}
+	}
+}
