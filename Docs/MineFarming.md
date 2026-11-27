@@ -784,7 +784,7 @@ found now and then breaking podzol, dry grass, grass.
 
 Tests: farm_probe 208 (fruit, auto sections); --gate=farm fruit (a sapling
 stands as a real tree and keeps its plot, fruit drawn, shaken down, felled)
-and farmer (a stone ring: the plots inside tended, outside not; away three
+and farmer (a stone ring: the plots inside tended, outside not; away six
 days, back exact against one settle, the chest holds the harvest; a full
 chest holds it back; the farmer taken away). Pictures: user://dev/
 farm_fruit.png.

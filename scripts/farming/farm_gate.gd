@@ -59,7 +59,7 @@ extends RefCounted
 ##   farmer    (HandoffFarming.md 7.3) an auto farmer inside a stone ring
 ##             (2 bricks high) tends the plots inside and not those outside
 ##             (its area: a flood on a worker); a chest beside it; the player
-##             flies away, three days pass, nothing is settled while away;
+##             flies away, six days pass, nothing is settled while away;
 ##             back again its plots have harvested and replanted, each exactly
 ##             where one settle puts it, and the chest holds the harvest;
 ##             the plots outside stand ripe. A chest with no room leaves the
@@ -723,7 +723,7 @@ func run(host: Node) -> void:
 			(f.auto.areas.get(fkey, {}).get("cols", {}) as Dictionary).size(), f.auto.floods], af_ready)
 	check("and not the three outside the ring", none_out)
 	check("its chest is in reach", f.farmer_chests(fkey).has(achest_key))
-	# Away three days.
+	# Away six days (dry wheat, no water near: about four days to ripen).
 	var af_before := {}
 	for b in af_in + af_out:
 		FarmPlant.settle(f.store.get_plot(b), w.world_time)
@@ -734,7 +734,7 @@ func run(host: Node) -> void:
 		if not f._near.has(af_in[0]):
 			break
 		await w._frames(1)
-	w.world_time += FarmPlant.DAY * 3.0
+	w.world_time += FarmPlant.DAY * 6.0
 	await w._frames(90)
 	var af_untouched := true
 	for b in af_in:
@@ -755,6 +755,10 @@ func run(host: Node) -> void:
 		var af_wait := 0
 		for b in af_in:
 			af_wait += (f.store.get_plot(b).get("auto_out", []) as Array).size()
+		# (and every plot caught up: the farm's in-reach list is rebuilt once a second)
+		for b in af_in + af_out:
+			if not is_equal_approx(float(f.store.get_plot(b).t), float(w.world_time)):
+				af_wait += 1
 		if af_wait == 0 and f.auto.areas.has(fkey):
 			break
 	await w._frames(10)
@@ -784,7 +788,8 @@ func run(host: Node) -> void:
 	var af_slots: Array = w.chests.slots_of(achest_key)
 	for i in af_slots.size():
 		af_slots[i] = ItemStack.make(&"hoe", 1)
-	w.world_time += FarmPlant.DAY * 2.0
+	# (the replanted dry wheat needs about four days)
+	w.world_time += FarmPlant.DAY * 5.0
 	await w._frames(150)
 	var af_waiting := 0
 	for b in af_in:
