@@ -23,7 +23,21 @@ extends RefCounted
 ##   fences    a fence item placed through the builder lays a panel; a field
 ##             ringed by a 2-brick fence is not eaten and the pigs find no way
 ##             in; a zombie outside the ring never reaches the player inside.
-##   pictures  user://dev/mobs_zombie.png, mobs_pigs.png, mobs_fence.png.
+##   far       (section 11) with the far tier at 8 m, a zombie 21 m off rides the
+##             nav (no physics) and still reaches the player.
+##   death     survival: a zombie's blow kills a player at 4 health; "You died",
+##             then back at the spawn, whole.
+##   gates     a fence gate placed through the builder; shut, a ring of fence
+##             with it is closed to a zombie; RMB opens it (way in), RMB shuts.
+##   save      pigs in a 2-brick ring are penned and saved, a free herd is
+##             not; a zombie near the player is saved by the host, not by a
+##             client; the save restored into an empty world brings them back.
+##   species   a deer herd jumps a 2-brick wall; a wolf pack hunts and bites a
+##             pig; a boar hurt by the player charges and hits them.
+##   farm      a plot near a live herd has its abstract animal trouble off.
+##   lava      lava poured is LAVA to the nav, and no body fits in it.
+##   pictures  user://dev/mobs_zombie.png, mobs_pigs.png, mobs_fence.png,
+##             mobs_species.png.
 ## Preloaded by mine_world.gd (`--gate=mobs`).
 
 var w: Node = null
@@ -35,6 +49,7 @@ var top := 0
 var x0 := 0
 var z0 := 0
 const SIZE := 96
+const PIG_BODY := Vector4i(2, 6, 3, 9)
 
 
 func check(what: String, ok: bool) -> void:
@@ -55,10 +70,14 @@ func run(host: Node) -> void:
 	w.builder.aim_trees = false
 	_arena()
 	await w._frames(40)
-	await _zombie_checks()
-	await _trample_checks()
-	await _pig_checks()
-	await _fence_checks()
+	# -- --only=<name>: one part (after the arena), for working on it.
+	var only := ""
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--only="):
+			only = arg.split("=")[1]
+	for part in ["zombie", "trample", "pig", "fence", "far", "death", "gate", "save", "species", "farm_flag", "lava"]:
+		if only == "" or only == part:
+			await call("_%s_checks" % part)
 	print("[mobs-gate] fields built %d, last %.1f ms; nav %s" % [m.fields_built, m.last_field_ms, m.nav.get_stats()])
 	print("[mobs-gate] %s" % ("MOBS-GATE PASS" if fails.is_empty() else "MOBS-GATE FAIL: " + "; ".join(fails)))
 	w.get_tree().quit(0 if fails.is_empty() else 1)
@@ -254,7 +273,7 @@ func _trample_checks() -> void:
 	await w._frames(5)
 	check("trample: a zombie falling 4 bricks onto a carrot tramples it (fell %.2f m)" % z.pawn.last_fall,
 			f.trampled == t0 + 1 and f.store.get_plot(bz).is_empty())
-	var h := m.spawn_herd(_at(2, 2), 2)
+	var h := m.spawn_herd(&"pig", _at(2, 2), 2)
 	var p1 = h.members[0]
 	var p3 = h.members[1]
 	h.blind = true
@@ -274,36 +293,36 @@ func _trample_checks() -> void:
 
 func _pig_checks() -> void:
 	var me := _at(72, 48)
-	var h := m.spawn_herd(_at(40, 48), 3)
+	var h := m.spawn_herd(&"pig", _at(40, 48), 3)
 	check("a herd of 3 pigs", h.alive().size() == 3)
 	await _player_to(me, _at(40, 48))
 	await w._frames(20)
 	# Wind from the pigs to the player: the player is downwind, nothing to smell.
 	m.set_wind((me - h.centre()).normalized())
 	h.notice = 0.0
-	h.alert = PigHerd.Alert.CALM
+	h.alert = Herd.Alert.CALM
 	await _until(func() -> bool: return false, 5.0)
 	var down := h.notice
 	m.set_wind((h.centre() - me).normalized())
 	h.notice = 0.0
-	h.alert = PigHerd.Alert.CALM
+	h.alert = Herd.Alert.CALM
 	await _until(func() -> bool: return false, 5.0)
 	var up := h.notice
 	check("scent: notice fills faster upwind of them (%.2f) than downwind (%.2f)" % [up, down], up > down + 0.1)
-	check("standing still 11 m off, downwind, they stay calm or wary, not off (%.2f)" % down, down < PigHerd.FLEE_AT)
+	check("standing still 11 m off, downwind, they stay calm or wary, not off (%.2f)" % down, down < Herd.FLEE_AT)
 	await w._shot("user://dev/mobs_pigs.png")
 	# A shot: the gun's `fired` (the hook MineMobs puts on it).
 	for p in h.alive():
-		p.pawn.place(m.to_world(m.nav.stand_near(h.slot(p.index, _at(40, 48)), MobPig.BODY, 4)))
+		p.pawn.place(m.to_world(m.nav.stand_near(h.slot(p.index, _at(40, 48)), PIG_BODY, 4)))
 	h.anchor = _at(40, 48)
 	h.home = h.anchor
 	await w._frames(20)
 	var c0 := h.centre()
 	h.notice = 0.0
-	h.alert = PigHerd.Alert.CALM
+	h.alert = Herd.Alert.CALM
 	w.gun.fired.emit({})
 	await w._frames(2)
-	check("flee: a shot sends them off (%s)" % h.alert_name(), h.alert == PigHerd.Alert.FLEE)
+	check("flee: a shot sends them off (%s)" % h.alert_name(), h.alert == Herd.Alert.FLEE)
 	await _until(func() -> bool: return false, 7.0)
 	var c1 := h.centre()
 	var spread := 0.0
@@ -315,7 +334,7 @@ func _pig_checks() -> void:
 	# Crops: calm and blind, three carrots 7 m off.
 	h.blind = true
 	h.notice = 0.0
-	h.alert = PigHerd.Alert.CALM
+	h.alert = Herd.Alert.CALM
 	var f: MineFarming = w.farming
 	var e0 := f.eaten
 	var crops := [_carrot(50, 20), _carrot(52, 20), _carrot(54, 20)]
@@ -328,7 +347,7 @@ func _pig_checks() -> void:
 	_herd = h
 
 
-var _herd: PigHerd = null
+var _herd: Herd = null
 
 
 ## A ring of fence panels round the stud box [ax, bx] x [az, bz] (multiples of 3).
@@ -368,11 +387,11 @@ func _fence_checks() -> void:
 	await w._frames(10)
 	var h := _herd
 	if h == null or h.alive().is_empty():
-		h = m.spawn_herd(_at(44, 44), 3)
+		h = m.spawn_herd(&"pig", _at(44, 44), 3)
 	h.blind = true
-	h.alert = PigHerd.Alert.CALM
+	h.alert = Herd.Alert.CALM
 	for p in h.alive():
-		p.pawn.place(m.to_world(m.nav.stand_near(_at(40, 44), MobPig.BODY, 6)))
+		p.pawn.place(m.to_world(m.nav.stand_near(_at(40, 44), PIG_BODY, 6)))
 	var e0 := f.eaten
 	var logs0 := m.log_lines.size()
 	await _until(func() -> bool: return false, 25.0)
@@ -396,3 +415,227 @@ func _fence_checks() -> void:
 	check("fences: a zombie outside a 2-brick fence never gets in or hits the player inside (%.1f m, %d hits, got in %s)"
 			% [_flat_dist(z.feet(), m.player_feet()), z.hits, inside[0]], z.hits == 0 and not inside[0])
 	await _kill_all()
+
+
+# ---------------------------------------------------------------------------
+# Section 11
+
+func _far_checks() -> void:
+	m.far_at = 8.0
+	await _player_to(_at(80, 20), _at(20, 20))
+	var z := m.spawn_zombie(m.nav.stand_near(_at(20, 20), MobZombie.BODY, 4))
+	var rode := [false]
+	var got := await _until(func() -> bool:
+			rode[0] = rode[0] or z.far
+			return _flat_dist(z.last_feet, m.player_feet()) < 1.6, 25.0)
+	check("far: past the far tier a zombie rides the nav and still reaches the player (rode %s, %.1f m)"
+			% [rode[0], _flat_dist(z.last_feet, m.player_feet())], rode[0] and got)
+	m.far_at = 56.0
+	_far_zombie = z
+
+
+var _far_zombie: MobZombie = null
+
+
+func _death_checks() -> void:
+	var s: MineSurvival = w.survival_rules
+	w.set_survival(true)
+	await w._frames(5)
+	var pawn: Pawn = w.pawn
+	pawn.health.reset()
+	pawn.health.apply_impact(96.0, &"")
+	var z := _far_zombie
+	if z == null or z.dead:
+		z = m.spawn_zombie(m.nav.stand_near(m.player_feet() + Vector3(3, 0, 0), MobZombie.BODY, 4))
+	var d0 := s.deaths
+	var died := await _until(func() -> bool: return s.deaths > d0, 12.0)
+	check("death: in survival a zombie kills a player at 4 health (%d deaths)" % (s.deaths - d0), died)
+	await _kill_all()
+	var back := await _until(func() -> bool: return not s.dead, 6.0)
+	var sp: Vector2 = w.spawn_xz
+	var pf := m.player_feet()
+	check("death: back at the spawn, whole (%.1f m from it, health %.0f)" % [Vector2(pf.x, pf.z).distance_to(sp), pawn.health.total_current()],
+			back and Vector2(pf.x, pf.z).distance_to(sp) < 3.0 and pawn.health.total_current() >= 99.0)
+	w.set_survival(false)
+	await _player_to(_at(80, 20))
+
+
+## A ring of fence round [ax, bx] x [az, bz] with a GATE (through the builder)
+## for the panel at x = ax + 3 on the z = az side.
+func _ring_with_gate(ax: int, az: int, bx: int, bz: int) -> Vector3i:
+	var mat := BrickTerrain.material_names().find("wood")
+	for a in range(ax - 3, bx + 4, 3):
+		for zz in [az, bz]:
+			if zz == az and a == ax + 3:
+				continue
+			for r in MineFences.place(Vector3i(a, top + 1, zz), true, 6, mat):
+				w.terrain_edited(r)
+	for a in range(az - 3, bz + 4, 3):
+		for xx in [ax, bx]:
+			for r in MineFences.place(Vector3i(xx, top + 1, a), false, 6, mat):
+				w.terrain_edited(r)
+	return Vector3i(ax + 3, top + 1, az)
+
+
+func _gate_checks() -> void:
+	var inv: Inventory = w.builder.inv
+	inv.ensure_item(&"fence_gate")
+	if not inv.select_item(&"fence_gate"):
+		inv.pick(&"fence_gate")
+	var ax := x0 + 60
+	var az := z0 + 60
+	var gate_at := _ring_with_gate(ax, az, ax + 12, az + 12)
+	# The player faces along z so the panel runs along x, as the ring's side.
+	await _player_to(_at(64.5, 54), _at(64.5, 70))
+	w.builder.target = {"cell": gate_at - Vector3i(0, 1, 0), "normal": Vector3i.UP}
+	var placed: bool = w.builder.place_target()
+	check("gates: a fence gate placed through the builder (%s, %d gates)" % [placed, m.gates.size()], placed and m.gates.size() == 1)
+	var inside := _at(66, 66)
+	var outside := _at(66, 50)
+	var shut: bool = m.nav.find_path(outside, inside, MobZombie.BODY, 8000).reached
+	w.builder.target = {"cell": gate_at + Vector3i(1, 2, 0), "normal": Vector3i.BACK}
+	w.builder.rmb_repeat = false
+	w.builder.place_target()
+	await w._frames(2)
+	var opened: bool = m.nav.find_path(outside, inside, MobZombie.BODY, 8000).reached
+	w.builder.target = {"cell": gate_at + Vector3i(0, 2, 0), "normal": Vector3i.BACK}
+	w.builder.place_target()
+	await w._frames(2)
+	var shut2: bool = m.nav.find_path(outside, inside, MobZombie.BODY, 8000).reached
+	check("gates: shut, no way in; RMB opens it (a way in); RMB shuts it (shut %s, open %s, shut %s)" % [shut, opened, shut2],
+			not shut and opened and not shut2)
+
+
+func _save_checks() -> void:
+	await _kill_all()
+	# Pigs penned in the gate ring, a free herd outside, a zombie by the player.
+	var pen := m.spawn_herd(&"pig", _at(66, 66), 3)
+	var free := m.spawn_herd(&"pig", _at(30, 80), 2)
+	pen.blind = true
+	free.blind = true
+	await _player_to(_at(70, 50))
+	var z := m.spawn_zombie(m.nav.stand_near(_at(74, 46), MobZombie.BODY, 4))
+	z.held = true
+	await w._frames(10)
+	m.judge_pens_now()
+	var d := m.to_save()
+	var penned := 0
+	for a in d.animals:
+		penned += 1
+	check("save: the 3 penned pigs are saved and the 2 free ones are not (%d saved)" % penned, penned == 3)
+	check("save: a zombie near the player is saved by the host (%d)" % (d.zombies as Array).size(), (d.zombies as Array).size() == 1)
+	m.host_override = 0
+	var d2 := m.to_save()
+	check("save: a client leaving saves no enemies (%d zombies, %d animals)" % [(d2.zombies as Array).size(), (d2.animals as Array).size()],
+			(d2.zombies as Array).is_empty() and (d2.animals as Array).size() == 3)
+	m.host_override = -1
+	# The world closed and opened again: an empty world given the save.
+	var text := JSON.stringify(d)
+	m.reset()
+	await w._frames(10)
+	m.restore(JSON.parse_string(text))
+	var back := await _until(func() -> bool: return m.mobs.size() >= 4, 6.0)
+	var pigs := 0
+	var zs := 0
+	for x in m.mobs:
+		if x.kind == &"pig" and x.penned:
+			pigs += 1
+		if x.kind == &"zombie":
+			zs += 1
+	check("save: restored, 3 penned pigs and the zombie come back, and the gate (%d pigs, %d zombies, %d gates)" % [pigs, zs, m.gates.size()],
+			back and pigs == 3 and zs == 1 and m.gates.size() == 1)
+	await _kill_all()
+
+
+func _species_checks() -> void:
+	# A 2-brick wall across at x = 30 (z 0..40); a deer herd on the west side
+	# grazing round an anchor on the east.
+	_edit(Vector3i(x0 + 30, top + 1, z0), Vector3i(x0 + 30, top + 6, z0 + 40), BrickTerrain.MAT_STONE)
+	await _player_to(_at(88, 88))
+	var deer := m.spawn_herd(&"deer", _at(20, 20), 3)
+	deer.blind = true
+	deer.home = _at(40, 20)
+	deer.anchor = deer.home
+	var dbg := [0]
+	var over := await _until(func() -> bool:
+			dbg[0] += 1
+			if dbg[0] % 90 == 0:
+				for x in deer.alive():
+					print("[mobs-gate]   deer %s col (%.1f, %.1f) y %.2f path %d/%d reached %s floor %s vy %.1f" % [x.state,
+							x.last_feet.x / stud - x0, x.last_feet.z / stud - z0, x.last_feet.y, x._wp, x._path.size(),
+							x.path_reached, x.pawn.is_on_floor(), x.pawn.body.velocity.y])
+			for x in deer.alive():
+				if x.last_feet.x / stud - x0 > 31.5:
+					return true
+			return false, 30.0)
+	check("species: a deer jumps a 2-brick wall", over)
+	await w._shot("user://dev/mobs_species.png")
+	await _kill_all()
+	_edit(Vector3i(x0 + 30, top + 1, z0), Vector3i(x0 + 30, top + 6, z0 + 40), 0)
+	# Wolves on pigs: the player far off, in the day.
+	w._time = 0.5
+	var pigs := m.spawn_herd(&"pig", _at(20, 70), 3)
+	pigs.blind = true
+	var wolves := m.spawn_herd(&"wolf", _at(40, 70), 4)
+	var bit := await _until(func() -> bool:
+			var b := 0
+			for x in wolves.alive():
+				b += x.bites
+			return b > 0, 30.0)
+	var hp_lost := 0.0
+	for x in pigs.members:
+		hp_lost += 30.0 - x.hp()
+	check("species: a wolf pack hunts the pigs and bites (%s, pigs lost %.0f hp, kills %d)" % [wolves.alert_name(), hp_lost, wolves.kills],
+			bit and hp_lost > 0.0)
+	await _kill_all()
+	# A boar hurt by the player turns and charges.
+	w.set_survival(true)
+	await _player_to(_at(70, 30), _at(60, 30))
+	var pawn: Pawn = w.pawn
+	pawn.health.reset()
+	var boars := m.spawn_herd(&"boar", _at(58, 30), 2)
+	await w._frames(10)
+	var h0 := m.hits_on_player
+	var b0 = boars.members[0]
+	b0.last_hit_from = Vector3.INF
+	b0.pawn.health.apply_impact(10.0, &"")
+	var charged := await _until(func() -> bool: return m.hits_on_player > h0, 10.0)
+	check("species: a boar hurt by the player charges and hits (%s, player health %.0f)" % [boars.alert_name(), pawn.health.total_current()],
+			charged and pawn.health.total_current() < 100.0)
+	w.set_survival(false)
+	pawn.health.reset()
+	await _kill_all()
+
+
+func _farm_flag_checks() -> void:
+	var f: MineFarming = w.farming
+	var b := _carrot(70, 84)
+	var pigs := m.spawn_herd(&"pig", _at(70, 78), 2)
+	pigs.blind = true
+	await w._frames(5)
+	m._next_farm = 0.0
+	await w._frames(3)
+	var plot := f.store.get_plot(b)
+	plot["open"] = true
+	var crop := FarmPlant.crop_of(plot)
+	var animals_rate: float = FarmPlant.hazards(plot, crop)[0] if not plot.is_empty() else -1.0
+	check("farm: a plot with a herd near has no abstract animal trouble (herds %s, rate %.6f)" % [plot.get("herds", false), animals_rate],
+			bool(plot.get("herds", false)) and animals_rate == 0.0)
+	await _kill_all()
+
+
+func _lava_checks() -> void:
+	var cell := Vector3i(x0 + 50, top + 1, z0 + 50)
+	var course := floori(float(cell.y) / 3.0)
+	w.water.manual = true
+	for dz in 3:
+		for dx in 3:
+			BrickFluid.place(Vector3i(cell.x + dx, course, cell.z + dz), 2, 0, 3)
+	w.water.step(1)
+	m.nav.update_fluid()
+	var at := Vector3((cell.x + 1.5) * stud, (cell.y + 0.5) * plate, (cell.z + 1.5) * stud)
+	var code: int = m.nav.code_at(at)
+	var fits: bool = m.nav.fits(Vector3((cell.x + 1) * stud, (top + 1) * plate, (cell.z + 1) * stud), MobZombie.BODY)
+	check("lava: the nav reads lava (code %d) and no zombie fits in it (fits %s)" % [code, fits], code == 3 and not fits)
+	w.water.manual = false
+

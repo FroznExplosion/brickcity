@@ -387,7 +387,9 @@ static func hazards(plot: Dictionary, crop: Dictionary) -> PackedFloat64Array:
 	if not trouble or crop.is_empty() or int(plot.get("giant", 0)) != 0:
 		return out
 	var ripe := int(plot.stage) >= int(crop.stages) - 1
-	if bool(plot.get("open", false)):
+	# Real herds near (MineMobs sets "herds"): they eat it themselves, the
+	# abstract animals stop (Docs/MineCreatures.md 11).
+	if bool(plot.get("open", false)) and not bool(plot.get("herds", false)):
 		out[EV_ANIMALS] = ANIMALS_PER_DAY / DAY
 	if ripe and BIRD_FAMILIES.has(str(crop.family)) and float(plot.sky) > 0.5:
 		out[EV_BIRDS] = BIRDS_PER_DAY / DAY * (SCARED if bool(plot.get("scared", false)) else 1.0)

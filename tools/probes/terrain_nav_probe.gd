@@ -237,6 +237,18 @@ func _check_fences() -> void:
 	var o2 := _floor()
 	_fence_line(o2, 30, 9)
 	check("a 3-brick fence stops that one too", not _path(_at(o2.x + 10, o2.y + 20), _at(o2.x + 10, o2.y + 40), JUMPER).reached)
+	# Penned (free_reach, Docs/MineCreatures.md 11): a pig in a ring of
+	# 2-brick fence cannot walk 24 studs out (32 in the game: this floor is 60 across); on the open floor it can.
+	var o3 := _floor()
+	for a0 in range(18, 42, 3):
+		for zz in [o3.y + 18, o3.y + 39]:
+			MineFences.place(Vector3i(o3.x + a0, F + 1, zz), true, 6, BrickTerrain.MAT_STONE)
+		for xx in [o3.x + 18, o3.x + 39]:
+			MineFences.place(Vector3i(xx, F + 1, o3.y + a0), false, 6, BrickTerrain.MAT_STONE)
+	nav.invalidate_box(Vector3i(o3.x, F, o3.y), Vector3i(o3.x + 59, F + 10, o3.y + 59))
+	check("penned: a pig in a 2-brick fence ring cannot walk out", not nav.free_reach(_at(o3.x + 28, o3.y + 28), PIG, 24, 9000))
+	check("penned: a pig on the open floor can", nav.free_reach(_at(o3.x + 4, o3.y + 4), PIG, 24, 9000))
+	check("penned: a deer (climbs 2 bricks) is not penned by it", nav.free_reach(_at(o3.x + 28, o3.y + 28), JUMPER, 24, 9000))
 
 
 ## Tree trunks are physics boxes, not terrain: set_obstacles stamps them in.

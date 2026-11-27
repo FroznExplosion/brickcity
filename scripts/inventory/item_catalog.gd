@@ -197,7 +197,7 @@ static func _complete(e: Dictionary) -> Dictionary:
 	# A fertiliser's fertility and boost (Docs/MineFarming.md 17).
 	# A furnace smelts (`smelter`, Docs/Inventory.md 15).
 	# A fence's height in plates (MineFences, Docs/MineCreatures.md 5.3).
-	for k in ["break_area", "break_repeat", "model", "crop", "fertility", "boost_days", "mulch", "smelter", "plates"]:
+	for k in ["break_area", "break_repeat", "model", "crop", "fertility", "boost_days", "mulch", "smelter", "plates", "gate"]:
 		if e.has(k):
 			out[k] = e[k]
 	return out

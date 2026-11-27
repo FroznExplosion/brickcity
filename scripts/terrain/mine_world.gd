@@ -103,6 +103,8 @@ var drops: DroppedItems = null
 var farming: MineFarming = null
 ## Creatures: a zombie, pigs, fences' reason to be (Docs/MineCreatures.md).
 var mobs: MineMobs = null
+## Health, death, coming back (Docs/MineCreatures.md 11).
+var survival_rules: MineSurvival = null
 ## THE WORLD CLOCK (Docs/MineFarming.md 4): seconds played in this world,
 ## saved with it (the world file's "time"). The sky's hour is its day part;
 ## crops grow by it. Runs only while the world is open.
@@ -290,6 +292,9 @@ func _ready() -> void:
 	mobs = MineMobs.new()
 	add_child(mobs)
 	mobs.setup(self)
+	survival_rules = MineSurvival.new()
+	add_child(survival_rules)
+	survival_rules.setup(self)
 	_build_item_icons()
 	debris = Debris.new()
 	debris.name = "Debris"
@@ -1368,6 +1373,8 @@ func _process(delta: float) -> void:
 		farming.step(delta, eye)
 	if mobs != null:
 		mobs.step(delta)
+	if survival_rules != null:
+		survival_rules.step(delta)
 	_autosave(delta)
 	_hud_in -= delta
 	if _hud_in <= 0.0:
@@ -2192,6 +2199,8 @@ func _load_inventory() -> void:
 	if drops != null:
 		drops.inv = inv
 		drops.restore(world.get("drops", []))
+	if mobs != null:
+		mobs.restore(world.get("mobs", {}))
 	Inventory.units_in_bricks = false
 	_world_dirty = false
 	builder._refresh_bar()
@@ -2271,8 +2280,12 @@ func save_edits(wait := false) -> void:
 		_save_task = -1
 	var fluid_at := BrickFluid.change_count()
 	var farm_dirty := farming != null and farming.store.has_dirty()
+	# Creatures penned in or near the player are saved each time (section 11 of
+	# Docs/MineCreatures.md): they move, so there is always something to write.
+	var mobs_save := mobs.to_save() if mobs != null else {}
+	var mobs_dirty := mobs != null and mobs.wants_save()
 	if (not _edits_dirty and not _inv_dirty and not _world_dirty and fluid_at == _fluid_saved_at
-			and not farm_dirty) or settings.is_empty():
+			and not farm_dirty and not mobs_dirty) or settings.is_empty():
 		return
 	_edits_dirty = false
 	_world_dirty = false
@@ -2286,7 +2299,8 @@ func save_edits(wait := false) -> void:
 			"felled": _trees.felled_list() if _trees != null else _felled_load, "time": world_time,
 			"planted": _trees.planted_list() if _trees != null else _planted_load,
 			"farm_trouble": FarmPlant.trouble,
-			"buildings": MineBuildings.to_save(), "towns": MineBuildings.towns_to_save()}
+			"buildings": MineBuildings.to_save(), "towns": MineBuildings.towns_to_save(),
+			"mobs": mobs_save}
 	_time_saved = world_time
 	var farm_regions: Array = farming.store.take_dirty() if farming != null else []
 	if chests != null:

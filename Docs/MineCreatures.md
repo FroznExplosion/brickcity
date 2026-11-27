@@ -1,7 +1,7 @@
 # Mine world creatures: animals, enemies, pathfinding
 
-A plan, written 2026-11-26; the user's answers are section 9, what is built
-section 10 (stages 1, 2, 6 in part, 9 in part and 10). The scene is
+A plan, written 2026-11-26; the user's answers are section 9, what was built
+first section 10, the rest of the list section 11. The scene is
 `scenes/terrain_test.tscn` (Docs/MineWorld.md); farming is Docs/MineFarming.md.
 
 ## 0. What is asked
@@ -411,4 +411,137 @@ is not done.
 - Deer, wolves, rabbits, boar.
 - Fence gates (a wiring door works as one).
 - Turning off the abstract animal trouble near real herds.
+
+## 11. Built (2026-11-26): the rest of the list
+
+The user's rules for saving:
+
+- **Animals** are saved if they are in a fence, in a building, or trapped by
+  the player.
+- **Enemies** (zombies) are saved if they are near the player when the
+  player leaves and closes the world.
+- In multiplayer, a player who leaves but is not the host saves no enemies.
+
+**Water and lava in the nav.** A cell is AIR, SOLID, WATER or LAVA
+(`TerrainNav`, cell codes).
+
+- A body stands only on solid and is never in solid or lava. Lava is a wall
+  that can't be stood on.
+- A body wades in water: each step costs WADE_COST 2 more. It never goes
+  where its head would be under water.
+- Fluid is read per section with `fluid_column` (brick_fluid.cpp, one lock
+  a column).
+- `update_fluid` reads the water's change log (`BrickFluid.set_change_log`,
+  the multiplayer groundwork's, now on in the mine world). Only sections
+  holding a changed cell read their fluid again.
+- The first try was to read every section's fluid again whenever the
+  fluid changed. With the sea and rain always changing, that cost a zombie
+  field 2 s.
+
+**The far tier.** Past `far_at` (56 m) the terrain's colliders end, so a
+creature RIDES the nav there:
+
+- the Pawn's physics is off;
+- it slides node to node along its path or the field at its own speed,
+  feet on the nodes' floors;
+- it walks again when it comes back in.
+
+Further out:
+
+- past 128 m it sleeps;
+- past 170 m a wild one goes and a penned one is PARKED (a record) until
+  the player is within 140 m again.
+
+**Saving** (the world file's `"mobs"`; `MineMobs.to_save` / `restore`):
+
+- An animal is **penned** when `TerrainNav.free_reach` says it cannot walk
+  32 studs (11 m) from where it stands. That covers a fence, a building, a
+  pit, or anything the player trapped it in. A bigger pasture counts as
+  free.
+  - One animal is judged at a time, on a worker, and each again every 8 s.
+  - Penned animals and parked ones are saved, in their herds, with their
+    health.
+  - Free ones are not saved: wild groups are made new near the player.
+- **Zombies** within 48 m of the player are saved, but only when
+  `is_host()` (no multiplayer peer, or the server).
+- `last_feet` and the player's last position are kept, because the save at
+  the world's close runs with the bodies already out of the tree.
+- Saved creatures come back once the player has stood in the world for 1 s.
+
+**Player death** (`scripts/survival/mine_survival.gd`):
+
+- In survival, zombies (5), wolves (6) and a charging boar (8) take health,
+  as falls and lava already did. In creative they only shove.
+- Health comes back by itself: 0.5 a second, after 6 s with no harm.
+- When you die, "You died" shows for 3 s and the body is held. Then you come
+  back at the world's spawn with full health.
+- **The inventory is kept.** Nothing was said about what dying costs, so
+  for now the cost is the walk back.
+
+**Species** (`content/base/data/creatures/animals.json`, read by
+`CreatureBook`; a pack can add or change animals). `Herd` replaces PigHerd
+and `MobAnimal` replaces MobPig.
+
+| Animal | Body | Group | Temper | Notes |
+|---|---|---|---|---|
+| pig | 2 x 6 | 3-4 | prey | eats most crops; tramples from 2 bricks |
+| deer | 2 x 11, climbs 6 | 3-6 | prey | sees 40 m, smells 56 m, notices x1.4; **jumps 2 bricks** (a real jump in physics, `Mob.jumps`); tall fences stop it |
+| rabbit | 1 x 3 | 1-3 | prey | zigzags when it runs; fits 1-stud gaps; never tramples |
+| boar | 3 x 8 | 2-4 | boar | runs, but **charges** (8 damage) when the player hurts one from within 14 m, for 6 s; tramples from 1 brick |
+| wolf | 2 x 7 | 3-5 | predator | a pack: stalks to 12 m, circles at 6 m, attacks (6 a bite). Hunts deer, pigs and rabbits; hunts the player at night, when the player's health is under half, or for a minute after the player hurts one. Breaks and runs at half its number. Prey flee a pack closing in |
+
+- Drops: venison, hide, rabbit meat and raw pork are new items.
+- Wild groups: the first is pigs, then any kind by weight (pig 3, deer 3,
+  rabbit 2, boar 1, wolf 1). Two wild groups at most near the player; a new
+  one comes at most every 45 s.
+- **Shift+F7** cycles through the kinds.
+
+**Looks.** `MobLooks.make(kind, def)` uses a real model from a content pack
+when there is one: `creatures/<kind>.tscn`, `.scn` or `.glb`, feet at the
+origin, facing -Z, legs named `leg*` to swing. Otherwise it builds a
+block-out from the entry's `look` (length, legs, colours, snout, antlers,
+ears, tusks, tail). No real models are made yet: drop one in and it is used.
+
+**Fence gates.** The fence gate item (8 wood) lays a 2-brick panel that
+opens.
+
+- RMB on it, with anything in the hand, opens or shuts it. Its rails go out
+  and come back, so a 2-stud gap opens and closes.
+- MineMobs keeps the gates (saved in `"mobs"`). A gate whose posts are
+  broken is dropped.
+
+**Doors.** Wiring doors and trapdoors are colliders, not cells. A shut one
+is now an obstacle to the nav and an open one is not (`_doors_step`, every
+0.5 s).
+
+**Farms.** A plot within 64 m of a live herd that eats crops gets `herds`.
+The abstract animal trouble is off for it, because the real herd eats it
+instead (`FarmPlant.hazards`, settled first). Without one, the abstract
+trouble runs as before. The flag is not saved: it is set again within 10 s.
+
+**Tests.**
+
+- `terrain_nav_probe`, 42 checks. Penned: a pig in a 2-brick ring can't
+  walk out, a pig on the open floor can, a deer is not penned by it.
+- `--gate=mobs`, 35 checks. New ones:
+  - the far tier;
+  - death and respawn in survival;
+  - the fence gate shut, opened and shut through the builder;
+  - saving: 3 penned pigs saved and 2 free not; a zombie by the player
+    saved by the host and not by a client; restored into an emptied world;
+  - a deer over a 2-brick wall;
+  - wolves biting pigs;
+  - a hurt boar charging the player;
+  - the farm flag;
+  - lava read by the nav.
+- `--gate=mobs --only=<part>` runs one part after the arena.
+
+**Not yet.**
+
+- Doors are not in the gate: they are covered only by reading their cells
+  from MineWiring.
+- Deer are not made to flee to cover.
+- Rabbits do not hide in holes.
+- Animals do not breed and cannot be tamed (livestock, 5.4).
+- Real models.
 

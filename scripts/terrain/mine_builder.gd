@@ -860,6 +860,11 @@ func place_target() -> bool:
 			log_blocks.append("use device %s" % dev)
 		target = {}
 		return used
+	# A fence gate opens or shuts (Docs/MineCreatures.md 11), whatever is in the hand.
+	if host.mobs != null and not rmb_repeat and host.mobs.use_gate(target.get("cell", Vector3i(1 << 30, 0, 0))):
+		log_blocks.append("gate %s" % target.get("cell"))
+		target = {}
+		return true
 	var d := hand_def()
 	var k := str(d.get("kind", ""))
 	if k == "wire" or k == "device":
@@ -968,11 +973,15 @@ func _place_fence(d: Dictionary) -> bool:
 				Vector3((hi.x - lo.x + 1) * stud, (hi.y - lo.y + 1) * plate, (hi.z - lo.z + 1) * stud))
 		if _box_hits_player(box):
 			return false
-	var res := MineFences.place(at, along_x, plates, lay_material(d))
-	if res.is_empty():
-		return false
-	for r in res:
-		host.terrain_edited(r)
+	if bool(d.get("gate", false)) and host.mobs != null:
+		if not host.mobs.place_gate(at, along_x, plates, lay_material(d)):
+			return false
+	else:
+		var res := MineFences.place(at, along_x, plates, lay_material(d))
+		if res.is_empty():
+			return false
+		for r in res:
+			host.terrain_edited(r)
 	inv.consume_hand(1)
 	placed += 1
 	log_blocks.append("fence %s %s" % [at, "x" if along_x else "z"])

@@ -50,6 +50,49 @@ static func place(at: Vector3i, along_x: bool, plates: int, material: int) -> Ar
 	return res
 
 
+## The panel's corner on the lattice: `at` with its line coordinate snapped.
+static func anchor(at: Vector3i, along_x: bool) -> Vector3i:
+	if along_x:
+		return Vector3i(floori(float(at.x) / SPAN) * SPAN, at.y, at.z)
+	return Vector3i(at.x, at.y, floori(float(at.z) / SPAN) * SPAN)
+
+
+static func gate_key(a0: Vector3i, along_x: bool) -> String:
+	return "%d,%d,%d,%s" % [a0.x, a0.y, a0.z, "x" if along_x else "z"]
+
+
+## Does the panel at lattice corner `a0` hold plate cell `cell`?
+static func gate_has(a0: Vector3i, along_x: bool, plates: int, cell: Vector3i) -> bool:
+	if cell.y < a0.y or cell.y > a0.y + plates - 1:
+		return false
+	if along_x:
+		return cell.z == a0.z and cell.x >= a0.x and cell.x <= a0.x + SPAN
+	return cell.x == a0.x and cell.z >= a0.z and cell.z <= a0.z + SPAN
+
+
+## Both posts still stand (a gate broken up is a gate no more).
+static func posts_stand(a0: Vector3i, along_x: bool, plates: int) -> bool:
+	var boxes := panel_boxes(a0, along_x, plates)
+	for i in 2:
+		var lo: Vector3i = boxes[i][0]
+		if BrickTerrain.solid_at(lo.x, lo.y, lo.z) == 0:
+			return false
+	return true
+
+
+## A gate's rails out (open) or back in (shut). The edits' answers.
+static func set_gate(a0: Vector3i, along_x: bool, plates: int, material: int, open: bool) -> Array:
+	var res := []
+	var boxes := panel_boxes(a0, along_x, plates)
+	for i in range(2, boxes.size()):
+		var r: Dictionary = BrickTerrain.fill_box(boxes[i][0], boxes[i][1], 0 if open else material, not open)
+		if int(r.get("changed", 0)) > 0:
+			if not open:
+				BrickTerrain.mark_placed(boxes[i][0], boxes[i][1], material)
+			res.append(r)
+	return res
+
+
 ## Is every cell of the panel solid (a gate's check)?
 static func is_laid(at: Vector3i, along_x: bool, plates: int) -> bool:
 	for bx in panel_boxes(at, along_x, plates):
