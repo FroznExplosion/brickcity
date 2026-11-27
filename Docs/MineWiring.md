@@ -716,13 +716,32 @@ stand-in animation and hop -> the player shove -> sticky piston.
 - Items `piston`, `sticky_piston` (`wiring.json`, model `piston`: a grey
   body, the head plate in the item's colour). Saved: facing (4 for up) and
   `on` (out).
-- **Not yet:** smooth tiles are not told from studs (a sideways move hops
-  whenever it rests on anything); pistons do not move chests, devices,
-  cables, sand columns or fallen pieces; a block laid into an out head's
-  stud is not refused; the stand-in is lit as outdoors in caves; the
-  stand-in is boxes with studs, not the bevelled bricks.
+- **What rides along** (added the same day, the user's "not built yet"
+  list): wires and devices standing on a moved group's tops come with it
+  (`_shift_riders` moves them to their new cells as it lands; `check`
+  leaves them be while they slide, `_riding`; their nodes slide with the
+  stand-in). A **chest** on a group rides a move up or down
+  (`MineChests.move`, `MineChests.riding`); a sideways push under a chest
+  stalls, since chests keep to their 2-stud grid. **Sand, red sand and
+  gravel** filling a whole course of a stud move as a 1x1 unit
+  (`_loose_at`) and are laid loose again (not marked), so they still fall
+  as sand does; part sand, part other is ground and stalls.
+- **The head's stud:** while out, the stud in front is kept: no wire, no
+  device, no block is put there (`_in_head`, `overlaps`), and no other
+  piston pushes into it.
+- **Hop or slide:** a sideways move hops only over studs (`hops`,
+  `studded` = brick_terrain.h `material_studded`: road, farmland and glass
+  are smooth tiles); on those, or hanging free, it slides plainly.
+- **Lit where it is:** the stand-in uses the falling sand's sky-lit
+  material, its sky and lava levels asked once just over the group's top,
+  so it is dark in a cave.
+- **Not yet:** fallen pieces (physics bodies) are not pushed -- that would
+  be an impulse, the ram of 6.2, not a move; the stand-in is plain boxes
+  with studs, not the bevelled bricks; a device riding is moved even if
+  only one of its studs stood on the group (then `check` breaks it if it
+  is no longer held).
 
-Tests: `wiring_probe` 143 ok (stage 4, on placed bricks of the
+Tests: `wiring_probe` 149 ok (stage 4, on placed bricks of the
 probe's own -- `rect_fn`, `clear_fn`, `lay_fn`, `mark_fn` are the probe's
 ground: up a course and still one brick; a plain piston leaves it; a stack
 of 3 rides, a brick under an overhang does not; 12 move and 13 stall and it
@@ -730,7 +749,10 @@ retries; generated ground on the top or over the head stalls; sideways the
 brick in its line goes too and a cable left without ground breaks; a lamp
 in the way stalls; power at the front does not count; sticky pulls back
 sideways and down; 4 pushes a tick then the fifth; facing up when looking
-down, a gate never; the wrench's turn order; saved). `--gate=wiring` stage
+down, a gate never; the wrench's turn order; saved; a lamp, a wire and a lever ride up on a
+lifted brick and still work; an out head's stud takes no wire, device or
+block; hop on studs, slide on road; a course of sand moves and stays
+loose, part sand stalls). `--gate=wiring` stage
 4, real placed bricks: GATE_LINE
 
 ## Sources
