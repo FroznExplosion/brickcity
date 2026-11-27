@@ -1423,23 +1423,51 @@ func piston_group(seeds: Array, step: Vector3i, line: bool, pusher := Vector3i(W
 ## top, or on its head's top while out? Then the collapse leaves it standing.
 ## `g`: the survey's bricks, 6 ints each (x, bottom plate, z, sx, sz, mat).
 func holds(g: PackedInt32Array) -> bool:
-	var tops := {}
-	for c in devices:
-		var d: Dictionary = devices[c]
-		if str(DEVICES[d.item].kind) != "piston":
-			continue
-		tops[c + Vector3i(0, COURSE, 0)] = true
-		if bool(d.on):
-			var f := int(d.facing)
-			tops[c + piston_step(f) + Vector3i(0, COURSE, 0)] = true
-	if tops.is_empty():
+	var held := _held_cells()
+	if held.is_empty():
 		return false
 	for i in range(0, g.size() - 5, 6):
 		for dz in g[i + 4]:
 			for dx in g[i + 3]:
-				if tops.has(Vector3i(g[i] + dx, g[i + 1], g[i + 2] + dz)):
+				if held.has(Vector3i(g[i] + dx, g[i + 1], g[i + 2] + dz)):
 					return true
 	return false
+
+
+## The bottom cells of every brick a piston holds up: the brick on its body's
+## top (and on its head's top while out), and every brick clutched on those,
+## repeated -- the push's own rule. The survey may hand back the bricks of
+## one stack as groups of their own (a 1x2 on a 2x2 came back alone), so a
+## group is held when it is anywhere in that chain, not only at its foot.
+func _held_cells() -> Dictionary:
+	var queue: Array = []
+	for c in devices:
+		var d: Dictionary = devices[c]
+		if str(DEVICES[d.item].kind) != "piston":
+			continue
+		var tops: Array[Vector3i] = [c + Vector3i(0, COURSE, 0)]
+		if bool(d.on):
+			tops.append(c + piston_step(int(d.facing)) + Vector3i(0, COURSE, 0))
+		for t in tops:
+			if _solid(t):
+				var b := brick_at(t)
+				if not b.is_empty() and int(b.course) * COURSE == t.y:
+					queue.append(b)
+	var seen := {}
+	var out := {}
+	while not queue.is_empty() and seen.size() < PISTON_LIMIT * 8:
+		var b: Dictionary = queue.pop_back()
+		if seen.has(b.key):
+			continue
+		seen[b.key] = true
+		for col: Vector2i in b.cols:
+			out[Vector3i(col.x, int(b.course) * COURSE, col.y)] = true
+			var up := Vector3i(col.x, (int(b.course) + 1) * COURSE, col.y)
+			if _solid(up):
+				var nb := brick_at(up)
+				if not nb.is_empty() and not seen.has(nb.key):
+					queue.append(nb)
+	return out
 
 
 ## Ask the host's collapse to look at a box (plate cells): what it holds up

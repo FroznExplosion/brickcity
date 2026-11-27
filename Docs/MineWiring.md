@@ -702,7 +702,10 @@ stand-in animation and hop -> the player shove -> sticky piston.
   when one of its bricks rests on a piston's top or on its head's top while
   out (`MineWiring.holds`, asked by `ground_collapse.gd` for each group a
   survey lets go). Without it a brick laid on a piston, or pushed up by one,
-  fell at once (a device is not ground). When the head comes in, a survey
+  fell at once (a device is not ground). Held means anywhere in the chain:
+  the brick on the piston's top (or its out head's), and every brick
+  clutched on those, repeated (`_held_cells`) -- the survey handed back a
+  1x2 laid on a 2x2 on a piston as a group of its own, and it fell. When the head comes in, a survey
   over what it held is queued (`_survey`): a plain piston that lifted a
   brick lets it fall. That is the trap of 6.1.
 - **The player** (`_carry`, each frame of the slide): feet on the moving
@@ -741,7 +744,7 @@ stand-in animation and hop -> the player shove -> sticky piston.
   only one of its studs stood on the group (then `check` breaks it if it
   is no longer held).
 
-Tests: `wiring_probe` 149 ok (stage 4, on placed bricks of the
+Tests: `wiring_probe` 151 ok (stage 4, on placed bricks of the
 probe's own -- `rect_fn`, `clear_fn`, `lay_fn`, `mark_fn` are the probe's
 ground: up a course and still one brick; a plain piston leaves it; a stack
 of 3 rides, a brick under an overhang does not; 12 move and 13 stall and it
@@ -753,7 +756,19 @@ down, a gate never; the wrench's turn order; saved; a lamp, a wire and a lever r
 lifted brick and still work; an out head's stud takes no wire, device or
 block; hop on studs, slide on road; a course of sand moves and stays
 loose, part sand stalls). `--gate=wiring` stage
-4, real placed bricks: GATE_LINE
+4, real placed bricks (79 ok in all, 2026-11-27): laid with the builder
+looking straight down it faces up; a 2x2 placed brick on it stands; the
+lever pushes it a course up, still one placed brick, still standing on the
+head; off, the head comes in and the brick falls; a stack of 3 rides up
+with the player on top (lifted 0.42 m); 13 bricks stall; ground of the
+world in front stalls a sideways one; sideways the brick in its line goes
+too; a sticky one pulls its brick and the one on it back; a chest on a
+lifted brick rides up, a chest on a brick pushed sideways stalls it; after
+a reload the pistons are back (one facing up) and the pushed bricks are
+where they were pushed. Picture `user://dev/wiring_pistons.png`.
+Not seen in a test: the slide and hop as drawn (the gate checks where
+things end, not how they move), a player shoved sideways, the stand-in's
+cave light.
 
 ## Sources
 

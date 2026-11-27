@@ -762,6 +762,12 @@ func _stage4(w: MineWiring) -> void:
 	_ok("a stack of 3 clutched on each other rides up", _is_brick(40, 2, 80, 2, 2) and _is_brick(41, 3, 80, 2, 1)
 			and _is_brick(42, 4, 80, 1, 1))
 	_ok("the brick under the overhang stays", _is_brick(42, 1, 80, 1, 1))
+	# The collapse may hand back a stack's top brick as a group of its own:
+	# held all the same, since it is clutched in a chain down to the head; a
+	# brick on the ground beside is not.
+	_ok("a group of only the stack's top brick is held by the piston", w.holds(PackedInt32Array([42, 12, 80, 1, 1, 5])))
+	_brick(50, 0, 80, 1, 1)
+	_ok("a brick not on the piston's chain is not", not w.holds(PackedInt32Array([50, 0, 80, 1, 1, 5])))
 	# The limit: 12 move, 13 stall (and it tries again each tick).
 	for n in [12, 13]:
 		_reset(w)

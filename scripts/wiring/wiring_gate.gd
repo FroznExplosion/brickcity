@@ -405,16 +405,10 @@ func run(host: Node) -> void:
 	w._fly_to(stand, Vector3(1, 0, 0))
 	await w._frames(10)
 	var feet0: Vector3 = w.player_feet_local()
-	print("[wiring-gate] before the stack push: rects %s %s %s" % [str(BrickTerrain.placed_rect(p2.x, floori((y + 3) / 3.0), p2.z)),
-			str(BrickTerrain.placed_rect(p2.x + 1, floori((y + 6) / 3.0), p2.z)),
-			str(BrickTerrain.placed_rect(p2.x + 1, floori((y + 9) / 3.0), p2.z + 1))])
 	wr.use_device(lev2)
 	await _settle()
 	var feet1: Vector3 = w.player_feet_local()
-	check("a stack of 3 clutched bricks rides up together (lever %s, out %s, stall '%s', rects %s %s %s)" % [str(wr.devices.has(lev2)), str(wr.devices[p2].on),
-			wr.last_stall, str(BrickTerrain.placed_rect(p2.x, floori((y + 6) / 3.0), p2.z)),
-			str(BrickTerrain.placed_rect(p2.x + 1, floori((y + 9) / 3.0), p2.z)),
-			str(BrickTerrain.placed_rect(p2.x + 1, floori((y + 12) / 3.0), p2.z + 1))), _is_brick(p2 + Vector3i(0, 6, 0), 2, 2)
+	check("a stack of 3 clutched bricks rides up together (stall '%s')" % wr.last_stall, _is_brick(p2 + Vector3i(0, 6, 0), 2, 2)
 			and _is_brick(p2 + Vector3i(1, 9, 0), 1, 2) and _is_brick(p2 + Vector3i(1, 12, 1), 1, 1))
 	check("the player on top is lifted (%.2f m)" % (feet1.y - feet0.y), feet1.y - feet0.y > 3 * plate - 0.08)
 	w._fly_to(Vector3((x0 + 4) * stud, y * plate + 3.0, (zp - 3) * stud), Vector3(0, 0, 1))
