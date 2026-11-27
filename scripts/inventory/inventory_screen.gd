@@ -5,11 +5,13 @@ extends MenuScreen
 ## Minecraft panels side by side, Bedrock's layout:
 ##
 ##   left  (the recipe book; hidden at a chest or with the book tab off)
-##     tabs: construction, equipment, items, nature | creative, farming | all
+##     tabs: construction, equipment, items, nature | creative, spawn, farming | all
 ##     "Craftable recipes" / "All recipes", a search box, the "craftable
 ##     only" switch, and a grid of what can be made: grey can be made now,
 ##     red cannot. Click one to pick it. The Creative tab (creative only)
-##     shows every item instead; the Farming tab the farming guide.
+##     shows every item instead; the Spawn tab (creative only) one spawn
+##     item per creature (Docs/MineCreatures.md 12); the Farming tab the
+##     farming guide.
 ##   right
 ##     tabs: the recipe book on/off, this screen, close (X)
 ##     "Crafting" (the inventory), "Crafting Table", "Furnace" or another
@@ -61,10 +63,11 @@ const TAB_ICONS := {
 	"items": [&"chest", &"workbench"],
 	"nature": [&"wheat", &"wheat_seeds", &"leaves"],
 	"farming": [&"hoe", &"wheat_seeds"],
+	"spawn": [&"spawn_pig", &"spawn_zombie"],
 }
 const TAB_NAMES := {
 	"construction": "Construction", "equipment": "Equipment", "items": "Items", "nature": "Nature",
-	"all": "All recipes (search)", "creative": "Creative: every item", "farming": "Farming guide",
+	"all": "All recipes (search)", "creative": "Creative: every item", "spawn": "Creative: spawn creatures", "farming": "Farming guide",
 }
 
 ## The recipe book shown (Bedrock's book tab) and its switch, kept between openings.
@@ -73,7 +76,7 @@ static var craftable_only := false
 
 var inv: Inventory
 var host: Node
-## What the left panel shows: "recipes", "creative" or "farming".
+## What the left panel shows: "recipes", "creative", "spawn" or "farming".
 var page := "recipes"
 ## The crafting station the screen was opened at (&"workbench", &"furnace",
 ## ...), or &"" (the plain inventory: every recipe).
@@ -104,6 +107,8 @@ var _book_grid: GridContainer
 var _book_names: Array = []
 var _creative_scroll: ScrollContainer
 var _creative_grid: GridContainer
+var _spawn_scroll: ScrollContainer
+var _spawn_grid: GridContainer
 var _farm_scroll: ScrollContainer
 
 var _right_col: VBoxContainer
@@ -192,7 +197,7 @@ func _build_left() -> void:
 	_row.add_child(_left_col)
 	_left_tabs = HBoxContainer.new()
 	_left_col.add_child(_left_tabs)
-	for key in RecipeBook.CATEGORIES + ["creative", "farming", "", "all"]:
+	for key in RecipeBook.CATEGORIES + ["creative", "spawn", "farming", "", "all"]:
 		if key == "":
 			var gap := Control.new()
 			gap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -243,9 +248,15 @@ func _build_left() -> void:
 	v.add_child(_book_scroll)
 	_creative_grid = _cell_grid(BOOK_COLS)
 	for id in ItemCatalog.ids():
-		_add_slot(_creative_grid, InvSlot.make(inv, {}, id))
+		if str(ItemCatalog.get_def(id).get("kind", "")) != "spawner":
+			_add_slot(_creative_grid, InvSlot.make(inv, {}, id))
 	_creative_scroll = _scroll(_creative_grid)
 	v.add_child(_creative_scroll)
+	_spawn_grid = _cell_grid(BOOK_COLS)
+	for id in ItemCatalog.spawn_ids():
+		_add_slot(_spawn_grid, InvSlot.make(inv, {}, id))
+	_spawn_scroll = _scroll(_spawn_grid)
+	v.add_child(_spawn_scroll)
 	var guide := FarmGuide.build(_show_slot)
 	guide.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_farm_scroll = _scroll(guide)
@@ -509,6 +520,8 @@ func show_page(p: String) -> void:
 	match p:
 		"creative":
 			page = "creative" if inv.creative else "recipes"
+		"spawn":
+			page = "spawn" if inv.creative else "recipes"
 		"farming":
 			page = "farming"
 		_:
@@ -522,7 +535,7 @@ func show_page(p: String) -> void:
 
 
 func _on_left_tab(key: String) -> void:
-	if key == "creative" or key == "farming":
+	if key == "creative" or key == "spawn" or key == "farming":
 		show_page(key)
 		return
 	book_tab = key
@@ -538,8 +551,10 @@ func _rebuild_left(force := false) -> void:
 		var t: McStyle.Tab = _tabs[key]
 		t.on = (page == key) or (page == "recipes" and key == book_tab)
 	(_tabs["creative"] as Control).visible = inv.creative
+	(_tabs["spawn"] as Control).visible = inv.creative
 	_book_scroll.visible = page == "recipes"
 	_creative_scroll.visible = page == "creative"
+	_spawn_scroll.visible = page == "spawn"
 	_farm_scroll.visible = page == "farming"
 	_search_row.visible = page != "farming"
 	_toggle.visible = page == "recipes"
@@ -550,6 +565,13 @@ func _rebuild_left(force := false) -> void:
 			for s in _creative_grid.get_children():
 				var slot := s as InvSlot
 				slot.visible = q.is_empty() or str(ItemCatalog.get_def(slot.item_id).get("name", "")).to_lower().contains(q)
+			return
+		"spawn":
+			_book_title.text = "Spawn creatures"
+			var q2 := _search.text.strip_edges().to_lower()
+			for s in _spawn_grid.get_children():
+				var slot2 := s as InvSlot
+				slot2.visible = q2.is_empty() or str(ItemCatalog.get_def(slot2.item_id).get("name", "")).to_lower().contains(q2)
 			return
 		"farming":
 			_book_title.text = "Farming guide"
@@ -1154,7 +1176,7 @@ func _on_relayout(vp_size: Vector2) -> void:
 		bar_w = maxf(vb.get_combined_minimum_size().x, 10.0)
 	var book_w := BOOK_COLS * _slot_px + bar_w + 2.0
 	# At least three rows; it stretches to the inventory panel's height.
-	for sc in [_book_scroll, _creative_scroll, _farm_scroll]:
+	for sc in [_book_scroll, _creative_scroll, _spawn_scroll, _farm_scroll]:
 		(sc as ScrollContainer).custom_minimum_size = Vector2(book_w, _slot_px * 3.0)
 	_mid.custom_minimum_size = Vector2(roundf(_slot_px * (1.9 if station == &"furnace" else 1.4)), _slot_px)
 	_result.custom_minimum_size = Vector2(roundf(_slot_px * 1.35), roundf(_slot_px * 1.35))

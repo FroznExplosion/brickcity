@@ -917,6 +917,21 @@ func place_target() -> bool:
 				log_blocks.append("plant %s %s" % [d.id, target.cell])
 			target = {}
 			return ok2
+	if k == "spawner":
+		# A creature on the face aimed at (Docs/MineCreatures.md 12).
+		if host.mobs == null or rmb_repeat:
+			return false
+		var c: Vector3i = (target.cell as Vector3i) + (target.normal as Vector3i)
+		var stud := BrickWorld.get_stud_metres()
+		var plate := BrickWorld.get_plate_metres()
+		var made: bool = host.mobs.spawn_one(StringName(str(d.get("creature", ""))),
+				Vector3((c.x + 0.5) * stud, c.y * plate, (c.z + 0.5) * stud))
+		if made:
+			inv.consume_hand(1)
+			placed += 1
+			log_blocks.append("spawn %s %s" % [d.get("creature", ""), c])
+		target = {}
+		return made
 	if k == "fence":
 		return _place_fence(d)      # a panel of posts and rails (MineFences)
 	if k == "chest" or k == "station" or k == "backpack":

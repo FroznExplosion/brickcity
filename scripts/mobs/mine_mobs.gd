@@ -39,6 +39,8 @@ const GONE_AT := 170.0
 const UNPARK_AT := 140.0
 const ZOMBIE_AGAIN := 25.0
 const WILD_GROUPS := 2
+## A spawned animal joins a herd of its kind this near.
+const JOIN_HERD := 16.0
 const WILD_EVERY := 45.0
 const ZOMBIE_SAVE_M := 48.0
 const PEN_REACH := 32             # studs out of which it cannot walk: penned
@@ -314,23 +316,38 @@ func spawn_herd(kind: StringName, at: Vector3, n := 3, points: Array = [], hps: 
 		var spot: Vector3 = points[i] if not points.is_empty() else nav.stand_near(h.slot(i, at), def.body, 6)
 		if spot == Vector3.INF:
 			continue
-		var b: Vector4i = def.body
-		var p := Pawn.spawn(self, to_world(spot), 4, true, float(def.hp))
-		var height := float(b.y) * Pawn.PLATE_M
-		p.resize(height, minf(b.x * 0.35 * 0.45, height * 0.5))
-		var a := MobAnimal.new()
-		a.setup_kind(kind)
-		a.herd = h
-		a.index = h.members.size()
-		a.attach(self, p, MobLooks.make(kind, def))
-		if i < hps.size() and float(hps[i]) > 0.0 and float(hps[i]) < float(def.hp):
-			p.health.apply_impact(float(def.hp) - float(hps[i]), &"")
-		h.members.append(a)
-		mobs.append(a)
+		_add_member(h, spot, float(hps[i]) if i < hps.size() else -1.0)
 	h.started = h.members.size()
 	herds.append(h)
 	log_line("a group of %d %s at %s" % [h.members.size(), kind, at])
 	return h
+
+
+## One creature of `kind` at `at` (a spawn item's RMB, Docs/MineCreatures.md
+## 12): on the nearest floor it fits. An animal joins a herd of its kind
+## within JOIN_HERD m, or starts one. True if one was made.
+func spawn_one(kind: StringName, at: Vector3) -> bool:
+	if kind == &"zombie":
+		var s := nav.stand_near(at, ZOMBIE_BODY, 4)
+		if s == Vector3.INF:
+			return false
+		spawn_zombie(s)
+		return true
+	var def := CreatureBook.get_def(kind)
+	if def.is_empty():
+		return false
+	var spot := nav.stand_near(at, def.body, 4)
+	if spot == Vector3.INF:
+		return false
+	for h in herds:
+		var o := h as Herd
+		if o.kind == kind and not o.alive().is_empty() and o.centre().distance_to(spot) < JOIN_HERD:
+			_add_member(o, spot, -1.0)
+			o.started = maxi(o.started, o.alive().size())
+			log_line("a %s joined its herd at %s" % [kind, spot])
+			return true
+	spawn_herd(kind, spot, 0, [spot])
+	return true
 
 
 ## A floor `dist` m from the player in a random way for `body`, or INF.
@@ -352,6 +369,25 @@ func spot_from_player(dist: float, body: Vector4i) -> Vector3:
 		if s != Vector3.INF:
 			return s
 	return Vector3.INF
+
+
+## One more animal of herd `h` at `spot`, with `hp` (< 0: whole).
+func _add_member(h: Herd, spot: Vector3, hp: float) -> MobAnimal:
+	var def := h.def
+	var b: Vector4i = def.body
+	var p := Pawn.spawn(self, to_world(spot), 4, true, float(def.hp))
+	var height := float(b.y) * Pawn.PLATE_M
+	p.resize(height, minf(b.x * 0.35 * 0.45, height * 0.5))
+	var a := MobAnimal.new()
+	a.setup_kind(h.kind)
+	a.herd = h
+	a.index = h.members.size()
+	a.attach(self, p, MobLooks.make(h.kind, def))
+	if hp > 0.0 and hp < float(def.hp):
+		p.health.apply_impact(float(def.hp) - hp, &"")
+	h.members.append(a)
+	mobs.append(a)
+	return a
 
 
 func _wild_kind() -> StringName:

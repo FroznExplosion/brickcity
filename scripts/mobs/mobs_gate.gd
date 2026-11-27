@@ -36,8 +36,11 @@ extends RefCounted
 ##             pig; a boar hurt by the player charges and hits them.
 ##   farm      a plot near a live herd has its abstract animal trouble off.
 ##   lava      lava poured is LAVA to the nav, and no body fits in it.
+##   spawn     (section 12) the creative Spawn tab lists a spawn item for the
+##             zombie and every animal; RMB with one through the builder makes
+##             one there; a second pig joins the first one's herd.
 ##   pictures  user://dev/mobs_zombie.png, mobs_pigs.png, mobs_fence.png,
-##             mobs_species.png.
+##             mobs_species.png, mobs_spawn_tab.png.
 ## Preloaded by mine_world.gd (`--gate=mobs`).
 
 var w: Node = null
@@ -75,7 +78,7 @@ func run(host: Node) -> void:
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--only="):
 			only = arg.split("=")[1]
-	for part in ["zombie", "trample", "pig", "fence", "far", "death", "gate", "save", "species", "farm_flag", "lava"]:
+	for part in ["zombie", "trample", "pig", "fence", "far", "death", "gate", "save", "species", "farm_flag", "lava", "spawn"]:
 		if only == "" or only == part:
 			await call("_%s_checks" % part)
 	print("[mobs-gate] fields built %d, last %.1f ms; nav %s" % [m.fields_built, m.last_field_ms, m.nav.get_stats()])
@@ -638,4 +641,51 @@ func _lava_checks() -> void:
 	var fits: bool = m.nav.fits(Vector3((cell.x + 1) * stud, (top + 1) * plate, (cell.z + 1) * stud), MobZombie.BODY)
 	check("lava: the nav reads lava (code %d) and no zombie fits in it (fits %s)" % [code, fits], code == 3 and not fits)
 	w.water.manual = false
+
+
+func _spawn_checks() -> void:
+	await _kill_all()
+	var inv: Inventory = w.builder.inv
+	var want := [&"spawn_zombie"]
+	for k in CreatureBook.ids():
+		want.append(StringName("spawn_%s" % k))
+	var ids := ItemCatalog.spawn_ids()
+	var all_there := true
+	for id in want:
+		all_there = all_there and ids.has(id)
+	check("spawn: a spawn item for the zombie and every animal (%s)" % ", ".join(ids.map(func(i): return String(i))), all_there)
+	await _player_to(_at(48, 30), _at(48, 40))
+	var made := {}
+	for id in [&"spawn_pig", &"spawn_pig", &"spawn_zombie", &"spawn_wolf"]:
+		inv.ensure_item(id)
+		if not inv.select_item(id):
+			inv.pick(id)
+		w.builder.rmb_repeat = false
+		w.builder.target = {"cell": Vector3i(x0 + 48 + made.size() * 4, top, z0 + 40), "normal": Vector3i.UP}
+		var before := m.mobs.size()
+		w.builder.place_target()
+		made[made.size()] = m.mobs.size() - before
+	var pig_herds := 0
+	var pigs := 0
+	for h in m.herds:
+		if (h as Herd).kind == &"pig":
+			pig_herds += 1
+			pigs += (h as Herd).alive().size()
+	check("spawn: RMB with spawn items makes a pig, a pig, a zombie, a wolf (%s)" % str(made.values()), made.values() == [1, 1, 1, 1])
+	check("spawn: the second pig joined the first one's herd (%d herds, %d pigs)" % [pig_herds, pigs], pig_herds == 1 and pigs == 2)
+	# The Spawn tab, in the screen.
+	w.toggle_inventory()
+	await w._frames(10)
+	var scr: InventoryScreen = w._inv_screen
+	scr.show_page("spawn")
+	await w._frames(10)
+	var shown := 0
+	for c in scr._spawn_grid.get_children():
+		if (c as Control).visible:
+			shown += 1
+	check("spawn: the Spawn tab shows them (%d slots, page %s)" % [shown, scr.page], scr.page == "spawn" and shown == want.size())
+	await w._shot("user://dev/mobs_spawn_tab.png")
+	w.toggle_inventory()
+	await w._frames(5)
+	await _kill_all()
 
