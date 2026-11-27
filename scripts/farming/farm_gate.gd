@@ -33,12 +33,10 @@ extends RefCounted
 ##             boosts every plot; corn, cabbage and melon planted and drawn
 ##             (user://dev/farm_stage4.png).
 ##   stage 5   (the checks above run with TROUBLE off, so they are certain)
-##             the field is open to animals; a stone ring round the patch
-##             closes it (the real flood, on its worker); a gap in the ring
-##             opens it again; a scarecrow marks plots near it; weeds are
-##             pulled with LMB, the crop staying; mulch goes on; an animals'
-##             trample turns a plot to dirt in the world; with trouble on,
-##             three days bring events to the open field.
+##             a scarecrow marks plots near it; weeds are pulled with LMB, the
+##             crop staying; mulch goes on; with trouble on, three days bring
+##             events -- and none of them animals (section 23: the world's real
+##             animals eat and trample crops; farming no longer rolls them).
 ##   stage 6   a seed's traits go into its plant and come back in its
 ##             harvest's seeds (the label shows them); corn by beans is a
 ##             companion; a bare plot between two ripe wheat plants sprouts a
@@ -363,26 +361,8 @@ func run(host: Node) -> void:
 	var felled: Dictionary = w.fell_tree(tcell)
 	check("and it can be felled like any tree", not felled.is_empty() and not w._trees.planted.has(tcell))
 
-	# --- stage 5: trouble
-	var p_field := field[0]
-	await _fields_settle(f)
-	check("the field is open to animals (%d floods)" % f.fields.floods, bool(f.store.get_plot(p_field).open))
-	# A stone ring a stud outside the patch, from well down to two bricks up.
-	var ring := [[Vector3i(x0 - 1, top - 6, z0 - 1), Vector3i(x0 + 14, top + 6, z0 - 1)],
-			[Vector3i(x0 - 1, top - 6, z0 + 12), Vector3i(x0 + 14, top + 6, z0 + 12)],
-			[Vector3i(x0 - 1, top - 6, z0 - 1), Vector3i(x0 - 1, top + 6, z0 + 12)],
-			[Vector3i(x0 + 14, top - 6, z0 - 1), Vector3i(x0 + 14, top + 6, z0 + 12)]]
-	for side in ring:
-		w.terrain_edited(BrickTerrain.fill_box(side[0], side[1], BrickTerrain.MAT_STONE, false))
-	await _fields_settle(f)
-	check("a stone ring round it closes it", not bool(f.store.get_plot(p_field).open)
-			and not bool(f.store.get_plot(field[4]).open))
-	# A gap two studs wide, its floor at the field's height: open again.
-	w.terrain_edited(BrickTerrain.fill_box(Vector3i(x0 + 6, top + 1, z0 + 12), Vector3i(x0 + 7, top + 6, z0 + 12), 0, false))
-	w.terrain_edited(BrickTerrain.fill_box(Vector3i(x0 + 6, top - 6, z0 + 12), Vector3i(x0 + 7, top, z0 + 12),
-			BrickTerrain.MAT_GRASS, false))
-	await _fields_settle(f)
-	check("a gap in the ring opens it again", bool(f.store.get_plot(p_field).open))
+	# --- stage 5: trouble (the enclosure flood and its checks went with
+	# farming's animal events, Docs/MineFarming.md 23)
 	# A scarecrow by the field.
 	w.chests.place(Vector3i(bx0 + 4, top + 1, bz0 + 2), [], true, &"scarecrow")
 	for b in field:
@@ -402,14 +382,8 @@ func run(host: Node) -> void:
 	w.builder.target = {"cell": Vector3i(wb.x * 2, top, wb.z * 2), "normal": Vector3i.UP}
 	w.builder.place_target()
 	check("mulch goes on a plot", bool(f.store.get_plot(wb).mulch))
-	# An animals' trample: the plot goes back to dirt in the world.
-	var pk: Vector3i = rect[6]
-	f.store.get_plot(pk).packed = true
-	f.settle_all()
-	check("animals' trample: the plot is gone, the soil dirt", f.store.get_plot(pk).is_empty()
-			and BrickTerrain.solid_at(pk.x * 2, top, pk.z * 2) == BrickTerrain.MAT_DIRT)
 	# Trouble on (the world menu's switch, MineWorld.set_farm_trouble), three
-	# days: the open field gets visits.
+	# days: events come, none of them animals.
 	w.set_farm_trouble(true)
 	check("the Farm trouble switch turns it on", FarmPlant.trouble)
 	var ev0 := 0
@@ -426,6 +400,10 @@ func run(host: Node) -> void:
 		if str(pl.get("last_event", "")) != "":
 			kinds[pl.last_event] = true
 	check("with trouble on, three days bring events (%d: %s)" % [ev1 - ev0, ", ".join(kinds.keys())], ev1 > ev0)
+	var animal_ev := false
+	for k in kinds:
+		animal_ev = animal_ev or str(k).contains("animal")
+	check("and none of them animals (real animals do that now)", not animal_ev)
 	w.set_farm_trouble(false)
 	var ev2 := 0
 	for b in f.store.plots:
@@ -570,6 +548,16 @@ func run(host: Node) -> void:
 	await w._frames(5)
 	f.settle_all()
 	var col0 := f.collected
+	var ripe_in := 0
+	var in_reach := 0
+	for b in f.store.plots:
+		var q: Dictionary = f.store.plots[b]
+		if f._in_reach(cblk, b, MineFarming.COLLECTOR_PLOTS):
+			in_reach += 1
+			if FarmPlant.is_ripe(q) and int(q.get("giant", 0)) == 0:
+				ripe_in += 1
+	print("[farm-gate] collector: %d plots in reach, %d ripe; collectors known %d; chest count %d" % [in_reach, ripe_in,
+			f._collectors.size(), w.chests.count()])
 	for b in f.store.plots.keys():
 		if not f.store.get_plot(b).is_empty():
 			f.refresh(b)
@@ -708,16 +696,6 @@ func _drag(a: Vector3i, b: Vector3i) -> void:
 	await w._frames(2)
 	w.builder.target = {"cell": b, "normal": Vector3i.UP}
 	w.builder.farm_drag_end()
-	await w._frames(2)
-
-
-## Let the fields be worked out (regroup and floods, on the worker).
-func _fields_settle(f: MineFarming) -> void:
-	await w._frames(5)
-	for i in 600:
-		if not f.fields.busy():
-			break
-		await w._frames(1)
 	await w._frames(2)
 
 

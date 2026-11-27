@@ -681,3 +681,35 @@ the top of soil, not its side".
 
 Tests: --gate=farm 76 (+3): the refusal line, crops sky-lit with light per
 instance, the far patches from 150 m.
+
+## 23. Real animals only (2026-11-27, the user's choice)
+
+The mine world now has real animals (Docs/MineCreatures.md: pigs, zombies,
+and fences 2 or 3 bricks high that stop them). They eat crops and trample
+plots through MineFarming (`animal_eat`, `creature_landed`, `crops_near`;
+`animal_eat` leaves giants alone). Asked whether farming's own random animal
+events should stay beside them, the user chose real animals only. So:
+
+- FarmPlant rolls no animal events (EV_ANIMALS's rate is 0; the number is
+  kept so old saves read the same). Birds, weeds and blight stay.
+- FarmFields no longer floods the ground to tell whether animals could reach
+  a field (the walk is the animals' own now): it only groups plots and spots
+  one-crop fields for blight. No worker job; terrain edits no longer redo
+  fields. A plot's old `open` flag is cleared when its field is next worked
+  out; "open to animals" left the look line.
+- Tests pruned with it (they measured what the game no longer has): the
+  gate's "field open / a stone ring closes it / a gap opens it" and "an
+  animals' trample turns a plot to dirt" checks, and the probe's "animals
+  visit open fields". In their place: the probe checks no animal events come,
+  open field or not; the gate checks three days of trouble bring events and
+  none of them animals. (A real creature's trample uses the same `trample`
+  the gate's real-fall check covers.)
+- The guide's trouble line says the world's animals get in where they can
+  walk: fence your fields.
+
+**Found on the way:** the sprinklers, collectors and scarecrows were gathered
+again only when the number of placed things changed. A floating station broken
+and a collector put down kept the count, and the collector was never seen
+(the gate's collector harvested nothing). Now they are gathered once a frame
+(a few chests walked) as well as on any count change (`_ensure_gathered`).
+--gate=farm 73 (76, less the four pruned, plus the one added); farm_probe 140.
