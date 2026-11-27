@@ -16,15 +16,35 @@ static var _names := {}           ## Shader -> PackedStringArray of uniform name
 static var _pairs: Array = []     ## WeakRef of colour materials
 
 
-static func _variant(path: String, define: String) -> Shader:
-	var k := path + "|" + define
+static func _variant(path: String, define: String, cull_back := false) -> Shader:
+	var k := path + "|" + define + ("|cull" if cull_back else "")
 	if not _made.has(k):
 		var code: String = (load(path) as Shader).code
 		var at := code.find("\n") + 1
 		var s := Shader.new()
-		s.code = code.insert(at, "#define %s\n" % define)
+		if define != "":
+			code = code.insert(at, "#define %s\n" % define)
+		if cull_back:
+			# Seen only from above (set_cull_back): the faces turned away
+			# are never needed, half of every piece's sides.
+			code = code.replace("render_mode cull_disabled", "render_mode cull_back")
+		s.code = code
 		_made[k] = s
 	return _made[k]
+
+
+## BACK FACES CULLED on a water material while the eye is well above it (the
+## sea's tiers, WaterSea.follow): the pieces are a top and four sides, and
+## from above the sides turned away cost shading for nothing. Under or near
+## the surface it goes back to both sides (seen from below, the top's back
+## face is the surface). Swaps the shader, the depth pass's too.
+static func set_cull_back(m: ShaderMaterial, path: String, see_through: bool, on: bool) -> void:
+	if m == null:
+		return
+	m.shader = _variant(path, "SEE_THROUGH" if see_through else "", on)
+	var d := m.next_pass as ShaderMaterial
+	if d != null:
+		d.shader = _variant(path, "SEE_DEPTH", on)
 
 
 ## A material of `path`: plain, or see-through with its depth pass.

@@ -4235,6 +4235,34 @@ func _gpu_shadows_off(roots: Array) -> void:
 			(g as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 
+## The sea's tiers drawn with the plain water shader (no depth pass, no
+## blend) for --gate=gpu, and back.
+var _gpu_sea_mats := {}
+
+
+func _gpu_sea_opaque(on: bool) -> void:
+	var sea = water.sea
+	for tier in [sea.near, sea.mid, sea.sheet]:
+		if tier == null:
+			continue
+		var m: ShaderMaterial = tier._mat
+		if on:
+			_gpu_sea_mats[tier] = [m.shader, m.next_pass]
+			m.shader = load("res://shaders/water.gdshader")
+			m.next_pass = null
+		elif _gpu_sea_mats.has(tier):
+			m.shader = _gpu_sea_mats[tier][0]
+			m.next_pass = _gpu_sea_mats[tier][1]
+	if not on:
+		_gpu_sea_mats.clear()
+
+
+func _gpu_sea_cull(on: bool) -> void:
+	for tier in [water.sea.near, water.sea.mid, water.sea.sheet]:
+		if tier != null:
+			WaterShaders.set_cull_back(tier._mat, "res://shaders/water.gdshader", water.sea.see_through, on)
+
+
 func _gpu_back() -> void:
 	for n in _gpu_saved:
 		if not is_instance_valid(n):
@@ -4326,6 +4354,15 @@ func _gpu_toggles() -> Array:
 	t.append(["water (all) hidden", func(): _gpu_hide([water]), _gpu_back])
 	if water.sea != null:
 		t.append(["sea hidden", func(): _gpu_hide([water.sea]), _gpu_back])
+		# The sea's parts (Docs/MineWater.md, the cost split 2026-11-26): its
+		# 1x1 tier, its 2x2 tier, the sheet (their meshes: the sea shows the tiers
+		# itself each frame), and drawn opaque (no depth pass).
+		t.append(["sea 1x1 tier hidden", func(): _gpu_hide(water.sea.near.get_children()), _gpu_back])
+		if water.sea.mid != null:
+			t.append(["sea 2x2 tier hidden", func(): _gpu_hide(water.sea.mid.get_children()), _gpu_back])
+		t.append(["sea sheet hidden", func(): _gpu_hide(water.sea.sheet.get_children()), _gpu_back])
+		t.append(["sea opaque (no see-through)", func(): _gpu_sea_opaque(true), func(): _gpu_sea_opaque(false)])
+		t.append(["sea both sides (cull off)" if water.sea._culled else "sea back faces culled", func(): _gpu_sea_cull(not water.sea._culled), func(): _gpu_sea_cull(water.sea._culled)])
 	t.append(["lava lights hidden", func(): _gpu_hide(water._lights.values()), _gpu_back])
 	var lod0 := vp.mesh_lod_threshold
 	t.append(["mesh LOD threshold -> 4 px", func(): vp.mesh_lod_threshold = 4.0, func(): vp.mesh_lod_threshold = lod0])
