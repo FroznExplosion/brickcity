@@ -223,6 +223,7 @@ struct Shape {
 struct Band {
     double below_m = 0.0;
     std::vector<double> share;
+    std::vector<double> target;   ///< what was asked, by count, summing to 1 (share is aimed and calibrated)
     double heights[3] = { 1.0, 0.0, 0.0 };
 };
 
@@ -263,6 +264,7 @@ struct FitParams {
     /// from their own cells. Off: this fitter on the ground itself (the probe's).
     bool patterns = false;
     int pattern_count = 64;     ///< patterns a band and layer parity (a square of 8 x 8 regions)
+    int library_tries = 4;      ///< seeds a library region tries, the closest to the shares kept
     int force_band = -1;        ///< the library's fits: this band's mix whatever the depth
 };
 
@@ -635,8 +637,10 @@ private:
                 st_seams_ = 0; st_units_ = 0;
                 region_once(rx, rz, L);
                 double dev = 0.0;
+                const Band &bd = p_.bands[(size_t)(p_.force_band >= 0 ? p_.force_band : 0)];
                 for (size_t si = 0; si < p_.shapes.size(); ++si) {
-                    dev += std::fabs((n_ > 0 ? (double)cnt_[si] / n_ : 0.0) - p_.bands[0].share[si]);
+                    const double t = bd.target.empty() ? bd.share[si] : bd.target[si];
+                    dev += std::fabs((n_ > 0 ? (double)cnt_[si] / n_ : 0.0) - t);
                 }
                 const double sc = dev + p_.try_seams * (st_units_ > 0 ? (double)st_seams_ / st_units_ : 0.0);
                 if (sc < best) { best = sc; best_t = t; }
@@ -1242,6 +1246,7 @@ FitParams parse(const Dictionary &d) {
     p.try_seams = (double)d.get("try_seams", 1.0);
     p.patterns = String(d.get("mode", "quota")) == "patterns";
     p.pattern_count = std::max(1, (int)d.get("pattern_count", 64));
+    p.library_tries = std::max(1, (int)d.get("library_tries", 4));
     const double aim = (double)d.get("aim", 0.0);
     // Every band's mix; the shapes are the union, 1x1 always among them.
     struct Raw {
@@ -1293,6 +1298,13 @@ FitParams parse(const Dictionary &d) {
         b.below_m = r.below;
         for (int i = 0; i < 3; ++i) b.heights[i] = r.h[i];
         b.share.assign(p.shapes.size(), 0.0);
+        b.target.assign(p.shapes.size(), 0.0);
+        double tot = 0.0;
+        for (const auto &e : r.mix) tot += e.second;
+        for (const auto &e : r.mix)
+            for (size_t si = 0; si < p.shapes.size(); ++si)
+                if (p.shapes[si].a == e.first.first && p.shapes[si].b == e.first.second && tot > 0.0)
+                    b.target[si] = e.second / tot;
         for (const auto &e : r.mix)
             for (size_t si = 0; si < p.shapes.size(); ++si)
                 if (p.shapes[si].a == e.first.first && p.shapes[si].b == e.first.second)
@@ -1328,6 +1340,8 @@ struct brick::PatternLib {
     std::vector<std::pair<int, int>> shapes;   ///< listed footprints, a <= b, biggest first
     std::vector<Pattern> pats;          ///< [(band * 2 + parity) * n + i]
     double ms = 0.0;                    ///< to build
+    std::unordered_map<std::string, int64_t> count;   ///< band 0's bricks by footprint ("1x2"), whole
+    int64_t bricks0 = 0;
 
     const Pattern &pick(int band, int parity, uint32_t h) const {
         return pats[((size_t)band * 2 + (size_t)parity) * (size_t)n + h % (uint32_t)n];
@@ -1385,8 +1399,14 @@ std::shared_ptr<const brick::PatternLib> build_library(const FitParams &p) {
     q.stagger_layers = false;
     q.cross = 1.0;
     q.cave_stagger = -2.0;
+    q.tries = p.library_tries;   // made once: each region the best of a few seeds
     for (int band = 0; band < nb; ++band) {
         q.force_band = band;
+        // THE CAVES' STAGGER (Docs/TerrainRegions.md 11, 13.1): the patterns
+        // have no caves to be near, so the bands under the surface's take
+        // `cave_stagger` (weaker: more seams over seams, weaker roofs) -- the
+        // user's "per depth" form of the knob.
+        q.stagger = (band > 0 && p.cave_stagger > -1.5) ? p.cave_stagger : p.stagger;
         for (int par = 0; par < 2; ++par) {
             Area a;
             a.ox = 0;
@@ -1419,7 +1439,12 @@ std::shared_ptr<const brick::PatternLib> build_library(const FitParams &p) {
                                     if (it == local.end()) {
                                         li = (uint16_t)P.bricks.size();
                                         local.emplace(id, li);
-                                        P.bricks.push_back(lib_pack(f.bricks[(size_t)id], rx, rz, par));
+                                        const Brick &fb = f.bricks[(size_t)id];
+                                        P.bricks.push_back(lib_pack(fb, rx, rz, par));
+                                        if (band == 0) {
+                                            ++lib->count[fkey(fb.sx, fb.sz)];
+                                            ++lib->bricks0;
+                                        }
                                     } else {
                                         li = it->second;
                                     }
@@ -1665,6 +1690,10 @@ namespace {
 /// fitted, each shape's share times (target / got)^0.8, three times. A pure
 /// function of the world and the settings: the same bricks every session.
 /// Returns the ms it took (0: not asked, or no generator).
+/// Bump when the fill, the library or the calibration changes what a
+/// calibration gives: a kept one of another version is made again.
+constexpr int CALIBRATION_VERSION = 1;
+
 double calibrate(FitParams &p, const Dictionary &d, Dictionary *report = nullptr) {
     if (!(bool)d.get("calibrate", false)) return 0.0;
     const uint64_t t0 = godot::Time::get_singleton()->get_ticks_usec();
@@ -1723,8 +1752,32 @@ double calibrate(FitParams &p, const Dictionary &d, Dictionary *report = nullptr
     if (report) {
         (*report)["calibration_ms"] = ms;
         (*report)["calibration_error"] = steps;   // sum of |got - target| before each step
+        // What it did, to be kept with the world and applied next time
+        // (apply_calibration): each shape's share scaling.
+        Dictionary scales;
+        for (size_t si = 0; si < p.shapes.size(); ++si) scales[String(fkey(p.shapes[si].a, p.shapes[si].b).c_str())] = mult[si];
+        (*report)["scales"] = scales;
+        (*report)["version"] = CALIBRATION_VERSION;
     }
     return ms;
+}
+
+/// A calibration kept with the world (the settings' "calibrated": what
+/// get_calibration gave, {scales, version}) applied instead of made again:
+/// the same shares, none of the ~1.5 s. False when there is none, or it was
+/// made by another version of the fill (CALIBRATION_VERSION).
+bool apply_calibration(FitParams &p, const Dictionary &d) {
+    if (!(bool)d.get("calibrate", false)) return false;
+    const Dictionary kept = d.get("calibrated", Dictionary());
+    if (kept.is_empty() || (int)kept.get("version", -1) != CALIBRATION_VERSION) return false;
+    const Dictionary scales = kept.get("scales", Dictionary());
+    if (scales.is_empty()) return false;
+    for (size_t si = 0; si < p.shapes.size(); ++si) {
+        const double m = (double)scales.get(String(fkey(p.shapes[si].a, p.shapes[si].b).c_str()), 1.0);
+        for (Band &b : p.bands) b.share[si] *= m;
+        p.shapes[si].share *= m;
+    }
+    return true;
 }
 
 } // namespace
@@ -1756,7 +1809,13 @@ std::shared_ptr<const FitParams> world_params() {
 /// The settings calibrated (when asked) and the library made from them.
 void make_world_library(FitParams &p) {
     Dictionary rep;
-    calibrate(p, g_world->settings, &rep);
+    if (apply_calibration(p, g_world->settings)) {
+        rep = Dictionary(g_world->settings["calibrated"]).duplicate(true);
+        rep["calibration_ms"] = 0.0;
+        rep["kept"] = true;
+    } else {
+        calibrate(p, g_world->settings, &rep);
+    }
     auto lib = build_library(p);
     rep["library_ms"] = lib->ms;
     rep["patterns"] = (int)lib->pats.size();
@@ -2024,6 +2083,11 @@ Array TerrainFit::run(const Array &areas, const Array &variants) {
         r["name"] = String(p.name.c_str());
         r["calibration"] = cal;
         r["library_ms"] = lib ? lib->ms : 0.0;
+        if (lib) {
+            Dictionary ls;
+            for (const auto &e : lib->count) ls[String(e.first.c_str())] = (double)e.second / (double)std::max<int64_t>(1, lib->bricks0);
+            r["library_share"] = ls;
+        }
         r["bricks"] = s.bricks;
         r["visible"] = s.vis;
         r["loose"] = s.loose;

@@ -440,10 +440,14 @@ func generate(s: Dictionary) -> void:
 	# The ground's brick fill (Docs/TerrainRegions.md 11). Stage B: held, not
 	# drawn yet; region_fit_probe reads the same settings.
 	var fill: Dictionary = settings.get("bricks", Presets.DEFAULT_BRICKS)
-	TerrainFit.configure(fill)
-	# The game's ground bricks from the fit (Docs/TerrainRegions.md 12): the
-	# preset's "fitted", or --fitted for a gate. Off: the old pattern.
+	# The fill's calibration kept with the world (Docs/TerrainRegions.md 13.2):
+	# ~1.5 s the first time a world is made, none after.
+	var kept := _load_brick_calibration(fill)
+	TerrainFit.configure(fill if kept.is_empty() else fill.merged({"calibrated": kept}, true))
+	# The game's ground bricks from the pattern library (Docs/TerrainRegions.md
+	# 13): the preset's "fitted", or --fitted for a gate. Off: the old pattern.
 	TerrainFit.set_enabled(bool(fill.get("fitted", false)) or "--fitted" in OS.get_cmdline_user_args())
+	_save_brick_calibration(fill)
 	# Before anything bakes: the tiles are made from the field WITH them.
 	var loaded := _load_edits()
 	_load_pieces()
@@ -2033,6 +2037,40 @@ func _save_dir() -> String:
 func save_path() -> String:
 	var key := "%s|%d" % [JSON.stringify(settings.get("gen", {}), "", true), int(settings.get("seed", 0))]
 	return _save_dir() + "%d_%08x.edits" % [int(settings.get("seed", 0)), key.hash() & 0xffffffff]
+
+
+## The brick fill's calibration file: per seed, generator AND fill settings
+## (a calibration means nothing for other ground or other shares).
+func _brick_calibration_path(fill: Dictionary) -> String:
+	var f := fill.duplicate(true)
+	f.erase("fitted")
+	f.erase("calibrated")
+	var key := "%s|%d|%s" % [JSON.stringify(settings.get("gen", {}), "", true), int(settings.get("seed", 0)),
+			JSON.stringify(f, "", true)]
+	return _save_dir() + "%d_%08x.bricks" % [int(settings.get("seed", 0)), key.hash() & 0xffffffff]
+
+
+func _load_brick_calibration(fill: Dictionary) -> Dictionary:
+	var path := _brick_calibration_path(fill)
+	if not FileAccess.file_exists(path):
+		return {}
+	var d: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
+	return d if d is Dictionary else {}
+
+
+## A calibration just made (not one applied from the file) written beside the
+## world's edits; TerrainFit says which (its "kept").
+func _save_brick_calibration(fill: Dictionary) -> void:
+	var cal: Dictionary = TerrainFit.get_calibration()
+	if cal.has("library_ms"):
+		print("[mine] ground bricks: calibration %s (%.0f ms), library %.0f ms" % [
+				"kept" if bool(cal.get("kept", false)) else "made", float(cal.get("calibration_ms", 0.0)), float(cal.library_ms)])
+	if not cal.has("scales") or bool(cal.get("kept", false)):
+		return
+	DirAccess.make_dir_recursive_absolute(_save_dir())
+	var f := FileAccess.open(_brick_calibration_path(fill), FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify({"scales": cal.scales, "version": cal.version}))
 
 
 func _load_edits() -> int:

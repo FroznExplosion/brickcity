@@ -90,7 +90,11 @@ func _initialize() -> void:
 		_with(chosen, {"name": "CHOSEN: mixed, aim +30%"}),
 		_with(chosen, {"name": "PATTERNS: library (the game's)", "mode": "patterns"}),
 		_with(chosen, {"name": "patterns, not calibrated", "mode": "patterns", "calibrate": false}),
-		_with(chosen, {"name": "patterns, 6 calibration steps", "mode": "patterns", "calibrate_steps": 6}),
+		_with(chosen, {"name": "patterns, library tries 1", "mode": "patterns", "library_tries": 1}),
+		_with(chosen, {"name": "patterns + deep band from 3 m", "mode": "patterns",
+				"bands": [_with(Presets.DEFAULT_BRICKS.bands[0], {"below_m": DEEP_M})]}),
+		_with(chosen, {"name": "patterns + deep, caves strong", "mode": "patterns", "cave_stagger": 0.0,
+				"bands": [_with(Presets.DEFAULT_BRICKS.bands[0], {"below_m": DEEP_M})]}),
 		_with(chosen, {"name": "mixed, aim +60%", "aim": 0.6}),
 		_with(chosen, {"name": "chosen, caves strong too", "cave_stagger": 0.0}),
 		_with(chosen, {"name": "chosen + deep band (from %.0f m)" % DEEP_M,
@@ -133,6 +137,11 @@ func _initialize() -> void:
 				off += 1
 			line += "  %s %.0f->%.0f/%.0f%s" % [k, 100 * t, 100 * a, 100 * vis, "!" if bad else ""]
 		print(line + "   (target->all/visible %%, ! = off by over 5; %d off)" % off)
+		if r.has("library_share"):
+			var ll := "[fit] library %-29s" % str(r.name).left(29)
+			for k in v.shapes:
+				ll += "  %s %.0f" % [k, 100.0 * float((r.library_share as Dictionary).get(k, 0.0))]
+			print(ll + "   (the patterns themselves, solid ground)")
 	_check_lookup(areas)
 	DirAccess.make_dir_recursive_absolute(UserPaths.DEV + "region_fit")
 	for i in res.size():
@@ -220,6 +229,24 @@ func _check_lookup(areas: Array) -> void:
 			if wrong > 0 or checked == 0:
 				failures += 1
 	print("[fit] library: %s" % TerrainFit.get_calibration())
+	# A calibration kept with the world (mine_world.gd saves it beside the
+	# edits) gives the same bricks with no calibration time.
+	var fresh: Dictionary = TerrainFit.get_calibration()
+	var a0: Vector2i = areas[0]
+	var before := []
+	for i in 4000:
+		before.append(TerrainFit.brick_at(a0.x * 32 + (i % 40), BrickTerrain.height_at(a0.x * 32, a0.y * 32) - 6 - (i / 1600) * 30, a0.y * 32 + (i / 40) % 40))
+	TerrainFit.configure(Presets.complete_bricks({}).merged({"calibrated": {"scales": fresh.scales, "version": fresh.version}}, true))
+	var kept: Dictionary = TerrainFit.get_calibration()
+	var same := 0
+	for i in 4000:
+		if TerrainFit.brick_at(a0.x * 32 + (i % 40), BrickTerrain.height_at(a0.x * 32, a0.y * 32) - 6 - (i / 1600) * 30, a0.y * 32 + (i / 40) % 40) == before[i]:
+			same += 1
+	var ok := bool(kept.get("kept", false)) and float(kept.calibration_ms) == 0.0 and same == 4000
+	print("[fit] %s  a kept calibration: %d of 4000 bricks the same, calibration %.0f ms (fresh %.0f), library %.0f ms" % [
+			"ok  " if ok else "FAIL", same, float(kept.calibration_ms), float(fresh.calibration_ms), float(kept.library_ms)])
+	if not ok:
+		failures += 1
 	TerrainFit.set_enabled(false)
 	# The calibration's cells made straight from the generator equal the
 	# kept ones (tile and deep sections, built first so they are kept).
