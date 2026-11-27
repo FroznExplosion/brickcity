@@ -1,30 +1,30 @@
 extends RefCounted
-## -- --gate=wiring, the gaps section (Docs/MineWiring.md 20-26): the fixes
+## -- --gate=wiring, the gaps section (Docs/MineWiring.md 21-27): the fixes
 ## to what stages 1-4 left, in the real mine world. Run by wiring_gate.gd
 ## before the traps kit; `-- --gate=wiring --gaps` runs it alone.
 ##
 ## What each check is for:
 ##   creatures  a zombie standing on a pressure tile lights its lamp: enemies
-##              spring traps, not only the player (20).
+##              spring traps, not only the player (21).
 ##   cave light a wire and a lamp in a closed room (stone walls, a placed
 ##              brick for its roof) take its dark (sky
-##              level 2 or less), a wire outside it the open sky's 15 (21).
+##              level 2 or less), a wire outside it the open sky's 15 (22).
 ##   lamps      12 lamps lit by one lever: only the cap's worth (Options >
 ##              Video > Lamp Lights x 2; 8 at the test window's defaults)
-##              hang a real light, on the ones nearest the camera (22).
+##              hang a real light, on the ones nearest the camera (23).
 ##   gate tiles a bridge of gate tiles off one standing at a trench's edge:
-##              digging out that one's ground drops the whole bridge (23).
+##              digging out that one's ground drops the whole bridge (24).
 ##   sequencer  the builder's RMB on a sequencer (a wire in the hand) opens
 ##              its program editor, the builder idle meanwhile; a program typed
 ##              in runs out of its front in the real tick; a real Escape closes
 ##              the panel and not into the pause menu; the program is kept
-##              after the world is generated again (24).
+##              after the world is generated again (25).
 ##   trapdoor   on foot, standing on a trapdoor over a pit: the lever opens
-##              it and the player falls into the pit (25).
+##              it and the player falls into the pit (26).
 ##   pistons    a real push's stand-in draws the bevelled box with the mine
 ##              world's (sky-lit) brick material; a collapse piece fallen in
 ##              front of a piston is shoved by its head going out: woken and
-##              moved (26).
+##              moved (27).
 
 var g = null   # wiring_gate.gd: check(), w (the mine world)
 var w: Node = null
@@ -73,7 +73,7 @@ func _patch() -> void:
 	y = top + 1
 
 
-# --- 1. creatures press tiles (Docs/MineWiring.md 20)
+# --- 1. creatures press tiles (Docs/MineWiring.md 21)
 func _creatures() -> void:
 	var tile := Vector3i(x0 + 4, y, z0 + 2)
 	var lamp := Vector3i(x0 + 5, y, z0 + 2)
@@ -100,7 +100,7 @@ func _creatures() -> void:
 	wr.remove_device(lamp, false)
 
 
-# --- 2. cave light (Docs/MineWiring.md 21)
+# --- 2. cave light (Docs/MineWiring.md 22)
 func _cave_light() -> void:
 	if w.sky_lit == null:
 		g.check("gaps: sky light is on in the gate world", false)
@@ -152,7 +152,7 @@ func _cave_light() -> void:
 	await w._frames(4)
 
 
-# --- 3. lamp lights (Docs/MineWiring.md 22)
+# --- 3. lamp lights (Docs/MineWiring.md 23)
 func _lamps() -> void:
 	var lz := z0 + 10
 	var lamps: Array[Vector3i] = []
@@ -191,7 +191,7 @@ func _lamps() -> void:
 			lamps.all(func(c): return not wr.lamp_light_of.has(c)) and wr.lamp_light_of.size() <= cap)
 
 
-# --- 4. gate tiles fall (Docs/MineWiring.md 23)
+# --- 4. gate tiles fall (Docs/MineWiring.md 24)
 func _gatetiles() -> void:
 	var tz := z0 + 6
 	var tx := x0 + 2
@@ -212,7 +212,7 @@ func _gatetiles() -> void:
 	g.check("gaps: its ground dug out: the whole bridge falls", row.all(func(c): return not wr.devices.has(c)))
 
 
-# --- 6. trapdoor drops a player on foot (Docs/MineWiring.md 25)
+# --- 6. trapdoor drops a player on foot (Docs/MineWiring.md 26)
 func _trapdoor() -> void:
 	var px := x0 + 16
 	var pz := z0 + 4
@@ -240,7 +240,7 @@ func _trapdoor() -> void:
 	wr.remove_device(lev, false)
 
 
-# --- 5. the sequencer's program editor (Docs/MineWiring.md 24)
+# --- 5. the sequencer's program editor (Docs/MineWiring.md 25)
 func _sequencer() -> void:
 	var sz := z0 + 13
 	var lev := Vector3i(x0 + 1, y, sz)
@@ -285,7 +285,7 @@ func _sequencer() -> void:
 	wr.remove_device(lamp, false)
 
 
-# --- 7. the piston's stand-in look, and fallen pieces shoved (Docs/MineWiring.md 26)
+# --- 7. the piston's stand-in look, and fallen pieces shoved (Docs/MineWiring.md 27)
 func _pistons() -> void:
 	var px := x0 + 6
 	var pz := z0 + 14

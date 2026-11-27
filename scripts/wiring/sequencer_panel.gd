@@ -1,6 +1,6 @@
 class_name SequencerPanel
 extends PanelContainer
-## The SEQUENCER's program editor (Docs/MineWiring.md 24): opened by RMB on a
+## The SEQUENCER's program editor (Docs/MineWiring.md 25): opened by RMB on a
 ## sequencer (whatever is in the hand but the wrench, whose RMB turns it).
 ## A row of steps -- ticks on, off, on, ... (a tick is 0.1 s) -- each a number
 ## box; + and - add or take the last step; the presets set one of PROGRAMS.

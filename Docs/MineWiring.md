@@ -524,7 +524,7 @@ items in `content/base/data/items/wiring.json`.
   (`MineBuilder.rmb_repeat`): stage 1 turned a lever every 0.22 s while the
   button was held.
 - **Bodies** are the player's feet (`player_feet_local`); AI pawns do not
-  press tiles or trip strings yet (creatures do since section 20).
+  press tiles or trip strings yet (creatures do since section 21).
 - Saved: each device's facing and setting beside its item and state.
 
 Tests: `wiring_probe` 82 ok (stage 2: the button's second, the tile on and
@@ -583,12 +583,12 @@ trapdoor over a dug pit opens from a lever; all back after a reload.
   each tick) -- so a lever at one end opens a whole wall, or drops a whole
   bridge. Held by ground under it or by another gate tile under or beside it
   (a bridge hangs off one that stands; a gate tile does not yet fall when
-  the one holding it goes -- it does since section 23).
+  the one holding it goes -- it does since section 24).
 - **Sequencer** (`sequencer`, a facing gate, Create's sequenced gearshift):
   its back turning on starts a program of steps out of its front -- ticks
   on, off, on, ... -- and a turn-on while it runs is ignored. RMB steps
   through `PROGRAMS` ([5,5,5], [10], [2,2,2,2,2], [20,10,20], seven 3s,
-  [10,30,10]); the wrench shows the program. A program editor panel: section 24.
+  [10,30,10]); the wrench shows the program. A program editor panel: section 25.
 - **Number display** (`number_display`): a 2-stud brick facing a way with
   the level (0-15) of what touches it printed on its front (a Label3D). It
   drives nothing.
@@ -844,7 +844,7 @@ files). Wolves and boars are not called yet.
 
 **Not yet.** Placer and breaker bricks (5b); a dispenser that aims; primed
 grenades from a dropper (the grenade chute of section 8 drops them unprimed
-for now: use a dispenser); creatures press tiles and trip strings since section 20 (the mine world has
+for now: use a dispenser); creatures press tiles and trip strings since section 21 (the mine world has
 no AI pawns); the alarm calls zombies only.
 
 Tests: `tools/probes/wiring_traps_probe.gd` (headless, its own ground) -- 49
@@ -863,7 +863,7 @@ again, an observer -> pulse -> alarm calling a zombie that walks to it, all
 back after generating again. Pictures `user://dev/wiring_traps.png`,
 `wiring_bridge.png`, `wiring_bridge_fell.png`.
 
-## 20. Creatures press tiles (2026-11-27)
+## 21. Creatures press tiles (2026-11-27)
 
 Pressure tiles and trip strings read every body's feet (`bodies_fn`); in the
 mine world that was only the player's. Now `_host_bodies` adds every living
@@ -879,7 +879,7 @@ one and a held one do not, a far one counts at `last_feet`. `--gate=wiring`
 (gaps): a real zombie spawned on a pressure tile lights its lamp; killed, the
 tile lets go.
 
-## 21. Sky light on wires and devices (2026-11-27)
+## 22. Sky light on wires and devices (2026-11-27)
 
 Section 13's "not yet": wires and devices were lit as outdoors, so in a dark
 cave they glowed against black walls. They now take the sky light of their
@@ -922,7 +922,7 @@ roof course of loose stone over it fell to the collapse (a course is held
 through studs, not by its sides), and a pocket dug in the ground filled with
 the gravel over it.
 
-## 22. Lamp lights: the nearest few, the rest glow (2026-11-27)
+## 23. Lamp lights: the nearest few, the rest glow (2026-11-27)
 
 Each lamp had its own OmniLight3D: fine for tens, not hundreds (section 13).
 Now no lamp owns a light. The wiring keeps a pool of OmniLight3Ds (4.5 m, no
@@ -947,7 +947,7 @@ no lamp node holds a light. `--gate=wiring`: 12 lamps lit by a lever, as many
 lights as the cap (8 at the test window's default settings), on the 8 nearest
 the camera; the lamps taken, none.
 
-## 23. Gate tiles fall when nothing holds them (2026-11-27)
+## 24. Gate tiles fall when nothing holds them (2026-11-27)
 
 Section 16 left a bridge of gate tiles hanging after the one holding it went.
 Now `drop_unheld_gatetiles` floods support over every gate tile: held are
@@ -967,7 +967,7 @@ standing one's ground drops all five in one `check`. `--gate=wiring`: a
 5-tile bridge over a dug trench falls whole when the ground under its
 standing end is dug out.
 
-## 24. The sequencer's program editor (2026-11-27)
+## 25. The sequencer's program editor (2026-11-27)
 
 RMB on a sequencer now opens a panel (`scripts/wiring/sequencer_panel.gd`,
 `SequencerPanel`) instead of stepping to the next preset -- with anything in
@@ -1000,7 +1000,7 @@ opens the panel with the mouse free and the builder held; a typed program
 3, 4, 3 runs out of its front in the real tick; a real Escape key closes it
 and does not pause; after generating the world again the program is kept.
 
-## 25. Trapdoor: a player on it falls (2026-11-27)
+## 26. Trapdoor: a player on it falls (2026-11-27)
 
 A gate check only: section 15 tested that a trapdoor opens, not that it
 drops anyone. `--gate=wiring` (gaps) digs a 2 x 2 pit 3 courses deep, lays a
@@ -1010,7 +1010,7 @@ opens and the player's feet end up below the trapdoor's plate, in the pit.
 The pawn (radius 0.26 m) fits past the hanging panel (0.56 m left of the
 0.7 m pit).
 
-## 26. Pistons: the stand-in as bricks, fallen pieces shoved (2026-11-27)
+## 27. Pistons: the stand-in as bricks, fallen pieces shoved (2026-11-27)
 
 Section 18's two "not yet"s that were small:
 
@@ -1038,7 +1038,7 @@ Tests: `--gate=wiring` (gaps): a real push's stand-in is the bevelled box
 with the brick material; a 2 x 2 brick dropped from 5 courses lands as a
 piece in front of a piston, and the head going out wakes and moves it.
 
-**All seven (20-26), 2026-11-27:** `wiring_probe` 177 ok, `wiring_traps_probe`
+**All seven (21-27), 2026-11-27:** `wiring_probe` 177 ok, `wiring_traps_probe`
 49 ok, `inventory_probe` 164 ok, `-- --gate=wiring` 129 ok (its gaps section,
 `scripts/wiring/wiring_gaps_gate.gd`, runs before the traps kit; `--gaps`
 alone). The gaps section starts flying (the save section before it ends on

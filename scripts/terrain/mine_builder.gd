@@ -885,7 +885,7 @@ func place_target() -> bool:
 		var dev: Vector3i = target.device
 		var used := false
 		if hand_kind() != "wrench" and host.wiring.devices[dev].item == &"sequencer" 				and host.has_method("open_sequencer"):
-			# Its program editor (Docs/MineWiring.md 24); the wrench still turns it.
+			# Its program editor (Docs/MineWiring.md 25); the wrench still turns it.
 			host.open_sequencer(dev)
 			target = {}
 			return true

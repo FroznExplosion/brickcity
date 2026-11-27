@@ -46,26 +46,26 @@ extends SceneTree
 ##   sequencer program [5, 5, 5]: 5 on, 5 off, 5 on, then off though its back
 ##             stays on; RMB picks the next program; it is saved.
 ##   display   shows the level beside it: 15 with the lever on, 0 off.
-## The gaps after stage 4 (Docs/MineWiring.md 20-26):
+## The gaps after stage 4 (Docs/MineWiring.md 21-27):
 ##   creatures a creature's feet press a tile and cross a string as the
 ##             player's do; a dead or held one does not; a far one counts
-##             where it was last (20).
+##             where it was last (21).
 ##   gate tile a bridge of gate tiles hanging off one that stands falls
 ##             whole when that one's ground goes (check); taking the tile
 ##             that joins it drops the rest the next tick, not the one on
-##             ground; a stack on a hanging tile goes with it (23).
+##             ground; a stack on a hanging tile goes with it (24).
 ##   cave light wires laid with a light source take its levels per cell
 ##             (dark under a roof, 15 in the open), drawn by the SKY_LIT wire
 ##             shader with per-instance data; an edit asks the cells near it
 ##             again; a device's glow and alpha change on a sky-lit copy as on
-##             its StandardMaterial3D (21).
+##             its StandardMaterial3D (22).
 ##   lamps     of 12 lit lamps only the 4 nearest the eye (the cap) hang a
 ##             real light, from a pool; the eye moved, the nearest change; a
 ##             lamp gone dark gives its light up; Off (0) hangs none; no lamp
-##             has a light of its own (22).
+##             has a light of its own (23).
 ##   sequencer a program of its own (2 on, 3 off, 1 on) runs exactly so; it
 ##             is saved; RMB's preset step drops it; the panel shows its steps,
-##             adds and takes one, sets a preset, and closes (24).
+##             adds and takes one, sets a preset, and closes (25).
 ## Stage 4 (Docs/MineWiring.md 18), on placed bricks of the probe's own:
 ##   piston    facing up, a 2x2 placed brick rises a course and is still one
 ##             brick; a plain piston leaves it, a sticky one pulls it back

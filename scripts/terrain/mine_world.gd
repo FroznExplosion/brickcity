@@ -1823,7 +1823,7 @@ func inventory_open() -> bool:
 	return _inv_screen != null or (seq_panel != null and is_instance_valid(seq_panel))
 
 
-## RMB on a sequencer: its program editor (Docs/MineWiring.md 24).
+## RMB on a sequencer: its program editor (Docs/MineWiring.md 25).
 var seq_panel: SequencerPanel = null
 
 

@@ -19,12 +19,12 @@ extends Node3D
 ##   lever          RMB turns it; on: 15 to every side.
 ##   button         RMB: 15 to every side for a second.
 ##   pressure tile  a plate (1 plate tall): 15 while someone stands on it --
-##                  the player or a creature (section 20).
+##                  the player or a creature (section 21).
 ##   trip hook      two facing each other in a line, up to 12 studs apart,
 ##                  nothing solid between, string between them: both give 15
 ##                  while someone crosses the string.
 ##   lamp           lit while anything beside it is above 0; the lit ones
-##                  nearest the eye hang a real light, the rest glow (22).
+##                  nearest the eye hang a real light, the rest glow (23).
 ##   gates          FACE a way (placed facing away from the player; the
 ##                  wrench turns them): inputs at the back, left and right,
 ##                  output only at the front. AND (every side with something
@@ -45,10 +45,10 @@ extends Node3D
 ##                  powered -- Terraria's actuator. Gate tiles touching (side
 ##                  by side, stacked) are one group and open together; one
 ##                  stands on ground or on/beside another (stage 3b, 16),
-##                  and falls when nothing holds it up any more (23).
+##                  and falls when nothing holds it up any more (24).
 ##   sequencer      faces a way: its back turning on runs a program of
 ##                  on/off steps out of its front (RMB opens its program
-##                  editor, SequencerPanel, 24) -- Create's sequenced gearshift.
+##                  editor, SequencerPanel, 25) -- Create's sequenced gearshift.
 ##   number display a 2-stud brick showing the level beside it, 0-15.
 ##   piston         faces a way or UP: power rising pushes the placed brick in
 ##                  front (and every placed brick clutched on its top, and
@@ -69,7 +69,7 @@ extends Node3D
 ## devices; a device's inputs and output), RMB turns a facing device, shift +
 ## RMB takes a device back. Create's goggles and wrench (Docs/MineWiring.md 12).
 ##
-## Wires and devices take the sky light of their cells (dark in caves, 21).
+## Wires and devices take the sky light of their cells (dark in caves, 22).
 ##
 ## Broken by LMB, a shot, a blast, or the ground going (`check`). Saved with
 ## the world's items (`to_save` / `restore`). A child of the mine world with
@@ -93,7 +93,7 @@ const PULSE_LENGTHS := [2, 5, 10, 20]
 ## The sequencer's programs: ticks on, off, on, ... (RMB steps through them).
 const PROGRAMS := [[5, 5, 5], [10], [2, 2, 2, 2, 2], [20, 10, 20], [3, 3, 3, 3, 3, 3, 3], [10, 30, 10]]
 ## A program of the player's own (the sequencer panel, Docs/MineWiring.md
-## 24): at most this many steps, each 1..STEP_MAX ticks.
+## 25): at most this many steps, each 1..STEP_MAX ticks.
 const PROGRAM_STEPS := 16
 const STEP_MAX := 100
 ## What each device is. plates: its height; omni: drives every side; facing:
@@ -211,7 +211,7 @@ var _xray_tiles: MultiMeshInstance3D = null
 var _xray_cable: MultiMeshInstance3D = null
 var _readout: Label = null
 
-## SKY LIGHT in caves (Docs/MineWiring.md 21). `light_fn(point)` gives the sky
+## SKY LIGHT in caves (Docs/MineWiring.md 22). `light_fn(point)` gives the sky
 ## and lava block levels (0..15) at a point (terrain frame): the mine world's
 ## MineSkyLit.levels_at by default, when it has one (sky light on); a probe
 ## gives its own (`use_sky_light`). Unset: everything lit as outdoors.
@@ -230,7 +230,7 @@ var lights_asked := 0
 const LIGHT_AGAIN := 0.6
 var _light_again: Array = []   # [time left, lo, hi]
 
-## LAMP LIGHTS (Docs/MineWiring.md 22): only the lit lamps nearest the eye
+## LAMP LIGHTS (Docs/MineWiring.md 23): only the lit lamps nearest the eye
 ## hang a real light (an OmniLight3D from a pool, 4.5 m, no shadow); the rest
 ## glow. How many: `lamp_lights`, or -1 for Options > Video > Lamp Lights
 ## (BrickGridLight.near_max: Off 0, 2, 4, 8) times two -- 8 by default.
@@ -589,7 +589,7 @@ func _poke(lo: Vector3i, hi: Vector3i) -> void:
 
 ## The player's feet, and every living creature's (MineMobs: zombies, pigs,
 ## the rest), so a zombie walking into a trap springs it (Docs/MineWiring.md
-## 20). The mine world has no AI pawns of its own (section 19). A creature far
+## 21). The mine world has no AI pawns of its own (section 19). A creature far
 ## off (its pawn asleep) counts where it was last.
 func _host_bodies() -> Array:
 	var out := []
@@ -902,7 +902,7 @@ func check(lo := Vector3i(-WHOLE, -WHOLE, -WHOLE), hi := Vector3i(WHOLE, WHOLE, 
 
 
 ## Gate tiles that nothing holds up any more break (dropping their item in
-## survival; Docs/MineWiring.md 23). Held: standing on ground, or joined --
+## survival; Docs/MineWiring.md 24). Held: standing on ground, or joined --
 ## on, under or beside -- to a gate tile that is held, through any chain of
 ## them. A flood from the grounded ones over the whole set: a bridge hanging
 ## off one that stands falls when that one's ground goes, or when the tile
@@ -1907,7 +1907,7 @@ func _move(g: Dictionary, step: Vector3i) -> void:
 	_edited(res)
 
 
-## PISTONS SHOVE FALLEN PIECES (Docs/MineWiring.md 26): a collapse piece
+## PISTONS SHOVE FALLEN PIECES (Docs/MineWiring.md 27): a collapse piece
 ## (PlanetPieces, a physics body) in the cells a push moves into -- or
 ## touching them, or resting on them -- is woken if it had settled and given
 ## an impulse of the push's speed (a step in MOVE_TIME), sideways with a
@@ -2291,7 +2291,7 @@ func _standin(bricks: Array) -> Node3D:
 	cyl.bottom_radius = _stud * 0.3
 	cyl.height = stud_h
 	cyl.radial_segments = 12
-	# The bricks as the bevelled bricks they are (Docs/MineWiring.md 26): the
+	# The bricks as the bevelled bricks they are (Docs/MineWiring.md 27): the
 	# collapse pieces' look, a box a brick (brick_boxed.gdshaderinc) with the
 	# mine world's brick material, its sky-lit copy when sky light is on.
 	var brick_mat: ShaderMaterial = standin_brick_material()
@@ -2855,7 +2855,7 @@ func place_lamp_lights() -> void:
 
 ## A device's meshes drawn with MineSkyLit's sky-lit copies and tracked by
 ## it, so a device in a dark cave is as dark as the walls (Docs/MineWiring.md
-## 21). A mesh whose glow or see-through changes (set_glow, set_alpha) gets a
+## 22). A mesh whose glow or see-through changes (set_glow, set_alpha) gets a
 ## copy of its own; the rest share one a look.
 func _light_device(root: Node3D) -> void:
 	if _sky == null:
