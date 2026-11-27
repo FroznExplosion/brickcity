@@ -150,6 +150,13 @@ func apply_to_layer_type(amount: float, layer_type: StringName, element_id: Stri
 ## the damage sources that remembered, which is exactly as strong as not having the rule.
 var damage_filter: Callable
 
+## Optional. `func(packet: DamagePacket) -> float`: what share of a hit gets
+## through, asked by DamageSystem before the hit lands -- 0 blocks it whole
+## (nothing lands, no status). Knows where the hit came from (the packet's
+## source and point), unlike `damage_filter`: a raised shield (the mine
+## world's off-hand, MineHands; Docs/Inventory.md round four).
+var guard: Callable
+
 ## Nothing lands while this is set: the developer's invincible player (DevMode).
 ## Here, in the one funnel, so no damage path gets past it.
 var invulnerable := false

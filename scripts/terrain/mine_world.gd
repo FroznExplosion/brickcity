@@ -101,6 +101,8 @@ var buildings_far: MineBuildingsFar = null
 var drops: DroppedItems = null
 ## Farming (Docs/MineFarming.md): tilled plots, crops on the world clock.
 var farming: MineFarming = null
+## Creatures: a zombie, pigs, fences' reason to be (Docs/MineCreatures.md).
+var mobs: MineMobs = null
 ## THE WORLD CLOCK (Docs/MineFarming.md 4): seconds played in this world,
 ## saved with it (the world file's "time"). The sky's hour is its day part;
 ## crops grow by it. Runs only while the world is open.
@@ -285,6 +287,9 @@ func _ready() -> void:
 	farming.name = "Farming"
 	add_child(farming)
 	farming.setup(self)
+	mobs = MineMobs.new()
+	add_child(mobs)
+	mobs.setup(self)
 	_build_item_icons()
 	debris = Debris.new()
 	debris.name = "Debris"
@@ -326,6 +331,10 @@ func _ready() -> void:
 		elif "--gate=farm" in OS.get_cmdline_user_args():
 			# Farming (Docs/MineFarming.md): scripts/farming/farm_gate.gd.
 			_farm_gate = preload("res://scripts/farming/farm_gate.gd").new()
+			_farm_gate.run(self)
+		elif "--gate=mobs" in OS.get_cmdline_user_args():
+			# Creatures (Docs/MineCreatures.md): scripts/mobs/mobs_gate.gd.
+			_farm_gate = preload("res://scripts/mobs/mobs_gate.gd").new()
 			_farm_gate.run(self)
 		elif "--gate=wiring" in OS.get_cmdline_user_args():
 			# Wiring (Docs/MineWiring.md): scripts/wiring/wiring_gate.gd.
@@ -409,6 +418,8 @@ func generate(s: Dictionary) -> void:
 		save_edits(true)
 	settings = s.duplicate(true)
 	_teardown()
+	if mobs != null:
+		mobs.reset()
 	_pending_tiles = Rect2i()
 	_reanchors = 0
 	_last_reanchor_ms = 0.0
@@ -1047,6 +1058,8 @@ func _wait_breaks() -> void:
 func terrain_edited(res: Dictionary) -> void:
 	if farming != null:
 		farming.terrain_changed()     # fields: a wall built or broken
+	if mobs != null:
+		mobs.terrain_edited(res)      # the creatures' nav forgets that box
 	water.terrain_changed(res)
 	# A stamped building undermined on one side tips (Docs/TerrainBuildings.md 4b).
 	MineBuildings.after_edit(self, res)
@@ -1355,6 +1368,8 @@ func _process(delta: float) -> void:
 	_tend_towns(delta, eye)
 	if farming != null:
 		farming.step(delta, eye)
+	if mobs != null:
+		mobs.step(delta)
 	_autosave(delta)
 	_hud_in -= delta
 	if _hud_in <= 0.0:
@@ -2441,7 +2456,7 @@ func _build_hud() -> void:
 func _update_farm_label() -> void:
 	if _farm_label == null or farming == null or builder == null:
 		return
-	_farm_label.text = farming.look_text(builder.target) if builder.active else ""
+	_farm_label.text = farming.hud_text(builder.target) if builder.active else ""
 
 
 func _update_hud() -> void:
@@ -2657,6 +2672,70 @@ func _offhand_gun_checks(check: Callable, rifle: ItemStack) -> void:
 	await _frames(10)
 
 
+## Round four's shield in --gate=inventory (Docs/Inventory.md): in the
+## off-hand, up, held by the left arm; RMB held raises it; a hit from in front
+## is blocked whole and wears it, one from behind lands; let go, a hit from in
+## front lands; worn out, the next blocked hit breaks it. Real DamagePackets
+## through DamageSystem; health and the hands put back after.
+func _shield_checks(check: Callable) -> void:
+	var inv: Inventory = builder.inv
+	var pool: HealthPool = pawn.health
+	var was_invulnerable := pool.invulnerable
+	pool.invulnerable = false
+	pool.reset()
+	var sh := ItemStack.make(&"shield", 1)
+	inv.offhands[0] = sh
+	inv.active_offhand = 0
+	inv.offhand_up = true
+	inv.changed.emit()
+	await _frames(10)
+	check.call("4d: a shield up in the off-hand is held, not raised; the sights rest", hands.shield_held == sh
+			and not hands.blocking and player.hold_aim and view.off_held != null)
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_RIGHT
+	press.pressed = true
+	press.button_mask = MOUSE_BUTTON_MASK_RIGHT
+	Input.parse_input_event(press)
+	await _frames(15)
+	check.call("4d: RMB held raises it (the pawn's guard set)", hands.blocking and pool.guard.is_valid())
+	await _shot(UserPaths.DEV + "inv_shield.png")
+	var src := Node3D.new()
+	add_child(src)
+	var c: Camera3D = gun.aim as Camera3D
+	src.global_position = c.global_position - c.global_transform.basis.z * 5.0
+	var before := pool.total_current()
+	var r := DamageSystem.resolve(DamagePacket.new(20.0, null, src), pool)
+	check.call("4d: a hit from in front is blocked whole (dealt %.1f, wear %s)" % [r.dealt, str(sh.data.get("wear", 0))],
+			r.blocked and pool.total_current() == before and int(sh.data.get("wear", 0)) == 20)
+	src.global_position = c.global_position + c.global_transform.basis.z * 5.0
+	r = DamageSystem.resolve(DamagePacket.new(20.0, null, src), pool)
+	check.call("4d: a hit from behind lands (dealt %.1f)" % r.dealt, not r.blocked and r.dealt > 0.0)
+	var up := press.duplicate()
+	up.pressed = false
+	up.button_mask = 0
+	Input.parse_input_event(up)
+	await _frames(10)
+	src.global_position = c.global_position - c.global_transform.basis.z * 5.0
+	r = DamageSystem.resolve(DamagePacket.new(20.0, null, src), pool)
+	check.call("4d: let go, a hit from in front lands (dealt %.1f)" % r.dealt, not hands.blocking
+			and not pool.guard.is_valid() and r.dealt > 0.0)
+	sh.data["wear"] = int(ItemCatalog.get_def(&"shield").get("durability", 336)) - 5
+	Input.parse_input_event(press)
+	await _frames(15)
+	r = DamageSystem.resolve(DamagePacket.new(20.0, null, src), pool)
+	await _frames(5)
+	check.call("4d: worn out, the blocked hit breaks it: gone from the off-hand", r.blocked
+			and inv.offhands[0] == null and hands.shield_held == null)
+	Input.parse_input_event(up)
+	await _frames(5)
+	src.queue_free()
+	inv.offhand_up = false
+	inv.changed.emit()
+	pool.reset()
+	pool.invulnerable = was_invulnerable
+	await _frames(5)
+
+
 ## A mouse button pressed for `frames` and let go, through the engine's input.
 func _mouse_tap(button: MouseButton, frames: int) -> void:
 	var press := InputEventMouseButton.new()
@@ -2863,11 +2942,16 @@ func _run_inventory_gate() -> void:
 		await _frames(3)
 		await _click(mk.get_global_rect().get_center())
 		await _frames(3)
-	check.call("picked: the crafting area shows the gravel result",
-			not scr.picked.is_empty() and scr.picked.name == "Gravel" and scr.result_slot().item_id == &"gravel")
+	var g0: ItemStack = inv.craft_grid[0]
+	check.call("picked: the book laid 12 stone in the 2x2 grid, the result shows gravel (Inventory.md 16)",
+			not scr.picked.is_empty() and scr.picked.name == "Gravel" and scr.result_slot().item_id == &"gravel"
+			and inv.craft_n == 2 and g0 != null and g0.count == 12)
 	await _click(scr.result_slot().get_global_rect().get_center())
 	await _frames(3)
-	check.call("a click on the result: 12 stone -> 12 gravel (gravel %d -> %d, stone %d -> %d)" % [gravel0,
+	check.call("a click on the result: 12 gravel onto the cursor (Minecraft's)", inv.cursor != null
+			and inv.cursor.id == &"gravel" and inv.cursor.count == 12 and inv.craft_grid[0] == null)
+	await _key(KEY_ESCAPE)
+	check.call("put back (Escape): 12 stone -> 12 gravel (gravel %d -> %d, stone %d -> %d)" % [gravel0,
 			_carried_count(inv, &"gravel"), stone0, _carried_count(inv, &"stone")],
 			_carried_count(inv, &"gravel") == gravel0 + 12 and _carried_count(inv, &"stone") == stone0 - 12)
 	var sb := scr.recipe_cell("Sandstone")
@@ -2882,6 +2966,31 @@ func _run_inventory_gate() -> void:
 	await _click(only.get_global_rect().get_center())
 	await _frames(3)
 	check.call("... off again: Sandstone back", scr.recipe_cell("Sandstone") != null)
+	# The recipe editor (16.3): its tab, the palette's wood clicked into a cell,
+	# Shift-click: +12. Not saved here (a test writes no recipe tables).
+	var ed_tab: Control = scr.get("_tabs")["editor"]
+	await _click(ed_tab.get_global_rect().get_center())
+	await _frames(5)
+	var ed: RecipeEditorPanel = scr.get("_editor")
+	check.call("the Editor tab shows the recipe editor and the palette", scr.page == "editor" and ed.is_visible_in_tree()
+			and (scr.get("_creative_scroll") as Control).is_visible_in_tree())
+	var wood_cat := _inv_slot(scr, {}, &"wood")
+	if wood_cat != null:
+		(scr.get("_creative_scroll") as ScrollContainer).ensure_control_visible(wood_cat)
+		await _frames(3)
+		await _click(wood_cat.get_global_rect().get_center())
+	var cell0: InvSlot = ed.find_child("EditorCell0", true, false)
+	if cell0 != null:
+		await _click(cell0.get_global_rect().get_center())
+		await _click(cell0.get_global_rect().get_center())
+	var c0 = ed.cells[0]
+	check.call("a held wood clicked into a cell: wood, then +1 (%s)" % str(c0), c0 != null and c0.id == &"wood"
+			and int(c0.count) == 2)
+	await _shot(UserPaths.DEV + "inv_editor.png")
+	inv.cursor = null
+	ed.clear_all()
+	await _click(tab_s.get_global_rect().get_center())
+	await _frames(3)
 	var winr := get_window()
 	var sizer := winr.size
 	winr.size = Vector2i(640, 400)
@@ -2943,6 +3052,7 @@ func _run_inventory_gate() -> void:
 	check.call("... its rounds went back into its stack (%s)" % str(gun_stack.data.get("ammo", "?")),
 			int(gun_stack.data.get("ammo", -1)) == rounds1)
 	await _offhand_gun_checks(check, gun_stack)
+	await _shield_checks(check)
 	inv.swap_with_hotbar(Inventory.addr(&"main", 26), 6)
 	set_on_foot(false)
 	_fly_to(_eye() + Vector3(0, 0.8, 0), Vector3(0, 0, -1))
@@ -3069,9 +3179,11 @@ func _run_inventory_gate() -> void:
 				await _frames(3)
 				await _click(sb2.get_global_rect().get_center())
 				await _frames(3)
+				check.call("at the workbench the grid is 3x3", inv.craft_n == 3)
 				await _click(_inv_screen.result_slot().get_global_rect().get_center())
 				await _frames(3)
-			check.call("a click on the result: 12 sand -> 12 sandstone (%d -> %d)" % [sand0,
+				await _key(KEY_ESCAPE)
+			check.call("a click on the result, put back: 12 sand -> 12 sandstone (%d -> %d)" % [sand0,
 					_carried_count(inv, &"sandstone")], _carried_count(inv, &"sandstone") == sand0 + 12)
 			await _shot(UserPaths.DEV + "inv_workbench.png")
 			await _key(KEY_E)

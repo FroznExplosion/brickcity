@@ -37,6 +37,7 @@ class DamageResult extends RefCounted:
 	var procced_status: bool = false
 	var killed: bool = false          ## this hit dropped the target's vital layer
 	var shattered: bool = false       ## it killed a frozen thing by shattering it (ElementStatus)
+	var blocked: bool = false         ## a guard on the pool (a raised shield) took all of it
 
 
 ## target_root must own a HealthPool and may own a StatusManager (looked up by node name/group).
@@ -76,13 +77,20 @@ static func _resolve(packet: DamagePacket, target_root: Node) -> DamageResult:
 	var pool: HealthPool = _find_health_pool(target_root)
 	if pool == null or pool.is_dead():
 		return result
+	# A guard (a raised shield) may take all or part of the hit first.
+	var guarded := 1.0
+	if pool.guard.is_valid():
+		guarded = maxf(float(pool.guard.call(packet)), 0.0)
+		if guarded <= 0.0:
+			result.blocked = true
+			return result
 	var before: float = pool.total_current()
 
 	var status_mgr: StatusManager = _find_status_manager(target_root)
 
 	# Compose external multipliers (crit + slag/frozen). The element-vs-layer matrix is
 	# NOT here — HealthPool applies it per layer.
-	var extra: float = 1.0
+	var extra: float = guarded
 	var crit := maxf(1.0, packet.crit_multiplier) if packet.crit else 1.0
 	var shield_top := pool.top_layer_type() == &"shield"
 	if status_mgr != null:

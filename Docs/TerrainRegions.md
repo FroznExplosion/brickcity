@@ -832,3 +832,27 @@ frame 8.3 ms, GPU 7.6: water 3.0 (the sea 2.0), near tiles 1.2, near trees
 scripts 3.9 ms of a 17.5 ms frame: the rest is drawing at the window's real
 size and the vsync. The game is GPU-bound at full resolution, the water the
 largest single part.
+
+### 12.7 The stagger within layers; the load cost halved (2026-11-26)
+
+Where a new tile's time went with the fit on (49 tiles in streaming order,
+headless): noise for the fit's cells 35 ms, the fit 31, 132 regions a tile
+-- because an odd layer's region scores its stagger against the even
+layers round it, so it needs their regions fitted, ~1.5 tiles round.
+Measured, that cross-layer score buys little:
+
+| region_fit_probe | stacked seams / 1000 joints | stacked % | a tile (streaming) |
+|---|---|---|---|
+| stagger across layers (was) | 448 | 44 | 92 ms |
+| stagger within each layer (now, `stagger_layers` false) | 445 | 47 | 57 ms |
+| no stagger | 517 | 52 | 63 ms |
+| old pattern (bond_rect) | 4 | 0.5 | 26 ms |
+
+So the stagger is scored within each layer of 3 courses only (2 of 3
+course joints): each region is fitted from its own cells (and cave air 3
+round), 84 regions a tile, no neighbours' regions. The calibration made
+robust on the way (two samples, damped steps, a shape's scaling kept within
+0.5-3 x): every shape within 5 points with any of these.
+
+`mine_world_probe --fitted` now PASSES (cold 2 x 2 bake 80 and 113 ms, 120
+allowed); bricks, audit, collapse, fluid probes pass on and off.

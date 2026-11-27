@@ -1,0 +1,32 @@
+{
+	"items": {
+		"fence": {
+			"name": "Fence",
+			"kind": "fence",
+			"plates": 6,
+			"material": "wood",
+			"max_stack": 64,
+			"colour": "#9a7448",
+			"glyph": "#",
+			"description": "Right-click: a fence panel across your view, 2 bricks high, posts 3 studs apart. Keeps out zombies and pigs (anything that steps only one brick). Panels side by side share posts."
+		},
+		"tall_fence": {
+			"name": "Tall fence",
+			"kind": "fence",
+			"plates": 9,
+			"material": "wood",
+			"max_stack": 64,
+			"colour": "#7d5c38",
+			"glyph": "#",
+			"description": "Right-click: a fence panel 3 bricks high. For animals that jump two bricks."
+		},
+		"raw_pork": {
+			"name": "Raw pork",
+			"kind": "misc",
+			"max_stack": 64,
+			"colour": "#e07a86",
+			"glyph": "P",
+			"description": "From a pig."
+		}
+	}
+}

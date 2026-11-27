@@ -13,7 +13,7 @@ extends RefCounted
 ##   fluid (1 water, 2 lava, 0 none), fluid_kind ("source" / "still").
 
 const KINDS := ["block", "fluid", "bucket", "source_bucket", "chest", "station", "tool", "backpack", "gun", "grenade",
-		"hoe", "seed", "scythe", "can", "fertiliser", "wire", "device", "wrench", "misc"]
+		"hoe", "seed", "scythe", "can", "fertiliser", "wire", "device", "wrench", "fence", "shield", "misc"]
 ## Which hand an item may be in (zylanntest's HandUse). Since 2026-11-26
 ## only "two" limits a slot: a two-handed item never goes in the off-hand
 ## (Inventory.slot_accepts); "right" and "off" say how an item is meant to
@@ -195,8 +195,11 @@ static func _complete(e: Dictionary) -> Dictionary:
 	# how often it repeats while held (MineBuilder._break_cells/_break_repeat).
 	# A seed's crop (Docs/MineFarming.md): what it grows into.
 	# A fertiliser's fertility and boost (Docs/MineFarming.md 17).
-	# A furnace smelts (`smelter`, Docs/Inventory.md 15).
-	for k in ["break_area", "break_repeat", "model", "crop", "fertility", "boost_days", "mulch", "smelter"]:
+	# A furnace smelts (`smelter`, Docs/Inventory.md 15); a station's crafting grid (`grid`, 16).
+	# A fence's height in plates (MineFences, Docs/MineCreatures.md 5.3).
+	# A shield's damage it takes before it breaks (`durability`, round four).
+	for k in ["break_area", "break_repeat", "model", "crop", "fertility", "boost_days", "mulch", "smelter", "plates",
+			"grid", "counts_as", "durability"]:
 		if e.has(k):
 			out[k] = e[k]
 	return out
@@ -245,6 +248,9 @@ static func label(s: ItemStack) -> String:
 			return str(s.data.get("name", n))
 		"bucket":
 			return "%s %d/%d tiles" % [n, int(s.data.get("tiles", 0)), BUCKET_TILES]
+		"shield":
+			var cap := maxi(int(d.get("durability", 336)), 1)
+			return "%s %d%%" % [n, roundi(100.0 * (cap - int(s.data.get("wear", 0))) / cap)]
 		"source_bucket":
 			return "%s (%s)" % [n, ["empty", "water", "lava"][clampi(int(s.data.get("fluid", 0)), 0, 2)]]
 		"can":
