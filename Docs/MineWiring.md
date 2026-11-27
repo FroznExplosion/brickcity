@@ -864,6 +864,74 @@ again, an observer -> pulse -> alarm calling a zombie that walks to it, all
 back after generating again. Pictures `user://dev/wiring_traps.png`,
 `wiring_bridge.png`, `wiring_bridge_fell.png`.
 
+## 20. Stage 7, built (2026-11-27): wireless links and wire bricks
+
+`scripts/wiring/wiring_links.gd` (`WiringLinks`, static, `w` untyped as the
+traps kit's), hooked into `MineWiring` at links, side nets, the rebuild,
+`check`, the tick (step 3e), use, the look, the readout, drawing and saving.
+
+- **Wire brick** (3.3 point 2): a terrain material, `MAT_WIRE_BRICK` (42),
+  appended to the C++ `Material` enum (append only; name "wire brick", the
+  dark grey filament, the constant bound). That is the whole C++ change:
+  `ItemCatalog` makes every material a block item, so `wire_brick` ("Wire
+  brick", the override in `wiring.json`) is laid by the builder, bonded,
+  shot, dug and dropped like any brick, and a piston moves it. The terrain
+  shader is not touched: an unknown material draws plain (no PBR set).
+  - **In the nets:** a stud of a course of it is one node (`wires`, keyed
+    by its bottom plate cell; a cable never shares a cell with it, as the
+    wire brick is solid). It links to the wire bricks at its sides, over
+    and under it, the cable on its top and the cables at its sides (any of
+    its three plates); a cable to the wire brick it lies on and those at
+    its sides; a device reads and drives the wire bricks at its sides (at
+    any of its plates), not the one it stands on.
+  - **Found and lost** by `WiringLinks.scan` over every edit's box
+    (`check`, from `terrain_edited`): it reads the cells on the CPU
+    (`solid_at`), so a shot, a pickaxe, a blast, the collapse or a piston
+    moving one changes the net the next tick. A whole-world check (a box
+    over 400,000 course-studs) does not scan.
+  - **Drawn** with a copper band round each node's middle (one MultiMesh
+    with the cables' shader): dull copper, glowing while its net is on. No
+    tile rebakes for power.
+  - Saved in the wiring's record (`"wires"`), trusted on load and set right
+    by the next check over them.
+- **Wire transmitter / wire receiver** (`wire_transmitter`,
+  `wire_receiver`): a brick (a collider: found and shot) with two round
+  antennas on top. Their two colours are the **channel** -- red, blue,
+  yellow, green, white, black, orange, purple: 8 x 8 = 64 (Create's
+  Redstone Link pair, 12); `setting` = first x 8 + second. RMB steps the
+  first colour, **shift + RMB** the second (the builder sends "use2"); the
+  wrench shows "channel red + blue" and what it sends or gets. A
+  transmitter reads the level at its sides (a receiver of its own channel
+  aside, or a pair side by side would hold itself on); each receiver gives
+  the highest of its channel out of every side, a tick later (as a gate's
+  output). **Range: every link the wiring has, the whole loaded world -- no
+  distance limit.** A light on top shows sending / getting. Saved: the
+  channel is the device's `setting`.
+- Items and icons: `wire_transmitter`, `wire_receiver` (model `link`: a
+  brick, two antennas).
+- **Not yet:** a device does not read the wire brick it stands on; a
+  receiver feeding its own transmitter through a cable does hold itself on
+  (as any loop of drivers would); the band glows per node, not per face;
+  links do not reach past the loaded world (a far circuit is frozen, 4).
+
+Tests: `wiring_probe` 170 ok (stage 7: the material; a check over an
+edit finds three wire bricks as one net; a lever lights a lamp up and along
+a wire-brick wall; the wrench reads a wire brick's net; one broken cuts it;
+a cable on a wire brick's top joins it; saved; a receiver 40 studs away
+follows its channel, another channel stays dark, RMB / shift+RMB step the
+colours, the readout names the channel, no latch beside its own
+transmitter, the channel saved; the wire brick is a block item named Wire
+brick; the link models). `--gate=wiring` stage 7: a wire brick laid with
+the builder (a 2x2 block: four nodes) is known to the wiring; a wall of wire
+bricks, one up a course, carries a lever's power to a lamp; a real shot
+breaking its lower brick cuts it; a receiver 14 studs off lights its lamp
+from its transmitter, RMB on it steps its channel (dark), the transmitter
+stepped too (lit), a shot breaking the transmitter darkens it; the wire
+bricks and the receiver's channel back after a reload (`--gate=wiring` 120
+ok in all, the traps kit's sections included, 2026-11-27). Picture
+`user://dev/wiring_wire_bricks.png`. Not seen in a test: the copper band's
+look and glow, the antennas' colours.
+
 ## Sources
 
 - Minecraft quasi-connectivity: <https://techmcdocs.github.io/pages/GameMechanics/QuasiConnectivity>,
