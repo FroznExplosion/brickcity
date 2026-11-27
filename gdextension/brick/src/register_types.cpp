@@ -15,6 +15,7 @@
 #include "ai/ai_nav.h"
 #include "ai/ai_scheduler.h"
 #include "ai/ai_world.h"
+#include "ai/terrain_nav.h"
 #include "creature/mesh_forge.h"
 #include "swarm/flow_grid.h"
 #include "swarm/lane_graph.h"
@@ -62,6 +63,7 @@ void initialize_brick_module(ModuleInitializationLevel p_level) {
     ClassDB::register_class<AIWorld>();
     ClassDB::register_class<AIScheduler>();
     ClassDB::register_class<AINav>();
+    ClassDB::register_class<TerrainNav>();
 }
 
 void uninitialize_brick_module(ModuleInitializationLevel p_level) {
