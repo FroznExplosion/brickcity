@@ -9548,9 +9548,9 @@ Vector4 BrickWave::shore_band_uniform() {
 
 namespace {
 bool g_river_calm = false;
-constexpr double RIVER_OPEN_R = 12.0;   ///< metres looked out for open water
-constexpr double RIVER_NARROW_LO = 3.5; ///< open within it under this: a river, calm
-constexpr double RIVER_NARROW_HI = 9.0; ///< ...over this: the sea's full swell
+constexpr double RIVER_OPEN_R = 16.0;   ///< metres looked out for open water
+constexpr double RIVER_NARROW_LO = 5.0; ///< open within it under this: a river, calm
+constexpr double RIVER_NARROW_HI = 12.0; ///< ...over this: the sea's full swell
 constexpr double RIVER_AMP = 0.03;      ///< the ripple, metres
 constexpr double RIVER_LEN = 4.0;       ///< metres between its crests
 constexpr double RIVER_SPEED = 0.8;     ///< metres a second, downstream
@@ -9622,7 +9622,7 @@ double BrickWave::height_at(double x, double z, double t) {
     double narrow = 1.0;
     const double ripple = river_shape(x, z, dist, t, narrow);
     return g_sea_level + taper * group_factor(x, z, t) * swell_near_shore(dist) * swell * narrow
-            + band_value(x, z, t) + ripple;
+            + band_value(x, z, t) * narrow + ripple;
 }
 
 /// The surface as the pieces actually sit. Gameplay uses the CONTINUOUS height

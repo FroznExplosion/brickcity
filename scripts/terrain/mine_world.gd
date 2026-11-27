@@ -322,6 +322,8 @@ func _ready() -> void:
 			_run_water_gate()
 		elif "--gate=sea" in OS.get_cmdline_user_args():
 			_run_sea_gate()
+		elif "--gate=ocean" in OS.get_cmdline_user_args():
+			_run_ocean_gate()
 		elif "--gate=gen" in OS.get_cmdline_user_args():
 			_run_gen_gate()
 		elif "--gate=menu" in OS.get_cmdline_user_args():
@@ -6182,6 +6184,133 @@ func _run_water_gate() -> void:
 ## The sea pass: -- --gate=sea (Docs/MineWater.md 14, stages 3 and 4). The
 ## generated sea drawn by the wave tiers at a coast, a river mouth, a channel
 ## dug off the sea filling, then the player: swimming, under water, a bucket.
+## THE DEEP OCEAN (Docs/MineOcean.md 4): deep water found, the look by
+## depth, breath and drowning, a current carrying the swimmer.
+func _run_ocean_gate() -> void:
+	await _frames(10)
+	var dev := UserPaths.DEV
+	DirAccess.make_dir_recursive_absolute(dev)
+	_time = 0.45
+	var stud := BrickWorld.get_stud_metres()
+	var level := BrickFluid.get_sea_level()
+	var e := _eye()
+	var c0 := Vector2i(floori(e.x / stud), floori(e.z / stud))
+	# The deepest column on rings out from the spawn, and how much of what
+	# was sampled is sea, and deep sea.
+	var deep := Vector2i(1 << 30, 0)
+	var deepest := 0.0
+	var sea_n := 0
+	var deep_n := 0
+	var all_n := 0
+	for ring in range(1, 120):
+		var r := ring * 64
+		var n := ring * 8
+		for i in n:
+			var a := TAU * float(i) / float(n)
+			var p := c0 + Vector2i(int(cos(a) * r), int(sin(a) * r))
+			var d := level - _ground_m(p.x, p.y)
+			all_n += 1
+			if d > 0.5:
+				sea_n += 1
+			if d > 40.0:
+				deep_n += 1
+			if d > deepest:
+				deepest = d
+				deep = p
+		if deepest > 75.0:
+			break
+	print("[ocean-gate] sampled %d columns: %d sea, %d deeper than 40 m; deepest %.1f m at %s (%.0f m out)" % [
+			all_n, sea_n, deep_n, deepest, deep, Vector2(deep - c0).length() * stud])
+	if deepest < 40.0:
+		print("[ocean-gate] FAIL no sea deeper than 40 m")
+		get_tree().quit()
+		return
+	var dm := Vector3((deep.x + 0.5) * stud, level, (deep.y + 0.5) * stud)
+	var floor_m := level - deepest
+	# Flying (no breath), the look at three depths.
+	set_on_foot(false)
+	_fly_to(dm + Vector3(0, 30, 0), Vector3(1, 0, 0))
+	walker.pitch = -0.5
+	await _frames(240)
+	view.process_mode = Node.PROCESS_MODE_DISABLED
+	view.rig.visible = false
+	if view.arms != null:
+		view.arms.visible = false
+	_hud.visible = false
+	await _shot(dev + "ocean_above.png")
+	var env: Environment = _rig.env
+	var shades := []
+	for want in [5.0, 30.0, 60.0]:
+		var y := maxf(level - want, floor_m + 2.0)
+		_fly_to(Vector3(dm.x, y, dm.z), Vector3(1, 0, 0.3))
+		walker.pitch = -0.25
+		await _frames(150)
+		shades.append(water.dive.shade)
+		print("[ocean-gate] at %.0f m: %s, fog %.3f, brightness %.2f; %s" % [
+				want, water.dive.report(), env.fog_density, env.adjustment_brightness, water.report()])
+		await _shot(dev + "ocean_%dm.png" % int(want))
+	var darker: bool = shades[0] < shades[1] and shades[1] < shades[2]
+	print("[ocean-gate] look by depth: shade %.2f, %.2f, %.2f (%s)" % [
+			shades[0], shades[1], shades[2], "darker going down" if darker else "FAIL not darker going down"])
+	# The floor from 4 m over it.
+	_fly_to(Vector3(dm.x, floor_m + 4.0, dm.z), Vector3(1, 0, 0.3))
+	walker.pitch = -0.4
+	await _frames(120)
+	await _shot(dev + "ocean_floor.png")
+	# Breath: on foot 12 m down, breath nearly gone, survival.
+	var was_survival := survival
+	survival = true
+	set_on_foot(true, Vector3(dm.x, level - 12.0, dm.z))
+	await _frames(20)
+	water.dive.breath = 0.5
+	var hp0: float = pawn.health.total_current()
+	await _frames(240)
+	var hp1: float = pawn.health.total_current()
+	print("[ocean-gate] survival, out of breath 3.5 s: health %.1f -> %.1f (%s); %s" % [
+			hp0, hp1, "drowning" if hp1 < hp0 - 3.0 else "FAIL no drowning", water.dive.report()])
+	pawn.health.reset()
+	survival = false
+	water.dive.breath = 0.0
+	hp0 = pawn.health.total_current()
+	await _frames(120)
+	hp1 = pawn.health.total_current()
+	print("[ocean-gate] creative, no breath 2 s: health %.1f -> %.1f (%s)" % [
+			hp0, hp1, "no drowning" if hp1 >= hp0 - 0.01 else "FAIL drowned in creative"])
+	set_on_foot(false)
+	_fly_to(Vector3(dm.x, level + 4.0, dm.z), Vector3(1, 0, 0))
+	await _frames(30)
+	print("[ocean-gate] in air 0.5 s: breath %.1f s (want filling)" % water.dive.breath)
+	survival = was_survival
+	# A current: the nearest in the regions round the deep point.
+	water.currents.gather_all(Vector3(dm.x, level - 20.0, dm.z))
+	var cp: Vector3 = water.currents.nearest_point(Vector3(dm.x, level - 20.0, dm.z))
+	print("[ocean-gate] %d current(s) within %d regions of %.0f m" % [
+			water.currents.count_near(), MineCurrents.NEAR_REGIONS, MineCurrents.REGION_M])
+	if cp == Vector3.INF:
+		print("[ocean-gate] FAIL no current near the deep water")
+	else:
+		var push: Vector3 = water.flow_at(cp)
+		print("[ocean-gate] current at %s (%.0f m from the deep point): flow %.1f m/s" % [
+				cp, Vector2(cp.x - dm.x, cp.z - dm.z).length(), push.length()])
+		set_on_foot(true, cp - Vector3.UP * 0.9)
+		await _frames(30)
+		var p0 := to_local(pawn.feet())
+		await _frames(120)
+		var p1 := to_local(pawn.feet())
+		var v := (p1 - p0).length() / 2.0
+		print("[ocean-gate] swimmer in the current: %.1f m/s over 2 s (%s), swimming %s" % [
+				v, "carried" if v > 3.0 else "FAIL not carried", pawn.moves != null and pawn.moves.swimming])
+		set_on_foot(false)
+		var dir := push.normalized() if push.length() > 0.1 else Vector3(1, 0, 0)
+		var side := dir.cross(Vector3.UP).normalized()
+		_fly_to(cp - dir * 6.0 + side * 3.0 + Vector3.UP * 1.0, (dir - side * 0.4).normalized())
+		walker.pitch = -0.05
+		await _frames(120)
+		await _shot(dev + "ocean_current.png")
+	print("[ocean-gate] done; %s" % water.report())
+	get_tree().quit()
+
+
 func _run_sea_gate() -> void:
 	await _frames(10)
 	var dev := UserPaths.DEV
@@ -6375,6 +6504,36 @@ func _run_sea_gate() -> void:
 		# Rivers calm (MineWaterNext.md 11): the river's surface over 4 s
 		# moves a few cm (the ripple), where open sea a coast away swings
 		# much more. The CPU's height, the one swimmers and floaters ride.
+		# The search finds the mouth (open water one way, where the swell
+		# rightly comes in): step up the river, along its open axis, to where
+		# no open water is within 16 m any way -- the inside of the river.
+		var inside := Vector2.INF
+		var opens := []
+		for o in [Vector2(16, 0), Vector2(-16, 0), Vector2(0, 16), Vector2(0, -16)]:
+			opens.append(snappedf(BrickWave.shore_distance(rm.x + o.x, rm.z + o.y), 0.1))
+		print("[sea-gate] the mouth: shore distance 16 m out four ways %s" % [opens])
+		for o in [Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1)]:
+			for k in range(1, 60):
+				var q: Vector2 = Vector2(rm.x, rm.z) + o * k * 1.4
+				var qs := Vector2i(floori(q.x / stud), floori(q.y / stud))
+				if BrickTerrain.surface_plate(qs.x, qs.y) >= (sea_b - 1) * 3:
+					break
+				var widest := 0.0
+				for d: Vector2 in [Vector2(16, 0), Vector2(-16, 0), Vector2(0, 16), Vector2(0, -16)]:
+					widest = maxf(widest, BrickWave.shore_distance(q.x + d.x, q.y + d.y))
+				if widest < 5.0 and BrickWave.shore_distance(q.x, q.y) > 0.5:
+					inside = q
+					break
+			if inside != Vector2.INF:
+				break
+		if inside != Vector2.INF:
+			print("[sea-gate] inside the river at %.1f, %.1f (%.0f m up from the mouth)" % [
+					inside.x, inside.y, inside.distance_to(Vector2(rm.x, rm.z))])
+			rm = Vector3(inside.x, level, inside.y)
+		else:
+			# Open water within 16 m everywhere up it: a bend of the coast
+			# the search took for a river (the default seed's), not a river.
+			print("[sea-gate] no point inside it with no open water in 16 m: a coast, not a river (its swing below is the sea's)")
 		var rlo := INF
 		var rhi := -INF
 		var slo := INF

@@ -78,6 +78,12 @@ struct GenParams {
     float continent_scale_m = 1400.0f;
     float ocean_threshold = -0.18f;   ///< continentalness below this is basin
     float ocean_depth_m = 14.0f;
+    /// THE DEEP OCEAN (Docs/MineOcean.md 2.1): past the shelf (ocean_depth_m),
+    /// from this far under the threshold the floor drops on to deep_ocean_m,
+    /// with trenches trench_m deeper still. deep_ocean_m <= ocean_depth_m: off.
+    float deep_ocean_from = 0.34f;
+    float deep_ocean_m = 70.0f;
+    float trench_m = 20.0f;
     float base_height_m = 2.5f;
     float cont_weight_m = 22.0f;
     float erosion_scale_m = 700.0f;
