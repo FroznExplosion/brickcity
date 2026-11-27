@@ -75,6 +75,8 @@ var parked: Array = []
 var host_override := -1
 ## For gates and the readout.
 var hits_on_player := 0
+## Of those, how many a raised shield took (no shove).
+var hits_blocked := 0
 var fields_built := 0
 var last_field_ms := 0.0
 var log_lines: Array[String] = []
@@ -239,11 +241,21 @@ func player_info() -> Dictionary:
 
 
 ## A blow on the player: a shove always; health too in survival (MineSurvival
-## takes it from there).
+## takes it from there) -- unless a raised shield faces it (the pawn's
+## HealthPool.guard, MineHands; Docs/Inventory.md round four): then the
+## shield takes it, worn by its damage, and there is no shove and no harm.
 func hurt_player(m, dmg: float, dir: Vector3) -> void:
 	hits_on_player += 1
 	var p: Pawn = host.pawn if host.on_foot else null
 	if p != null and is_instance_valid(p):
+		if p.health != null and p.health.guard.is_valid():
+			var pk := DamagePacket.new(dmg, null, m)
+			pk.melee = true
+			pk.hit_position = (host as Node3D).to_global(m.feet() + Vector3(0, 1.2, 0))
+			if float(p.health.guard.call(pk)) <= 0.0:
+				hits_blocked += 1
+				log_line("a %s hit the player's shield (%.0f)" % [m.kind, dmg])
+				return
 		p.shove = Vector3(dir.x, 0.0, dir.z) * KNOCK + Vector3.UP * 2.5
 		if bool(host.get("survival")) and p.health != null and not p.health.is_dead():
 			p.health.apply_impact(dmg, &"")
