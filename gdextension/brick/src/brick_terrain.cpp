@@ -936,6 +936,18 @@ int edit_at(int64_t key) {
     return g_edits.find((uint64_t)key, v) ? (int)v : -1;
 }
 
+bool built_cell(int x, int course, int z) {
+    if (g_edits.size() == 0) {
+        return false;
+    }
+    for (int p = 0; p < PLATES_PER_CELL; ++p) {
+        if (edit_at(pack_cell(x, course * PLATES_PER_CELL + p, z)) > 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static inline int64_t tile_key(int tx, int tz) {
     return ((int64_t)(tx & 0xFFFFFFF) << 28) | (int64_t)(tz & 0xFFFFFFF);
 }
@@ -2261,18 +2273,15 @@ struct BondView {
     const TileSample &s;
     bool tops;
     int c_lo = 0, c_n = 0;            ///< courses the memo spans
-    static constexpr int PAD = 4;     ///< studs past the tile the memo spans
+    static constexpr int PAD = 6;     ///< studs past the tile the memo spans (a pattern's 6-long brick reaches 5)
     static constexpr int SIDE = TILE + 2 * PAD;
-    std::vector<uint8_t> memo;        ///< group + 1, 0 unknown
+    std::vector<uint8_t> memo;        ///< group + 1 (low 4 bits), 16: built (built_cell); 0 unknown
     std::vector<int32_t> top_memo;    ///< top plate past the sample, INT_MIN unknown
-    /// The region fit's bricks (Docs/TerrainRegions.md 12), when the game
-    /// uses them (TerrainFit.set_enabled); else the old pattern.
-    bool fit_on = false;
-    brick::FitView fit;
-    std::unordered_map<int64_t, bool> whole_memo;
+    /// The pattern library's bricks (Docs/HandoffBrickPatterns.md), when
+    /// the game uses them (TerrainFit.set_enabled); else the old pattern.
+    brick::PatternView pat;
 
     BondView(const TileSample &p_s, bool p_tops) : s(p_s), tops(p_tops) {
-        fit_on = brick::fit_enabled();
         c_lo = floor_div(s.y0, PLATES_PER_CELL) - 1;
         c_n = floor_div(s.y0 + s.ysize - 1, PLATES_PER_CELL) - c_lo + 2;
         memo.assign((size_t)SIDE * SIDE * c_n, 0);
@@ -2323,7 +2332,7 @@ struct BondView {
         if (memoed) {
             i = (size_t)(lx + PAD) + SIDE * ((size_t)(lz + PAD) + SIDE * (size_t)(c - c_lo));
             if (memo[i] != 0) {
-                return memo[i] - 1;
+                return (memo[i] & 15) - 1;
             }
         }
         int g = bond_group(material(x, c, z));
@@ -2335,84 +2344,21 @@ struct BondView {
             g = BOND_NONE;   // a placed brick: its own shape
         }
         if (memoed) {
-            memo[i] = (uint8_t)(g + 1);
+            memo[i] = (uint8_t)((g + 1) | (pat.on() && g != BOND_NONE && built_cell(x, c, z) ? 16 : 0));
         }
         return g;
     }
 
-    /// Every cell of fitted brick `b` still a bond cell (not dug, built
-    /// over, made the top course by a hole or placed): the fit is of the
-    /// generated cells, and a brick an edit cut is its cells one by one.
-    bool whole(const brick::FitBrick &b) {
-        const int64_t k = bond_key(b.x, b.c, b.z);
-        auto it = whole_memo.find(k);
-        if (it != whole_memo.end()) {
-            return it->second;
+    /// Bond cell (x, c, z) built by an edit (built_cell), with the patterns on.
+    bool built(int x, int c, int z) {
+        if (!pat.on() || group(x, c, z) == BOND_NONE) {
+            return false;
         }
-        bool ok = true;
-        for (int cc = b.c; cc < b.c + b.h && ok; ++cc) {
-            for (int zz = b.z; zz < b.z + b.sz && ok; ++zz) {
-                for (int xx = b.x; xx < b.x + b.sx && ok; ++xx) {
-                    const int g = group(xx, cc, zz);
-                    ok = g == BOND_MEDIUM || g == BOND_STRONG;
-                }
-            }
+        const int lx = x - s.tx * TILE, lz = z - s.tz * TILE;
+        if (lx >= -PAD && lz >= -PAD && lx < TILE + PAD && lz < TILE + PAD && c >= c_lo && c < c_lo + c_n) {
+            return (memo[(size_t)(lx + PAD) + SIDE * ((size_t)(lz + PAD) + SIDE * (size_t)(c - c_lo))] & 16) != 0;
         }
-        whole_memo[k] = ok;
-        return ok;
-    }
-
-    /// The fitted regions this sample's open faces are in, fitted in one go
-    /// before a mesh asks for them cell by cell (Docs/TerrainRegions.md 12):
-    /// a region is fitted only where some cell of it is drawn.
-    void prefetch_open() {
-        if (!fit_on) {
-            return;
-        }
-        std::vector<std::array<int, 3>> cells;
-        const int ylo = s.y0, yhi = s.y0 + s.ysize;
-        // Only the plates that can draw a face (the mesher's band), and a
-        // plate with all six neighbours solid skipped from the voxels alone
-        // (most are): this ran on every rebake.
-        int band_lo = ylo, band_hi = yhi;
-        face_band(s, band_lo, band_hi);
-        const int scan_lo = std::max(ylo, band_lo), scan_hi = std::min(yhi, band_hi);
-        const size_t sy = (size_t)SPAN, sz = (size_t)SPAN * (size_t)s.ysize;
-        for (int lz = -MARGIN; lz < TILE + MARGIN; ++lz) {
-            for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
-                int last_c = INT_MIN;
-                const bool inner = lx > -MARGIN && lz > -MARGIN && lx < TILE + MARGIN - 1 && lz < TILE + MARGIN - 1;
-                for (int yp = scan_lo; yp < scan_hi; ++yp) {
-                    const size_t i = (size_t)s.vidx(lx, yp, lz);
-                    if (s.vox[i] == MAT_AIR) {
-                        continue;
-                    }
-                    const int c = floor_div(yp, PLATES_PER_CELL);
-                    if (c == last_c) {
-                        continue;
-                    }
-                    if (inner && yp > ylo && yp < yhi - 1 && s.vox[i - 1] != MAT_AIR && s.vox[i + 1] != MAT_AIR
-                            && s.vox[i - sy] != MAT_AIR && s.vox[i + sy] != MAT_AIR
-                            && s.vox[i - sz] != MAT_AIR && s.vox[i + sz] != MAT_AIR) {
-                        continue;
-                    }
-                    if (!(s.open_air(lx - 1, yp, lz) || s.open_air(lx + 1, yp, lz)
-                                || s.open_air(lx, yp - 1, lz) || s.open_air(lx, yp + 1, lz)
-                                || s.open_air(lx, yp, lz - 1) || s.open_air(lx, yp, lz + 1))) {
-                        continue;
-                    }
-                    last_c = c;
-                    cells.push_back({ s.tx * TILE + lx, c, s.tz * TILE + lz });
-                }
-            }
-        }
-        fit.prefetch(cells);
-    }
-
-    /// A bond cell in a fitted brick still whole (`b` that brick).
-    bool in_fitted(int x, int c, int z, brick::FitBrick &b) {
-        const int g = group(x, c, z);
-        return (g == BOND_MEDIUM || g == BOND_STRONG) && fit.at(x, c, z, b) && whole(b);
+        return built_cell(x, c, z);
     }
 
     /// The brick of a bond cell (group MEDIUM or STRONG; anything else is
@@ -2423,21 +2369,26 @@ struct BondView {
         if (placed_at(x, c, z, px, pz, psx, psz)) {
             return BondRect{ px, pz, psx, psz, c, 1 };
         }
-        if (fit_on) {
-            brick::FitBrick b;
-            if (in_fitted(x, c, z, b)) {
-                return BondRect{ b.x, b.z, b.sx, b.sz, b.c, b.h };
+        if (pat.on()) {
+            if (built(x, c, z)) {
+                // Ground built by edits (filled in, a landed pile): the old
+                // pattern among the built cells, as the region fit laid it.
+                BondRect r = bond_rect(x, c, z, [&](int cx, int cz) {
+                    return built(cx, c, cz) ? group(cx, c, cz) : (int)BOND_NONE;
+                });
+                r.c = c;
+                r.h = 1;
+                return r;
             }
-            // Ground the fit does not hold whole (built up by edits, the rest
-            // of a brick a hole cut): the old pattern among those cells only,
-            // so it never overlaps a fitted brick.
-            BondRect r = bond_rect(x, c, z, [&](int cx, int cz) {
-                brick::FitBrick q;
-                return in_fitted(cx, c, cz, q) ? (int)BOND_NONE : group(cx, c, cz);
-            });
-            r.c = c;
-            r.h = 1;
-            return r;
+            // The pattern's brick, or where the ground cuts it (cave air, a
+            // hole, the top course, sand, built cells) its piece: read from
+            // its own cells only, so every cell of it agrees.
+            BondRect r;
+            if (pat.rect(x, c, z, [&](int cx, int cc, int cz) {
+                    return built(cx, cc, cz) ? (int)BOND_NONE : group(cx, cc, cz);
+                }, r)) {
+                return r;
+            }
         }
         BondRect r = bond_rect(x, c, z, [&](int cx, int cz) { return group(cx, c, cz); });
         r.c = c;
@@ -4260,12 +4211,15 @@ struct OutBrick {
 };
 static thread_local std::map<std::array<int, 3>, OutBrick> *t_bricks = nullptr;
 
+/// `course`: the brick's bottom course, its key (INT_MIN: p0's). A tall
+/// brick's columns may start on different plates (partly solid cells), so
+/// a bond brick is keyed by its own course, not by a column's lowest plate.
 static void note_brick(int x0, int z0, int sx, int sz, int p0, int p1, int mat, const Color &col,
-        bool studded) {
+        bool studded, int course = INT_MIN) {
     if (t_bricks == nullptr || sx <= 0 || sz <= 0 || p1 <= p0 || material_is_glass(mat)) {
         return;
     }
-    const std::array<int, 3> k{ x0, z0, floor_div(p0, PLATES_PER_CELL) };
+    const std::array<int, 3> k{ x0, z0, course != INT_MIN ? course : floor_div(p0, PLATES_PER_CELL) };
     auto it = t_bricks->find(k);
     if (it == t_bricks->end()) {
         OutBrick b{ x0, z0, x0 + sx, z0 + sz, p0, p1, (uint8_t)mat, col, studded, {}, 0, {}, {} };
@@ -4287,11 +4241,11 @@ static void note_brick(int x0, int z0, int sx, int sz, int p0, int p1, int mat, 
 
 /// The face `f` of the brick at corner x0 z0, course of plate p0 (as
 /// note_brick keyed it) drew [u0, u1) x [v0, v1) in that face's axes.
-static void note_face(int x0, int z0, int p0, int f, int u0, int v0, int u1, int v1) {
+static void note_face(int x0, int z0, int p0, int f, int u0, int v0, int u1, int v1, int course = INT_MIN) {
     if (t_bricks == nullptr) {
         return;
     }
-    auto it = t_bricks->find(std::array<int, 3>{ x0, z0, floor_div(p0, PLATES_PER_CELL) });
+    auto it = t_bricks->find(std::array<int, 3>{ x0, z0, course != INT_MIN ? course : floor_div(p0, PLATES_PER_CELL) });
     if (it == t_bricks->end()) {
         return;
     }
@@ -4427,7 +4381,6 @@ static void exposed_brick_cells(const TileSample &s, bool tops, std::vector<uint
     ylo_out = INT_MAX;
     yhi_out = INT_MIN;
     BondView view(s, tops);
-    view.prefetch_open();
     const int gx0 = s.tx * TILE, gz0 = s.tz * TILE;
     const int ylo = s.y0, yhi = s.y0 + s.ysize;
     int band_lo = 0, band_hi = 0;
@@ -4603,7 +4556,6 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
     // knew about. Memoised per cell and course (a cell's three plates and up
     // to six faces ask the same).
     BondView view(s, t_behind != nullptr ? t_behind_tops : !pieces.empty());
-    view.prefetch_open();
     std::vector<BondRect> rect_memo((size_t)TILE * TILE * view.c_n, BondRect{ 0, 0, 0, 0 });
     auto brick_rect = [&](int lx, int yp, int lz) -> BondRect {
         const int c = floor_div(yp, PLATES_PER_CELL);
@@ -4938,15 +4890,16 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                                 }
                             }
                         }
-                        note_brick(br.x, br.z, br.sx, br.sz, bp0, bp1, mat, col, studded);
+                        const int bk = of_piece ? INT_MIN : br.c;
+                        note_brick(br.x, br.z, br.sx, br.sz, bp0, bp1, mat, col, studded, bk);
                         // What of the face this quad draws, in its axes.
                         const int ax = s.tx * TILE + lx, az = s.tz * TILE + lz;
                         if (dx != 0) {
-                            note_face(br.x, br.z, bp0, face_index(dx, dy, dz), az, yp, az + wdt, yp + hgt);
+                            note_face(br.x, br.z, bp0, face_index(dx, dy, dz), az, yp, az + wdt, yp + hgt, bk);
                         } else if (dy != 0) {
-                            note_face(br.x, br.z, bp0, face_index(dx, dy, dz), ax, az, ax + wdt, az + hgt);
+                            note_face(br.x, br.z, bp0, face_index(dx, dy, dz), ax, az, ax + wdt, az + hgt, bk);
                         } else {
-                            note_face(br.x, br.z, bp0, face_index(dx, dy, dz), ax, yp, ax + wdt, yp + hgt);
+                            note_face(br.x, br.z, bp0, face_index(dx, dy, dz), ax, yp, ax + wdt, yp + hgt, bk);
                         }
                     }
                     if (studded) {
