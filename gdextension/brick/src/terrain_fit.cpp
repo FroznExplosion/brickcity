@@ -298,9 +298,11 @@ struct FitParams {
     double stagger = -1.0;
     double cross = 1.0;         ///< chance a tile edge / section boundary may be crossed
     int float_cells = 500;      ///< a group let go this big floats (0: never)
+    bool fit_top = false;       ///< the top course from the fit too (deferred: 12.3)
     int medium_max = 8;         ///< the biggest footprint (cells) in medium ground
     int offset = 7;             ///< odd courses' squares shifted by this
     bool merge = true;          ///< 1x1s merged into a 1-wide neighbour after a region
+    bool pair_merge = true;     ///< like bricks side by side joined where their pair shape is short
     bool wide_first = true;     ///< the wide bricks placed to their share before the fill
     double wide_seams = 0.25;   ///< most of a wide brick's outline on seams it may have (+ stagger)
     int tries = 1;              ///< seeds tried a region, the best kept
@@ -1002,6 +1004,52 @@ private:
                 break;
             }
         }
+        if (p_.pair_merge) merge_pairs(first, reg);
+    }
+
+    /// Two like bricks side by side (same size, lined up, one course, same
+    /// region) joined into the listed shape they make -- 1x2 + 1x2 a 2x2,
+    /// 2x2 + 2x2 a 2x4, 1x3 + 1x3 a 2x3 -- where that shape is further under
+    /// its share than the pair's is: the fill leaves the narrow shapes over
+    /// their share and the square ones under (rough ground has room for a 1x2
+    /// where a 2x2 does not fit), and this moves the count back.
+    void merge_pairs(size_t first, int64_t reg) {
+        auto deficit = [&](int s) { return share_[(size_t)s] * (double)n_ - (double)cnt_[(size_t)s]; };
+        for (size_t bi = first; bi < f_.bricks.size(); ++bi) {
+            Brick &b = f_.bricks[bi];
+            if (b.dead || b.loose || b.h != 1 || b.region != reg) continue;
+            const int from = shape_index(b.sx, b.sz);
+            if (from < 0) continue;
+            static const int D[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
+            const int start = (int)(brick::bond_hash(b.x, b.z, b.c + 31) & 3U);
+            for (int t = 0; t < 4; ++t) {
+                const int dx = D[(start + t) & 3][0], dz = D[(start + t) & 3][1];
+                // The neighbour's corner, if it is a like brick lined up with b.
+                const int qx = dx > 0 ? b.x + b.sx : (dx < 0 ? b.x - 1 : b.x);
+                const int qz = dz > 0 ? b.z + b.sz : (dz < 0 ? b.z - 1 : b.z);
+                const int i = at(qx, qz, b.c);
+                if (i < 0) continue;
+                const int nid = f_.id[(size_t)i];
+                if (nid < 0 || nid == (int)bi) continue;
+                Brick &n = f_.bricks[(size_t)nid];
+                if (n.dead || n.loose || n.h != 1 || n.c != b.c || n.region != reg || n.sx != b.sx || n.sz != b.sz
+                        || (!p_.mixed && n.mat != b.mat)) continue;
+                if (dx != 0 && n.z != b.z) continue;
+                if (dz != 0 && n.x != b.x) continue;
+                const int nsx = dx != 0 ? b.sx * 2 : b.sx, nsz = dz != 0 ? b.sz * 2 : b.sz;
+                const int to = shape_index(nsx, nsz);
+                if (to < 0) continue;
+                if (deficit(to) <= 0.0 || deficit(to) <= deficit(from)) continue;
+                cnt_[(size_t)from] -= 2;
+                ++cnt_[(size_t)to];
+                const int mx = std::min(b.x, n.x), mz = std::min(b.z, n.z);
+                b.x = mx; b.z = mz; b.sx = nsx; b.sz = nsz;
+                for (int zz = n.z; zz < n.z + n.sz; ++zz)
+                    for (int xx = n.x; xx < n.x + n.sx; ++xx) f_.id[(size_t)at(xx, zz, n.c)] = (int)bi;
+                n.dead = true;
+                break;
+            }
+        }
     }
 
     bool fits(int x0, int x1, int z0, int z1, int c, int h, int rx, int rz, int kind, int mat, int64_t reg) const {
@@ -1220,10 +1268,12 @@ FitParams parse(const Dictionary &d) {
     p.mixed = (bool)d.get("mixed", true);
     p.cross = (double)d.get("cross", 1.0);
     p.float_cells = (int)d.get("float_cells", 500);
+    p.fit_top = (bool)d.get("fit_top", false);
     p.medium_max = (int)d.get("medium_max", 8);
     p.seed = (int)d.get("seed", 1);
     p.offset = (int)d.get("offset", 7);
     p.merge = (bool)d.get("merge", true);
+    p.pair_merge = (bool)d.get("pair_merge", true);
     p.wide_first = (bool)d.get("wide_first", true);
     p.tries = (int)d.get("tries", 1);
     p.try_seams = (double)d.get("try_seams", 1.0);
@@ -1290,6 +1340,66 @@ FitParams parse(const Dictionary &d) {
     return p;
 }
 
+/// SHARES CALIBRATED (the user, 2026-11-26: closer to what is set; "if that
+/// is too expensive during generation, pivot"). By count, rough ground has
+/// room for a 1x2 where a 2x2 does not fit, so the fill lands narrow shapes
+/// over their share and square ones under whatever the fill does locally.
+/// So the shares are scaled once, when a world is set up: a fixed sample of
+/// its ground (5 x 5 tiles near the origin, the first with enough bricks)
+/// fitted, each shape's share times (target / got)^0.8, three times. A pure
+/// function of the world and the settings: the same bricks every session.
+/// Returns the ms it took (0: not asked, or no generator).
+double calibrate(FitParams &p, const Dictionary &d, Dictionary *report = nullptr) {
+    if (!(bool)d.get("calibrate", false)) return 0.0;
+    const uint64_t t0 = godot::Time::get_singleton()->get_ticks_usec();
+    std::vector<std::pair<std::pair<int, int>, double>> mix;
+    parse_mix(d.get("shapes", Dictionary()), mix);
+    std::vector<double> target(p.shapes.size(), 0.0);
+    double total = 0.0;
+    for (const auto &e : mix) total += e.second;
+    for (const auto &e : mix)
+        for (size_t si = 0; si < p.shapes.size(); ++si)
+            if (p.shapes[si].a == e.first.first && p.shapes[si].b == e.first.second)
+                target[si] = total > 0.0 ? e.second / total : 0.0;
+    Area a;
+    bool found = false;
+    for (int k = 0; k < 6 && !found; ++k) {
+        if (!sample_area(-2 + 8 * k, -2, a)) return 0.0;
+        int64_t full = 0;
+        for (int lc = 0; lc < a.nc; ++lc)
+            for (int lz = MID_LO; lz < MID_HI; ++lz)
+                for (int lx = MID_LO; lx < MID_HI; ++lx)
+                    full += a.kind[(size_t)a.idx(lx, lz, lc)] >= K_MEDIUM;
+        found = full > 20000;
+    }
+    if (!found) return 0.0;
+    Array steps;
+    for (int it = 0; it < 3; ++it) {
+        Fit f;
+        Fitter(a, p, f).run();
+        Sums sm;
+        measure(a, f, sm);
+        if (sm.bricks <= 0) break;
+        double err = 0.0;
+        for (size_t si = 0; si < p.shapes.size(); ++si) {
+            if (target[si] <= 0.0) continue;
+            auto g = sm.share.find(fkey(p.shapes[si].a, p.shapes[si].b));
+            const double got = g == sm.share.end() ? 0.0 : (double)g->second / (double)sm.bricks;
+            err += std::fabs(got - target[si]);
+            const double step = std::min(2.0, std::max(0.5, std::pow(target[si] / std::max(got, 0.005), 0.8)));
+            for (Band &b : p.bands) b.share[si] *= step;
+            p.shapes[si].share *= step;
+        }
+        steps.append(err);
+    }
+    const double ms = (double)(godot::Time::get_singleton()->get_ticks_usec() - t0) / 1000.0;
+    if (report) {
+        (*report)["calibration_ms"] = ms;
+        (*report)["calibration_error"] = steps;   // sum of |got - target| before each step
+    }
+    return ms;
+}
+
 } // namespace
 
 namespace {
@@ -1301,6 +1411,7 @@ struct World {
     /// fitting keeps the one it started with.
     std::shared_ptr<const FitParams> params;
     Dictionary settings;
+    Dictionary calibration;
     /// The game's bricks from the fit (TerrainFit.set_enabled); off, the
     /// old pattern (terrain_bond.h). The lookup answers either way.
     std::atomic<bool> enabled{ false };
@@ -1315,7 +1426,11 @@ std::shared_ptr<const FitParams> world_params() {
 void TerrainFit::configure(const Dictionary &settings) {
     if (!g_world) g_world = std::make_unique<World>();
     g_world->settings = settings.duplicate(true);
-    std::atomic_store(&g_world->params, std::shared_ptr<const FitParams>(std::make_shared<FitParams>(parse(settings))));
+    auto p = std::make_shared<FitParams>(parse(settings));
+    Dictionary rep;
+    calibrate(*p, settings, &rep);
+    g_world->calibration = rep;
+    std::atomic_store(&g_world->params, std::shared_ptr<const FitParams>(p));
     brick::fitted_clear();
 }
 
@@ -1327,6 +1442,10 @@ void TerrainFit::set_enabled(bool on) {
 }
 
 bool TerrainFit::get_enabled() { return brick::fit_enabled(); }
+
+Dictionary TerrainFit::get_calibration() {
+    return g_world ? g_world->calibration.duplicate(true) : Dictionary();
+}
 
 Dictionary TerrainFit::get_configured() {
     return g_world ? g_world->settings.duplicate(true) : Dictionary();
@@ -1789,6 +1908,11 @@ bool brick::generated_top(int x, int z, int &plate, int &mat) {
     return true;
 }
 
+bool brick::fit_top_enabled() {
+    const std::shared_ptr<const FitParams> P = world_params();
+    return brick::fit_enabled() && P && P->fit_top;
+}
+
 int brick::fit_float_cells() {
     const std::shared_ptr<const FitParams> P = world_params();
     return P ? P->float_cells : 500;
@@ -1948,7 +2072,9 @@ Array TerrainFit::run(const Array &areas, const Array &variants) {
     }
     Array out;
     for (int v = 0; v < variants.size(); ++v) {
-        const FitParams p = parse(variants[v]);
+        FitParams p = parse(variants[v]);
+        Dictionary cal;
+        calibrate(p, variants[v], &cal);
         Sums s;
         Dictionary r;
         for (size_t i = 0; i < as.size(); ++i) {
@@ -1985,6 +2111,7 @@ Array TerrainFit::run(const Array &areas, const Array &variants) {
             }
         }
         r["name"] = String(p.name.c_str());
+        r["calibration"] = cal;
         r["bricks"] = s.bricks;
         r["visible"] = s.vis;
         r["loose"] = s.loose;
@@ -2021,6 +2148,7 @@ void TerrainFit::_bind_methods() {
     ClassDB::bind_static_method("TerrainFit", D_METHOD("run", "areas", "variants"), &TerrainFit::run);
     ClassDB::bind_static_method("TerrainFit", D_METHOD("configure", "settings"), &TerrainFit::configure);
     ClassDB::bind_static_method("TerrainFit", D_METHOD("get_configured"), &TerrainFit::get_configured);
+    ClassDB::bind_static_method("TerrainFit", D_METHOD("get_calibration"), &TerrainFit::get_calibration);
     ClassDB::bind_static_method("TerrainFit", D_METHOD("brick_at", "x", "course", "z"), &TerrainFit::brick_at);
     ClassDB::bind_static_method("TerrainFit", D_METHOD("lookup_stats"), &TerrainFit::lookup_stats);
     ClassDB::bind_static_method("TerrainFit", D_METHOD("check_lookup", "tile", "threads", "depth"), &TerrainFit::check_lookup, DEFVAL(4), DEFVAL(0));

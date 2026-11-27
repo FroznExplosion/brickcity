@@ -1205,7 +1205,7 @@ uint32_t g_rain_seq = 0;
 /// A column's top solid plate (packed_tops), or INT_MIN.
 int rain_top(int x, int z) {
     const int tx = fdiv(x, SX), tz = fdiv(z, SX);
-    const std::shared_ptr<const TilePack> pk = packed_tops(tx, tz);
+    const std::shared_ptr<const TileTops> pk = packed_tops(tx, tz);
     if (!pk || pk->top.size() < (size_t)(SX * SX)) return INT_MIN;
     return pk->top[(size_t)(x - tx * SX) + (size_t)SX * (size_t)(z - tz * SX)];
 }

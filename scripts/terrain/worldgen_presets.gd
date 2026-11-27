@@ -41,6 +41,9 @@ const DEFAULT_BRICKS := {
 	},
 	"tall2": 0.07, "tall3": 0.03,
 	"aim": 0.3,
+	## Shares scaled once a world, from a sample of its ground, so what is
+	## laid lands near what is asked (TerrainFit calibrate, Docs/TerrainRegions.md 12.5).
+	"calibrate": true,
 	"stagger": 0.0, "cave_stagger": 0.35,
 	"cross": 1.0,
 	"mixed": true,
@@ -50,6 +53,9 @@ const DEFAULT_BRICKS := {
 	## A connected group of ground this many cells or more, let go, floats
 	## instead of falling (0: never). Building materials still fall.
 	"float_cells": 500,
+	## The surface's top course from the fit too (Docs/TerrainRegions.md
+	## 12.3). Deferred until the rest performs: off, the old pattern's tops.
+	"fit_top": false,
 	"bands": [{
 		"below_m": 12.0,
 		"shapes": {
