@@ -96,6 +96,17 @@
 			},
 			"station": "workbench",
 			"output": "collector"
+		},
+		{
+			"name": "Auto farmer",
+			"inputs": {
+				"iron_ingot": 6,
+				"gold_ingot": 2,
+				"hoe": 1,
+				"scythe": 1
+			},
+			"station": "workbench",
+			"output": "auto_farmer"
 		}
 	]
 }

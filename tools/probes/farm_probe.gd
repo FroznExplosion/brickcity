@@ -37,6 +37,16 @@ extends SceneTree
 ##             again; timber saplings stay timber (sapling_of), every canopy
 ##             has a fruit sapling; fruit hangs on the canopy (spots inside
 ##             its box); three more regrowing bushes.
+##   auto      the auto farmer (HandoffFarming.md 7.3): an auto plot is
+##             harvested inside settle the moment it ripens and replanted
+##             from one kept-back seed, several cycles over a long gap, and
+##             it is STILL exact (once == often == saved half way, with
+##             trouble on); what it harvested is what a hand's harvest at
+##             that moment gives, less the kept seed (a produce for crops
+##             planted as they are); its seeds carry the traits; bushes and
+##             fruit trees just regrow; a timber sapling is left to become a
+##             tree; no weeds on an auto plot; the row keeps it all; the
+##             farmer is an item with a recipe.
 ##   can       stage 3: a watering can's water runs out at a set time and the
 ##             catch-up is still exact across it (once == often == saved half
 ##             way); watered grows faster than dry and slows again after; the
@@ -78,6 +88,7 @@ func _init() -> void:
 	FarmPlant.trouble = false
 	_fruit()
 	FarmPlant.trouble = true
+	_auto()
 	print("farm probe: %d ok, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -715,3 +726,94 @@ func _fruit() -> void:
 		_ok("%s: planted from %s, picked it regrows from stage %d" % [id, bc.seed, int(bc.regrow_to) + 1],
 				bc.seed == bc.produce and g.get("produce") == bc.produce and bush.crop == id
 				and int(bush.stage) == int(bc.regrow_to))
+
+
+func _auto_plot(crop: StringName, tr := Vector3i.ZERO) -> Dictionary:
+	var p := FarmPlant.new_plot(Vector3i(5, 41, 9), 360.0, 80.0, -1)
+	p.wet = true
+	FarmPlant.plant(p, crop, 360.0, tr)
+	p.auto = true
+	p.auto_by = "farmer_1"
+	return p
+
+
+func _same_auto(a: Dictionary, b: Dictionary) -> bool:
+	return int(a.stage) == int(b.stage) and absf(float(a.p) - float(b.p)) < 1e-6 and a.crop == b.crop \
+			and int(a.seed) == int(b.seed) and int(a.get("autos", 0)) == int(b.get("autos", 0)) \
+			and str(FarmPlant._out_row(a.auto_out)) == str(FarmPlant._out_row(b.auto_out)) \
+			and FarmPlant.traits(a) == FarmPlant.traits(b) and is_equal_approx(float(a.fert), float(b.fert))
+
+
+## The auto farmer's half that is plain data (HandoffFarming.md 7.3).
+func _auto() -> void:
+	print("auto")
+	var d := FarmPlant.DAY
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 11
+	for id in [&"wheat", &"carrot", &"potato", &"corn", &"berry_bush", &"apple_tree", &"pumpkin"]:
+		var once := _auto_plot(id, Vector3i(2, 1, 0))
+		var often := once.duplicate(true)
+		var half := once.duplicate(true)
+		var t0 := float(once.t)
+		var t_end := t0 + d * 9.0
+		FarmPlant.settle(once, t_end)
+		var t := t0
+		while t < t_end:
+			t = minf(t_end, t + rng.randf_range(0.5, 60.0))
+			FarmPlant.settle(often, t)
+		FarmPlant.settle(half, t0 + d * 4.4)
+		var back := FarmPlant.from_row(FarmPlant.to_row(half))
+		FarmPlant.settle(back, t_end)
+		_ok("%s, auto over 9 days with trouble: %d harvests, once == often == saved half way (%s)" % [id,
+				int(once.get("autos", 0)), str(FarmPlant._out_row(once.auto_out))],
+				int(once.get("autos", 0)) >= 1 and _same_auto(once, often) and _same_auto(once, back),
+				"often %d %s, saved %d %s" % [int(often.get("autos", 0)), str(often.auto_out),
+				int(back.get("autos", 0)), str(back.auto_out)])
+	# What it harvests is a hand's harvest at that moment, less the kept seed.
+	FarmPlant.trouble = false
+	for id in [&"wheat", &"carrot", &"berry_bush"]:
+		var hand := _auto_plot(id)
+		hand.auto = false
+		var a := hand.duplicate(true)
+		a.auto = true
+		var tr := _time_to_ripe(hand)
+		var got := FarmPlant.harvest(hand, float(hand.t))
+		FarmPlant.settle(a, float(a.t) + tr)
+		var c := FarmCrops.get_crop(id)
+		var exp_p := int(got.count)
+		var exp_s := int(got.seeds)
+		var perennial := int(c.regrow_to) >= 0
+		if not perennial:
+			if exp_s > 0:
+				exp_s -= 1
+			else:
+				exp_p -= 1
+		var outp := FarmPlant.out_count(a, c.produce)
+		var outs := FarmPlant.out_count(a, c.seed) if c.seed != c.produce else outp
+		_ok("%s: the farmer's harvest is the hand's less the kept seed (%d/%d vs %d/%d)" % [id, outp, outs,
+				int(got.count), int(got.seeds)], int(a.get("autos", 0)) == 1 and outp == exp_p
+				and (c.seed == c.produce or outs == exp_s))
+		_ok("%s: %s" % [id, "back to its regrow stage" if perennial else "replanted at once"], a.crop == id
+				and int(a.stage) == (int(c.regrow_to) if perennial else 0) and int(a.picks) == (1 if perennial else 0))
+	var tp := _auto_plot(&"wheat", Vector3i(4, 3, 2))
+	FarmPlant.settle(tp, float(tp.t) + d * 6.0)
+	var seed_data := {}
+	for e in tp.auto_out:
+		if str(e[0]) == "wheat_seeds":
+			seed_data = e[2]
+	_ok("its seeds carry the plant's traits (%s), and so does the next planting (%s)" % [str(seed_data),
+			str(FarmPlant.traits(tp))], int(seed_data.get("g", 0)) >= 4 and FarmPlant.traits(tp).x >= 4)
+	var oak := _auto_plot(&"oak_tree")
+	FarmPlant.settle(oak, float(oak.t) + d * 12.0)
+	_ok("a timber sapling is left to become a tree", FarmPlant.is_ripe(oak) and int(oak.get("autos", 0)) == 0)
+	FarmPlant.trouble = true
+	var wp := _auto_plot(&"wheat")
+	_ok("no weeds come up on an auto plot", FarmPlant.hazards(wp, FarmCrops.get_crop(&"wheat"))[FarmPlant.EV_WEEDS] == 0.0)
+	var old := FarmPlant.to_row(_plot(&"wheat"))
+	old.resize(38)
+	var ob := FarmPlant.from_row(old)
+	_ok("a 38-field row loads with no auto farmer", not bool(ob.auto) and (ob.auto_out as Array).is_empty())
+	_ok("the auto farmer is a station with a recipe", ItemCatalog.kind(&"auto_farmer") == "station"
+			and RecipeBook.all().any(func(r) -> bool: return str(r.output) == "auto_farmer"))
+	_ok("its areas: the cap is %d plots, a brick of headroom (fence rails stop it)" % FarmAuto.PLOTS,
+			FarmAuto.HEAD >= 3 and FarmAuto.PLOTS >= 8)

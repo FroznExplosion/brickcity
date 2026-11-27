@@ -44,6 +44,13 @@ extends RefCounted
 ##   biome    int    BrickTerrain.biome_at under it
 ##   planted  float  world time it was planted
 ##   picks    int    harvests of this planting (a perennial's count)
+##   AUTO FARMER (HandoffFarming.md 7.3): auto (cached like wet: an auto
+##   farmer's fenced area takes it in), auto_by (that farmer's chest key),
+##   auto_out ([[item, count, data], ...] what it harvested and has not yet
+##   carried to its chests). An auto plot is harvested INSIDE settle the
+##   moment it ripens, one seed kept back and replanted at once (`_auto_pick`),
+##   so a farm keeps working while its ground is unloaded, exactly.
+##   ground "tree": a fruit tree standing on the plot (MineFarming).
 
 ## A mine world day, seconds (MineWorld DAY_SECONDS; farm_probe checks it).
 const DAY := 1200.0
@@ -187,7 +194,8 @@ static func new_plot(b: Vector3i, now: float, fert: float, biome: int) -> Dictio
 			"wet_until": 0.0, "boost_until": 0.0, "ground": "farm",
 			"open": false, "scared": false, "mono": false, "weeds": false, "mulch": false,
 			"haz_acc": 0.0, "haz_next": 1.0, "events": 0, "packed": false, "last_event": "", "event_at": 0.0,
-			"tg": 0, "ty": 0, "th": 0, "companion": false, "giant": 0, "gdx": 0, "gdz": 0}
+			"tg": 0, "ty": 0, "th": 0, "companion": false, "giant": 0, "gdx": 0, "gdz": 0,
+			"auto": false, "auto_by": "", "auto_out": []}
 
 
 ## A seed stack's traits ({"g", "y", "h"} in its data) as a Vector3i.
@@ -209,6 +217,14 @@ static func traits(plot: Dictionary) -> Vector3i:
 
 static func plant(plot: Dictionary, crop: StringName, now: float, seed_traits := Vector3i.ZERO) -> void:
 	settle(plot, now)
+	_sow(plot, crop, now, seed_traits)
+	plot.seed = seed_for(plot.b, now)
+	plot.haz_next = _next_draw(plot)
+
+
+## A new planting at `now`, with no settle (settle's own auto replant calls
+## it mid-walk). The caller sets its seed.
+static func _sow(plot: Dictionary, crop: StringName, now: float, seed_traits: Vector3i) -> void:
 	plot.tg = seed_traits.x
 	plot.ty = seed_traits.y
 	plot.th = seed_traits.z
@@ -220,11 +236,9 @@ static func plant(plot: Dictionary, crop: StringName, now: float, seed_traits :=
 	plot.stress = 0
 	plot.planted = now
 	plot.picks = 0
-	plot.seed = seed_for(plot.b, now)
 	plot.weeds = false
 	plot.events = 0
 	plot.haz_acc = 0.0
-	plot.haz_next = _next_draw(plot)
 	plot.last_event = ""
 
 
@@ -335,6 +349,13 @@ static func settle(plot: Dictionary, now: float) -> bool:
 	var guard := 0
 	while t0 < now and guard < 4096:
 		guard += 1
+		# An auto farmer's plot ripe: picked and replanted at this moment.
+		if int(plot.stage) >= last and _auto_ripe(plot, crop):
+			changed = true
+			_auto_pick(plot, crop, t0)
+			if plot.crop == &"":
+				plot.fert = minf(100.0, float(plot.fert) + FALLOW_PER_DAY * (now - t0) / DAY)
+				break
 		var wu := float(plot.get("wet_until", 0.0))
 		var bu := float(plot.get("boost_until", 0.0))
 		var t1 := now
@@ -383,10 +404,73 @@ static func settle(plot: Dictionary, now: float) -> bool:
 				# The crop is gone: the rest of the time the soil rests.
 				plot.fert = minf(100.0, float(plot.fert) + FALLOW_PER_DAY * (now - te) / DAY)
 				break
-	if int(plot.stage) >= last and plot.crop != &"":
+	if plot.crop != &"" and int(plot.stage) >= last:
 		plot.p = 0.0
 	plot.t = now
 	return changed
+
+
+## Does the auto farmer pick this ripe plot? Not a timber sapling (it becomes
+## a tree) and not a giant (near only, the player's).
+static func _auto_ripe(plot: Dictionary, crop: Dictionary) -> bool:
+	return bool(plot.get("auto", false)) and not crop.is_empty() and not FarmCrops.is_timber(crop) \
+			and int(plot.get("giant", 0)) == 0
+
+
+## The auto farmer's harvest at world time `t` (HandoffFarming.md 7.3): the
+## same rolls as a hand's (`_pick`), into the plot's `auto_out`; one seed
+## kept back (its own seeds, or one produce for a crop planted as it is) and
+## sown at `t` with that seed's traits; a perennial just goes back to its
+## regrow stage. No seed to keep: the plot is left bare. Pure: the new
+## planting's seed comes from the old one, never from the time, so a cut
+## anywhere gives the same plants.
+static func _auto_pick(plot: Dictionary, crop: Dictionary, t: float) -> void:
+	var old_seed := int(plot.seed)
+	var got := _pick(plot, crop, t)
+	var n := int(got.count)
+	var seeds := int(got.seeds)
+	var keep := false
+	var keep_data: Dictionary = {}
+	if plot.crop == &"":
+		if seeds > 0:
+			seeds -= 1
+			keep = true
+			keep_data = got.seed_data
+		elif crop.produce == crop.seed and n > 0:
+			n -= 1
+			keep = true
+			keep_data = got.produce_data
+	out_add(plot, crop.produce, n, got.produce_data)
+	out_add(plot, crop.seed, seeds, got.seed_data)
+	if keep:
+		_sow(plot, crop.id, t, traits_of(keep_data))
+		plot.seed = mix32(old_seed ^ 0x2545f491)
+		plot.haz_next = _next_draw(plot)
+		plot.weeds = false
+	plot.autos = int(plot.get("autos", 0)) + 1
+
+
+## Add n of `id` (with `data`) to the plot's auto_out, merged by item and data.
+static func out_add(plot: Dictionary, id: StringName, n: int, data: Dictionary) -> void:
+	if n <= 0 or id == &"":
+		return
+	var out: Array = plot.get("auto_out", [])
+	for e in out:
+		if str(e[0]) == String(id) and e[2] == data:
+			e[1] = int(e[1]) + n
+			plot.auto_out = out
+			return
+	out.append([String(id), n, data.duplicate()])
+	plot.auto_out = out
+
+
+## What auto_out holds of `id`, all data.
+static func out_count(plot: Dictionary, id: StringName) -> int:
+	var n := 0
+	for e in plot.get("auto_out", []):
+		if str(e[0]) == String(id):
+			n += int(e[1])
+	return n
 
 
 ## Random trouble (Docs/MineFarming.md 9), per second, for the plot as it is.
@@ -401,7 +485,8 @@ static func hazards(plot: Dictionary, crop: Dictionary) -> PackedFloat64Array:
 	# the same.
 	if ripe and BIRD_FAMILIES.has(str(crop.family)) and float(plot.sky) > 0.5:
 		out[EV_BIRDS] = BIRDS_PER_DAY / DAY * (SCARED if bool(plot.get("scared", false)) else 1.0)
-	if not bool(plot.get("weeds", false)) and not bool(plot.get("mulch", false)) and int(crop.tree) < 0:
+	if not bool(plot.get("weeds", false)) and not bool(plot.get("mulch", false)) and int(crop.tree) < 0 \
+			and not bool(plot.get("auto", false)):
 		out[EV_WEEDS] = WEEDS_PER_DAY / DAY
 	if bool(plot.get("mono", false)) and int(crop.tree) < 0:
 		out[EV_BLIGHT] = BLIGHT_PER_DAY / DAY
@@ -482,7 +567,11 @@ static func harvest(plot: Dictionary, now: float) -> Dictionary:
 	settle(plot, now)
 	if not is_ripe(plot):
 		return {}
-	var crop := crop_of(plot)
+	return _pick(plot, crop_of(plot), now)
+
+
+## A ripe plot picked at `now`, with no settle (the auto farmer picks mid-walk).
+static func _pick(plot: Dictionary, crop: Dictionary, now: float) -> Dictionary:
 	var st := stars(plot)
 	var y: Vector2i = crop.yield
 	var n := y.x + int(roll(int(plot.seed), 1000, int(plot.picks)) * (y.y - y.x + 1))
@@ -595,7 +684,29 @@ static func to_row(plot: Dictionary) -> Array:
 			float(plot.get("haz_next", 1.0)), int(plot.get("events", 0)), bool(plot.get("packed", false)),
 			str(plot.get("last_event", "")), float(plot.get("event_at", 0.0)),
 			int(plot.get("tg", 0)), int(plot.get("ty", 0)), int(plot.get("th", 0)), bool(plot.get("companion", false)),
-			int(plot.get("giant", 0)), int(plot.get("gdx", 0)), int(plot.get("gdz", 0))]
+			int(plot.get("giant", 0)), int(plot.get("gdx", 0)), int(plot.get("gdz", 0)),
+			bool(plot.get("auto", false)), str(plot.get("auto_by", "")), _out_row(plot.get("auto_out", [])),
+			int(plot.get("autos", 0))]
+
+
+## auto_out as JSON keeps it (a data dict with int values stays one).
+static func _out_row(out: Array) -> Array:
+	var r := []
+	for e in out:
+		r.append([str(e[0]), int(e[1]), (e[2] as Dictionary).duplicate()])
+	return r
+
+
+static func _out_from(v) -> Array:
+	var r := []
+	if v is Array:
+		for e in v:
+			if e is Array and (e as Array).size() >= 3 and e[2] is Dictionary:
+				var data := {}
+				for k in (e[2] as Dictionary):
+					data[str(k)] = int(e[2][k])
+				r.append([str(e[0]), int(e[1]), data])
+	return r
 
 
 static func from_row(r: Array) -> Dictionary:
@@ -617,4 +728,6 @@ static func from_row(r: Array) -> Dictionary:
 			"tg": int(r[31]) if r.size() > 37 else 0, "ty": int(r[32]) if r.size() > 37 else 0,
 			"th": int(r[33]) if r.size() > 37 else 0, "companion": bool(r[34]) if r.size() > 37 else false,
 			"giant": int(r[35]) if r.size() > 37 else 0, "gdx": int(r[36]) if r.size() > 37 else 0,
-			"gdz": int(r[37]) if r.size() > 37 else 0}
+			"gdz": int(r[37]) if r.size() > 37 else 0,
+			"auto": bool(r[38]) if r.size() > 41 else false, "auto_by": str(r[39]) if r.size() > 41 else "",
+			"auto_out": _out_from(r[40]) if r.size() > 41 else [], "autos": int(r[41]) if r.size() > 41 else 0}

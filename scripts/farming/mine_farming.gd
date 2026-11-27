@@ -64,6 +64,13 @@ const SCARE_M := 8.0
 const SPRINKLER_PLOTS := 3
 const COLLECTOR_PLOTS := 4
 const AUTO_PLATES := 6
+## The auto farmer (HandoffFarming.md 7.3, Docs/MineFarming.md 24): it
+## carries what it harvested into the chests within this of it, plants bare
+## tilled plots from seeds in them and composts plots under this fertility.
+const FARMER_CHEST_M := 8.0
+const FARMER_COMPOST_UNDER := 40.0
+## Its own chores (carry, plant, compost) this often while in reach.
+const FARMER_EVERY := 1.0
 ## Stage 6 (Docs/MineFarming.md 20). A bare tilled plot between two ripe
 ## plants of one crop (in a line) sprouts a cross of them about once in this
 ## many in-game days (while in reach).
@@ -98,6 +105,17 @@ var crossed := 0
 var giants := 0
 var collected := 0
 var shaken := 0
+## The auto farmers (HandoffFarming.md 7.3): their areas on a worker; what
+## they carried to chests, planted and composted while in reach.
+var auto := FarmAuto.new()
+var auto_moved := 0
+var auto_planted := 0
+var auto_composted := 0
+var _farmers: Array = []             ## [[block, key], ...] gathered with the scarecrows
+var _farmer_keys := {}
+var _auto_in := 0.0
+var _auto_seen_version := -1
+var _auto_seen_keys := ""
 ## Fields and enclosure (stage 5): grouped plots, a flood on a worker.
 var fields := FarmFields.new()
 ## Bumped by every terrain edit (`terrain_changed`): a plot's light is asked
@@ -194,6 +212,7 @@ func step(delta: float, eye: Vector3) -> void:
 				refresh(b)
 				worst_refresh_us = maxi(worst_refresh_us, Time.get_ticks_usec() - t0)
 	fields.step(delta, store, _apply_field)
+	_auto_step(delta, eye)
 	if _draw_dirty or _drawn_eye == Vector3.INF or Vector2(eye.x - _drawn_eye.x, eye.z - _drawn_eye.z).length() > 8.0:
 		_draw_dirty = false
 		_drawn_eye = eye
@@ -288,6 +307,7 @@ func _gather_scarecrows() -> void:
 	_scarecrows.clear()
 	_sprinklers.clear()
 	_collectors.clear()
+	_farmers.clear()
 	var chests: MineChests = host.chests
 	if chests == null:
 		return
@@ -300,6 +320,12 @@ func _gather_scarecrows() -> void:
 				_sprinklers.append(chests.chests[key].block)
 			&"collector":
 				_collectors.append([chests.chests[key].block, key])
+			&"auto_farmer":
+				_farmers.append([chests.chests[key].block, key])
+	_farmers.sort_custom(func(a, b) -> bool: return str(a[1]) < str(b[1]))
+	_farmer_keys.clear()
+	for fr in _farmers:
+		_farmer_keys[str(fr[1])] = true
 
 
 func _in_reach(block: Vector3i, b: Vector3i, plots: int) -> bool:
@@ -393,6 +419,179 @@ static func _find_in(slots: Array, id: StringName, data) -> int:
 		if o is ItemStack and (o as ItemStack).id == id and (data == null or (o as ItemStack).data == data):
 			return i
 	return -1
+
+
+# ---------------------------------------------------------------------------
+# The auto farmer (HandoffFarming.md 7.3, Docs/MineFarming.md 24)
+
+## The farmers whose areas are kept: those near enough to tend a plot in reach.
+func _near_farmers(eye: Vector3) -> Array:
+	var out := []
+	var r := NEAR_M + FarmAuto.PLOTS * 2.0 * _stud
+	for fr in _farmers:
+		var at := _farmer_at(fr[0])
+		if Vector2(at.x - eye.x, at.z - eye.z).length() <= r:
+			out.append(fr)
+	return out
+
+
+func _farmer_at(block: Vector3i) -> Vector3:
+	return Vector3((block.x * 2 + 1) * _stud, block.y * _plate, (block.z * 2 + 1) * _stud)
+
+
+## Every frame: the areas (a flood on a worker, FarmAuto), the plots' cached
+## flags when an area came in or plots came or went, and once a FARMER_EVERY
+## the chores of each farmer in reach.
+func _auto_step(delta: float, eye: Vector3) -> void:
+	_ensure_gathered()
+	var near := _near_farmers(eye)
+	var got := auto.step(delta, near, str(_terrain_ver))
+	var keys := ",".join(PackedStringArray(_farmer_keys.keys()))
+	if got or store.version != _auto_seen_version or keys != _auto_seen_keys:
+		_auto_seen_version = store.version
+		_auto_seen_keys = keys
+		apply_auto()
+	_auto_in -= delta
+	if _auto_in <= 0.0 and not _farmers.is_empty():
+		_auto_in = FARMER_EVERY
+		for fr in near:
+			if auto.areas.has(str(fr[1])):
+				tend(str(fr[1]))
+
+
+## Each plot in reach: in an auto farmer's area or not (the first farmer by
+## key whose area holds it). A change settles the plot FIRST (what grew
+## before grew under the old flag), as every cached flag does. A plot whose
+## farmer stands but is out of reach keeps its flag; one whose farmer is gone
+## loses it, and what the farmer had not carried yet drops on the plot.
+func apply_auto() -> void:
+	var t := now()
+	for b in _near:
+		var plot := store.get_plot(b)
+		if plot.is_empty():
+			continue
+		var by := str(plot.get("auto_by", ""))
+		if by != "" and _farmer_keys.has(by) and not auto.areas.has(by):
+			continue                      # its farmer is out of reach: unknown, kept
+		var want := ""
+		for k in auto.areas:
+			if _farmer_keys.has(k) and FarmAuto.has_plot(auto.areas[k], b) and (want == "" or str(k) < want):
+				want = str(k)
+		if want == by and bool(plot.get("auto", false)) == (want != ""):
+			continue
+		FarmPlant.settle(plot, t)
+		if want == "" and not (plot.get("auto_out", []) as Array).is_empty():
+			var at := _top_middle(b) + Vector3(0, 0.3, 0)
+			for e in plot.auto_out:
+				host.drops.spawn(ItemStack.make(StringName(str(e[0])), int(e[1]), e[2]), at)
+			plot.auto_out = []
+		plot.auto = want != ""
+		plot.auto_by = want
+		if want != "":
+			plot.weeds = false            # the farmer pulls them
+		store.touch(b)
+		log_lines.append("auto %s %s" % ["on (%s)" % want if want != "" else "off", b])
+
+
+## The containers within FARMER_CHEST_M of farmer `key`, nearest first.
+func farmer_chests(key: String) -> Array:
+	var chests: MineChests = host.chests
+	if not chests.chests.has(key):
+		return []
+	var at := chests.box_of(chests.chests[key].block).get_center()
+	var out: Array = []
+	for k in chests.chests:
+		if k != key and MineChests.is_container(chests.item_of(k)) \
+				and chests.box_of(chests.chests[k].block).get_center().distance_to(at) <= FARMER_CHEST_M:
+			out.append(k)
+	out.sort_custom(func(a, b) -> bool:
+			return chests.box_of(chests.chests[a].block).get_center().distance_to(at) \
+					< chests.box_of(chests.chests[b].block).get_center().distance_to(at))
+	return out
+
+
+## A farmer's chores, in reach: each of its plots settled (its harvests and
+## replanting happen in there), what it harvested carried into the chests
+## near it (what does not fit stays on the plot -- nothing is lost, a full
+## chest only holds it back), bare tilled plots planted from seeds in those
+## chests, poor ones composted from them.
+func tend(key: String) -> void:
+	var t := now()
+	var chests: MineChests = host.chests
+	var keys := farmer_chests(key)
+	var changed_items := false
+	for b in _near:
+		var plot := store.get_plot(b)
+		if plot.is_empty() or str(plot.get("auto_by", "")) != key or not bool(plot.get("auto", false)):
+			continue
+		if FarmPlant.settle(plot, t):
+			_draw_dirty = true
+			store.touch(b)
+			_after_settle(plot)
+			if store.get_plot(b).is_empty():
+				continue
+		var out: Array = plot.get("auto_out", [])
+		if not out.is_empty() and not keys.is_empty():
+			var left_out: Array = []
+			for e in out:
+				var n := int(e[1])
+				for k in keys:
+					if n <= 0:
+						break
+					n = _put_in(chests.slots_of(k), StringName(str(e[0])), n, e[2])
+				if n < int(e[1]):
+					auto_moved += int(e[1]) - n
+					changed_items = true
+				if n > 0:
+					left_out.append([e[0], n, e[2]])
+			plot.auto_out = left_out
+			store.touch(b)
+		if plot.crop == &"" and str(plot.get("ground", "farm")) == "farm":
+			var pick := _seed_in(keys, plot)
+			if not pick.is_empty():
+				var st: ItemStack = chests.slots_of(pick[0])[pick[1]]
+				FarmPlant.plant(plot, FarmCrops.crop_of_seed(st.id), t, FarmPlant.traits_of(st.data))
+				st.count -= 1
+				if st.count <= 0:
+					chests.slots_of(pick[0])[pick[1]] = null
+				auto_planted += 1
+				changed_items = true
+				_draw_dirty = true
+				store.touch(b)
+				log_lines.append("auto farmer %s planted %s at %s" % [key, plot.crop, b])
+		if plot.crop != &"" and float(plot.fert) < FARMER_COMPOST_UNDER:
+			for k in keys:
+				var slots: Array = chests.slots_of(k)
+				var i := _find_in(slots, &"compost", null)
+				if i >= 0 and fertilise(plot, ItemCatalog.get_def(&"compost")):
+					var cs: ItemStack = slots[i]
+					cs.count -= 1
+					if cs.count <= 0:
+						slots[i] = null
+					auto_composted += 1
+					changed_items = true
+					break
+	if changed_items and host.has_method("world_items_changed"):
+		host.world_items_changed()
+
+
+## A seed in the farmer's chests that will grow on this tilled plot: [chest
+## key, slot], or []. The nearest chest first, its slots in order.
+func _seed_in(keys: Array, plot: Dictionary) -> Array:
+	var chests: MineChests = host.chests
+	for k in keys:
+		var slots: Array = chests.slots_of(k)
+		for i in slots.size():
+			var o = slots[i]
+			if not (o is ItemStack):
+				continue
+			var crop := FarmCrops.crop_of_seed((o as ItemStack).id)
+			if crop == &"":
+				continue
+			var c := FarmCrops.get_crop(crop)
+			if str(c.ground) == "farm" and grows_here(c, int(plot.biome)):
+				return [k, i]
+	return []
 
 
 # ---------------------------------------------------------------------------
@@ -1467,4 +1666,9 @@ func look_text(target: Dictionary) -> String:
 		soil += ", mulched"
 	if bool(plot.get("scared", false)):
 		soil += ", scarecrow near"
+	if bool(plot.get("auto", false)):
+		var waiting := 0
+		for e in plot.get("auto_out", []):
+			waiting += int(e[1])
+		soil += ", tended by an auto farmer" + (" (%d waiting for room in its chests)" % waiting if waiting > 0 else "")
 	return line + "\n" + soil

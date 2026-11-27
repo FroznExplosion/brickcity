@@ -445,6 +445,15 @@
 			"tags": [
 				"crop"
 			]
+		},
+		"auto_farmer": {
+			"name": "Auto farmer",
+			"kind": "station",
+			"model": "auto_farmer",
+			"hand": "right",
+			"colour": "#d2a03a",
+			"glyph": "A",
+			"description": "Place it in a field with a chest beside it: it tends every plot it can walk to within 12 plots -- fence the field to keep it in. Ripe crops are harvested and replanted at once, also while you are far away; when you come back it carries the harvest into chests within 8 m, plants bare tilled plots from seeds in them and composts poor ones. A full chest just holds the rest back."
 		}
 	}
 }
