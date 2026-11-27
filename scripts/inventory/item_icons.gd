@@ -391,6 +391,10 @@ static func _model(d: Dictionary) -> Node3D:
 				_part(inner, _box(Vector3(0.35, 0.8, 1.0)), _mat(Color(0.12, 0.13, 0.15), 0.5), Vector3(0, 0.4, 0))
 				_part(inner, _box(Vector3(0.04, 0.4, 0.14)), _mat(col, 0.3, 1.0, true), Vector3(0.18, 0.4, -0.12))
 				_part(inner, _box(Vector3(0.04, 0.4, 0.14)), _mat(col, 0.3, 1.0, true), Vector3(0.18, 0.4, 0.12))
+			elif dm == "piston":
+				# A grey body, the head plate (the item's colour) at the front.
+				_part(inner, _box(Vector3(0.65, 0.9, 0.9)), _mat(Color(0.33, 0.34, 0.37), 0.6), Vector3(-0.17, 0.45, 0))
+				_part(inner, _box(Vector3(0.22, 0.95, 0.95)), _mat(col, 0.55), Vector3(0.3, 0.45, 0))
 			elif dm == "button":
 				_part(inner, _box(Vector3(0.9, 0.4, 0.9)), _mat(Color(0.5, 0.5, 0.52), 0.6), Vector3(0, 0.2, 0))
 				_part(inner, _box(Vector3(0.5, 0.2, 0.5)), _mat(col, 0.35), Vector3(0, 0.5, 0))

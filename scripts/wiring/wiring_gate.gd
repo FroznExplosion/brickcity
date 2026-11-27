@@ -41,6 +41,17 @@ extends RefCounted
 ##   display   a number display laid with the builder reads 15 beside a lever.
 ##   sequencer a sequencer's program runs out of its front in the real tick:
 ##             its lamp is lit, then dark, then lit.
+## Stage 4 (Docs/MineWiring.md 18), with real placed bricks:
+##   piston    laid with the builder looking straight down: faces up; a
+##             2x2 placed brick on it stands (the collapse leaves what rests
+##             on a piston); a lever pushes it a course up, still one placed
+##             brick, still standing on the head; off, the head comes in and
+##             the brick falls; a stack of 3 rides up with the player on top
+##             (lifted a course); 13 bricks stall; ground of the world in
+##             front stalls a sideways one; sideways the brick in its line is
+##             pushed too; a sticky one pulls its brick (and the one on it)
+##             back; pushed bricks are where they were pushed after a reload.
+##   pictures  user://dev/wiring_pistons.png.
 ## Preloaded by mine_world.gd (`--gate=wiring`).
 
 var w: Node = null
@@ -346,6 +357,137 @@ func run(host: Node) -> void:
 			seq += ch
 	check("the sequencer's lamp: lit, dark, lit, dark (%s)" % seq, seq.begins_with("01010") or seq.begins_with("1010"))
 
+	# --- stage 4: pistons (Docs/MineWiring.md 18), on a second flat patch
+	var zp := z0 + 16
+	for res in [BrickTerrain.fill_box(Vector3i(x0 - 2, top + 1, zp - 2), Vector3i(x0 + 17, top + 60, zp + 12), 0, false),
+			BrickTerrain.fill_box(Vector3i(x0 - 2, top - 6, zp - 2), Vector3i(x0 + 17, top, zp + 12), BrickTerrain.MAT_STONE, false)]:
+		w.terrain_edited(res)
+	await w._frames(20)
+	var up := MineWiring.FACE_UP
+	var dark := BrickTerrain.MAT_DARK_STONE
+	# Laid with the builder looking straight down: it faces up.
+	var pu := Vector3i(x0 + 2, y, zp)
+	w._fly_to(Vector3((pu.x + 0.5) * stud - 0.9, y * plate + 1.2, (pu.z + 0.5) * stud), Vector3(1, 0, 0))
+	w.walker.pitch = -1.45
+	await w._frames(4)
+	_hold(&"piston")
+	w.builder.target = {"cell": Vector3i(pu.x, top, pu.z), "normal": Vector3i.UP}
+	check("RMB with a piston, looking straight down, lays one facing up", w.builder.place_target()
+			and wr.devices.has(pu) and int(wr.devices[pu].facing) == up)
+	_lay_brick(pu + Vector3i(0, 3, 0), 2, 2, dark)
+	await w._frames(30)
+	check("a placed 2x2 brick on its top stands (the piston holds it up)", _is_brick(pu + Vector3i(0, 3, 0), 2, 2))
+	var plev := Vector3i(pu.x - 1, y, pu.z)
+	wr.place_device(plev, &"lever")
+	await _settle()
+	wr.use_device(plev)
+	await _settle()
+	check("the lever on: out, the brick a course up, still one 2x2 placed brick", bool(wr.devices[pu].on)
+			and _is_brick(pu + Vector3i(0, 6, 0), 2, 2) and BrickTerrain.solid_at(pu.x, y + 3, pu.z) == 0)
+	await w._frames(40)
+	check("and the collapse leaves it standing on the head", _is_brick(pu + Vector3i(0, 6, 0), 2, 2))
+	await _picture(Vector3((pu.x + 1) * stud, y * plate, (pu.z + 1) * stud), Vector3(-2.2, 1.8, -2.4), "wiring_pistons.png")
+	wr.use_device(plev)
+	await _settle()
+	await w._frames(60)
+	check("off: the head comes in and the brick it held falls (%s)" % str(BrickTerrain.placed_rect(pu.x, floori((y + 6) / 3.0), pu.z)),
+			not bool(wr.devices[pu].on) and BrickTerrain.solid_at(pu.x, y + 6, pu.z) == 0)
+	# A stack of 3 clutched on each other rides up, with the player on top.
+	var p2 := Vector3i(x0 + 6, y, zp)
+	wr.place_device(p2, &"piston", false, false, up)
+	_lay_brick(p2 + Vector3i(0, 3, 0), 2, 2, dark)
+	_lay_brick(p2 + Vector3i(1, 6, 0), 1, 2, dark)
+	_lay_brick(p2 + Vector3i(1, 9, 1), 1, 1, dark)
+	var lev2 := Vector3i(p2.x - 1, y, p2.z)
+	wr.place_device(lev2, &"lever")
+	await _settle()
+	var stand := Vector3((p2.x + 1.5) * stud, (y + 12) * plate, (p2.z + 1.5) * stud)
+	w._fly_to(stand, Vector3(1, 0, 0))
+	await w._frames(10)
+	var feet0: Vector3 = w.player_feet_local()
+	wr.use_device(lev2)
+	await _settle()
+	var feet1: Vector3 = w.player_feet_local()
+	check("a stack of 3 clutched bricks rides up together (stall '%s')" % wr.last_stall, _is_brick(p2 + Vector3i(0, 6, 0), 2, 2)
+			and _is_brick(p2 + Vector3i(1, 9, 0), 1, 2) and _is_brick(p2 + Vector3i(1, 12, 1), 1, 1))
+	check("the player on top is lifted (%.2f m)" % (feet1.y - feet0.y), feet1.y - feet0.y > 3 * plate - 0.08)
+	w._fly_to(Vector3((x0 + 4) * stud, y * plate + 3.0, (zp - 3) * stud), Vector3(0, 0, 1))
+	# 13 bricks stall.
+	var p3 := Vector3i(x0 + 10, y, zp)
+	wr.place_device(p3, &"piston", false, false, up)
+	for k in 13:
+		_lay_brick(p3 + Vector3i(0, 3 + 3 * k, 0), 1, 1, dark)
+	wr.place_device(Vector3i(p3.x - 1, y, p3.z), &"lever", true)
+	await _settle()
+	check("13 bricks on it: stalled (%s)" % wr.last_stall, not bool(wr.devices[p3].on)
+			and _is_brick(p3 + Vector3i(0, 3, 0), 1, 1) and wr.last_stall.contains("more than"))
+	# Ground (not placed) in front stalls a sideways one.
+	var p4 := Vector3i(x0 + 2, y, zp + 4)
+	wr.place_device(p4, &"piston", false, false, 0)
+	w.terrain_edited(BrickTerrain.fill_box(p4 + Vector3i(1, 0, 0), p4 + Vector3i(1, 2, 0), BrickTerrain.MAT_STONE, false))
+	wr.place_device(p4 + Vector3i(-1, 0, 0), &"lever", true)
+	await _settle()
+	check("ground of the world in front stalls it (%s)" % wr.last_stall, not bool(wr.devices[p4].on)
+			and wr.last_stall.contains("ground"))
+	# Sideways: the brick hops a stud over, the one in its line is pushed too.
+	var p5 := Vector3i(x0 + 2, y, zp + 7)
+	wr.place_device(p5, &"piston", false, false, 0)
+	_lay_brick(p5 + Vector3i(1, 0, 0), 2, 1, dark)
+	_lay_brick(p5 + Vector3i(3, 0, 0), 1, 1, dark)
+	var lev5 := p5 + Vector3i(-1, 0, 0)
+	wr.place_device(lev5, &"lever")
+	await _settle()
+	wr.use_device(lev5)
+	await _settle()
+	check("sideways: the 2x1 a stud over, the brick in its line pushed too", bool(wr.devices[p5].on)
+			and _is_brick(p5 + Vector3i(2, 0, 0), 2, 1) and _is_brick(p5 + Vector3i(4, 0, 0), 1, 1)
+			and BrickTerrain.solid_at(p5.x + 1, y, p5.z) == 0)
+	# Sticky: out and back, with the brick clutched on it.
+	var p6 := Vector3i(x0 + 10, y, zp + 7)
+	wr.place_device(p6, &"sticky_piston", false, false, 0)
+	_lay_brick(p6 + Vector3i(1, 0, 0), 1, 1, dark)
+	_lay_brick(p6 + Vector3i(1, 3, 0), 1, 1, dark)
+	var lev6 := p6 + Vector3i(-1, 0, 0)
+	wr.place_device(lev6, &"lever")
+	await _settle()
+	wr.use_device(lev6)
+	await _settle()
+	check("sticky: pushed out", _is_brick(p6 + Vector3i(2, 0, 0), 1, 1) and _is_brick(p6 + Vector3i(2, 3, 0), 1, 1))
+	wr.use_device(lev6)
+	await _settle()
+	check("off: pulled back, the brick on it too", not bool(wr.devices[p6].on)
+			and _is_brick(p6 + Vector3i(1, 0, 0), 1, 1) and _is_brick(p6 + Vector3i(1, 3, 0), 1, 1)
+			and BrickTerrain.solid_at(p6.x + 2, y, p6.z) == 0)
+
+	# A chest on a lifted brick rides up; on one pushed sideways it stalls
+	# the push (chests keep to their 2-stud grid).
+	var ch: MineChests = w.chests
+	var bx := floori((x0 + 14) / 2.0)
+	var bz := floori(zp / 2.0)
+	var p7 := Vector3i(bx * 2, y, bz * 2)
+	wr.place_device(p7, &"piston", false, false, up)
+	_lay_brick(p7 + Vector3i(0, 3, 0), 2, 2, dark)
+	var cblock := Vector3i(bx, y + 6, bz)
+	check("a chest on the brick over a piston", ch.place(cblock, [], true))
+	var lev7 := Vector3i(p7.x - 1, y, p7.z)
+	wr.place_device(lev7, &"lever")
+	await _settle()
+	wr.use_device(lev7)
+	await _settle()
+	check("the lever on: the chest rode up a course with the brick (stall '%s')" % wr.last_stall,
+			ch.chests.has(MineChests.key_of(cblock + Vector3i(0, 3, 0))) and _is_brick(p7 + Vector3i(0, 6, 0), 2, 2))
+	var bx2 := floori((x0 + 4) / 2.0)
+	var bz2 := floori((zp + 10) / 2.0)
+	var blo := Vector3i(bx2 * 2, y, bz2 * 2)
+	var p8 := blo + Vector3i(-1, 0, 0)
+	wr.place_device(p8, &"piston", false, false, 0)
+	_lay_brick(blo, 2, 2, dark)
+	ch.place(Vector3i(bx2, y + 3, bz2), [], true)
+	wr.place_device(p8 + Vector3i(-1, 0, 0), &"lever", true)
+	await _settle()
+	check("a chest on a brick pushed sideways stalls it (%s)" % wr.last_stall, not bool(wr.devices[p8].on)
+			and _is_brick(blo, 2, 2) and ch.chests.has(MineChests.key_of(Vector3i(bx2, y + 3, bz2))))
+
 	# --- save: generated again
 	var n_cables: int = wr.cables.size()
 	var n_dev: int = wr.devices.size()
@@ -361,6 +503,9 @@ func run(host: Node) -> void:
 			and wr.devices.has(trap) and wr.is_open(trap))
 	check("the gate tile wall is back, solid; the display reads 15", wall.all(func(t): return wr.devices.has(t) and not wr.is_open(t))
 			and wr.output_of(disp) == 15)
+	check("the pistons are back (one facing up); the pushed bricks where they were pushed",
+			wr.devices.has(pu) and int(wr.devices[pu].facing) == up and wr.devices.has(p6)
+			and _is_brick(p5 + Vector3i(2, 0, 0), 2, 1) and _is_brick(p6 + Vector3i(1, 0, 0), 1, 1))
 
 	print("[wiring-gate] %s" % ("WIRING-GATE PASS" if fails.is_empty() else "WIRING-GATE FAIL: " + "; ".join(fails)))
 	w.get_tree().quit(0 if fails.is_empty() else 1)
@@ -377,6 +522,37 @@ func _picture(mid: Vector3, off: Vector3, file: String) -> void:
 	await w._shot(UserPaths.DEV + file)
 	if w._hud_layer != null:
 		w._hud_layer.visible = true
+
+
+## A placed brick (one, as the builder lays a block): sx x sz studs, a course.
+func _lay_brick(lo: Vector3i, sx: int, sz: int, mat: int) -> void:
+	var hi := lo + Vector3i(sx - 1, 2, sz - 1)
+	var res: Dictionary = BrickTerrain.fill_box(lo, hi, mat, false)
+	BrickTerrain.mark_placed(lo, hi, mat)
+	w.terrain_edited(res)
+
+
+## One whole placed brick sx x sz with its low corner at `lo`?
+func _is_brick(lo: Vector3i, sx: int, sz: int) -> bool:
+	for x in range(lo.x, lo.x + sx):
+		for z in range(lo.z, lo.z + sz):
+			if BrickTerrain.placed_rect(x, floori(lo.y / 3.0), z) != Vector4i(lo.x, lo.z, sx, sz):
+				return false
+			for p in 3:
+				if BrickTerrain.solid_at(x, lo.y + p, z) == 0:
+					return false
+	return true
+
+
+## A wiring change and the moves it starts all done: more than two ticks,
+## then every piston move landed and its tiles in.
+func _settle() -> void:
+	await w._frames(16)
+	var n := 0
+	while not w.wiring._moves.is_empty() and n < 240:
+		await w._frames(1)
+		n += 1
+	await w._frames(4)
 
 
 func _hold(id: StringName) -> void:
