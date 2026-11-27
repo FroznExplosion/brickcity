@@ -422,13 +422,18 @@ a layout, not a rule.
   point -- is blocked whole (`DamageResult.blocked`, no damage, no status)
   and wears the shield by its damage (`data.wear`, shown as "Brick Shield
   83%"); worn out it breaks and is gone. Hits from the side or behind land.
-  Not done: slower walking while it is up, a block sound, armour (section 16).
+  Raised, you walk at 45% (`BLOCK_WALK`, the pawn's move_mult, put back as
+  it was), and a blocked hit thuds. A zombie's blow (it only shoves, the
+  player cannot be hurt yet) asks the same guard from where the zombie
+  stands: from in front the shield takes it, no shove, 1 wear
+  (`MineMobs.hit_player`, `hits_blocked`).
 - Tests: inventory_probe (the off-hand rules, pickups never into it, the
   quick slot and up flag saved); `--gate=inventory` 4a (stone laid from the
   off-hand with C and RMB), 4b (the off-hand pistol fires on RMB taps, a
   rifle lowers it, it comes back), 4c (B, X, the wheel, 3; saved), 4d
   (the shield: raised by RMB, a hit from in front blocked and worn, one
-  from behind lands, let go it lands, worn out it breaks).
+  from behind lands, a zombie's blow in front no shove and behind a shove,
+  the walk slowed and put back, let go it lands, worn out it breaks).
   2026-11-26: probe 147 ok, gate PASS (115 checks).
 
 ## 5. Tests

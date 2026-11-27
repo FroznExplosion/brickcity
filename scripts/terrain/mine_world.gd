@@ -2695,7 +2695,10 @@ func _shield_checks(check: Callable) -> void:
 	press.button_mask = MOUSE_BUTTON_MASK_RIGHT
 	Input.parse_input_event(press)
 	await _frames(15)
-	check.call("4d: RMB held raises it (the pawn's guard set)", hands.blocking and pool.guard.is_valid())
+	var walk0: float = hands.get("_walk_base")
+	check.call("4d: RMB held raises it (the pawn's guard set), walking slower (x%.2f)" % pawn.move_mult,
+			hands.blocking and pool.guard.is_valid() and walk0 >= 0.0
+			and is_equal_approx(pawn.move_mult, walk0 * MineHands.BLOCK_WALK))
 	await _shot(UserPaths.DEV + "inv_shield.png")
 	var src := Node3D.new()
 	add_child(src)
@@ -2708,6 +2711,22 @@ func _shield_checks(check: Callable) -> void:
 	src.global_position = c.global_position + c.global_transform.basis.z * 5.0
 	r = DamageSystem.resolve(DamagePacket.new(20.0, null, src), pool)
 	check.call("4d: a hit from behind lands (dealt %.1f)" % r.dealt, not r.blocked and r.dealt > 0.0)
+	# A zombie's blow (MineMobs.hit_player): in front, the shield takes it --
+	# no shove; behind, it shoves.
+	if mobs != null and on_foot:
+		var hitter := _GateHitter.new()
+		hitter.at = to_local(c.global_position - c.global_transform.basis.z * 1.2 - Vector3(0, 1.2, 0))
+		add_child(hitter)
+		var b0: int = mobs.hits_blocked
+		pawn.shove = Vector3.ZERO
+		mobs.hit_player(hitter, c.global_transform.basis.z)
+		check.call("4d: a zombie's blow from in front hits the shield: no shove", mobs.hits_blocked == b0 + 1
+				and pawn.shove == Vector3.ZERO)
+		hitter.at = to_local(c.global_position + c.global_transform.basis.z * 1.2 - Vector3(0, 1.2, 0))
+		mobs.hit_player(hitter, -c.global_transform.basis.z)
+		check.call("4d: ... from behind it shoves", mobs.hits_blocked == b0 + 1 and pawn.shove != Vector3.ZERO)
+		pawn.shove = Vector3.ZERO
+		hitter.queue_free()
 	var up := press.duplicate()
 	up.pressed = false
 	up.button_mask = 0
@@ -2715,8 +2734,8 @@ func _shield_checks(check: Callable) -> void:
 	await _frames(10)
 	src.global_position = c.global_position - c.global_transform.basis.z * 5.0
 	r = DamageSystem.resolve(DamagePacket.new(20.0, null, src), pool)
-	check.call("4d: let go, a hit from in front lands (dealt %.1f)" % r.dealt, not hands.blocking
-			and not pool.guard.is_valid() and r.dealt > 0.0)
+	check.call("4d: let go, a hit from in front lands (dealt %.1f), the walk as it was" % r.dealt, not hands.blocking
+			and not pool.guard.is_valid() and r.dealt > 0.0 and is_equal_approx(pawn.move_mult, walk0))
 	sh.data["wear"] = int(ItemCatalog.get_def(&"shield").get("durability", 336)) - 5
 	Input.parse_input_event(press)
 	await _frames(15)
@@ -2732,6 +2751,14 @@ func _shield_checks(check: Callable) -> void:
 	pool.reset()
 	pool.invulnerable = was_invulnerable
 	await _frames(5)
+
+
+## A stand-in for a zombie in _shield_checks: what MineMobs.hit_player reads.
+class _GateHitter extends Node:
+	var kind := &"zombie"
+	var at := Vector3.ZERO
+	func feet() -> Vector3:
+		return at
 
 
 ## A mouse button pressed for `frames` and let go, through the engine's input.

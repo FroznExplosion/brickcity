@@ -46,6 +46,8 @@ var wind_angle := 0.0
 var wind_hold := false
 ## For gates and the readout.
 var hits_on_player := 0
+## Of those, how many a raised shield took (no shove).
+var hits_blocked := 0
 var fields_built := 0
 var last_field_ms := 0.0
 var log_lines: Array[String] = []
@@ -171,11 +173,21 @@ func player_info() -> Dictionary:
 			"sprinting": sprinting, "light": maxf(sky * sun, lamp)}
 
 
-## A zombie's blow: a shove (the player cannot be hurt yet).
+## A zombie's blow: a shove (the player cannot be hurt yet) -- unless a
+## raised shield faces it (the pawn's HealthPool.guard, MineHands; Docs/
+## Inventory.md round four): then the shield takes it, no shove.
 func hit_player(z, dir: Vector3) -> void:
 	hits_on_player += 1
 	var p: Pawn = host.pawn if host.on_foot else null
 	if p != null and is_instance_valid(p):
+		if p.health != null and p.health.guard.is_valid():
+			var pk := DamagePacket.new(0.0, null, z)
+			pk.melee = true
+			pk.hit_position = (host as Node3D).to_global(z.feet() + Vector3(0, 1.2, 0))
+			if float(p.health.guard.call(pk)) <= 0.0:
+				hits_blocked += 1
+				log_line("%s hit the player's shield" % z.kind)
+				return
 		p.shove = Vector3(dir.x, 0.0, dir.z) * KNOCK + Vector3.UP * 2.5
 	log_line("%s hit the player" % z.kind)
 

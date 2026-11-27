@@ -60,6 +60,12 @@ const SHIELD_LOW := Vector3(-0.21, -0.17, -0.36)
 const SHIELD_UP := Vector3(-0.13, -0.1, -0.33)
 const SHIELD_SIZE := 0.22
 const SHIELD_RAISE := 0.12
+## Walking with the shield raised: this share of the speed (Minecraft's
+## sneak-slow block).
+const BLOCK_WALK := 0.45
+## The pawn's move_mult before the shield went up, or -1 while it is down.
+var _walk_base := -1.0
+var _block_snd: AudioStreamPlayer
 ## Where the off-hand gun is drawn, in the camera's frame, and how long.
 const OFF_POS := Vector3(-0.13, -0.065, -0.3)
 const OFF_LENGTH := 0.26
@@ -301,6 +307,14 @@ func _step_shield(delta: float) -> void:
 		var want := Callable(self, "guard") if blocking else Callable()
 		if pawn.health.guard != want:
 			pawn.health.guard = want
+	# Slower while it is up; back to what it was once it is down.
+	if pawn != null:
+		if blocking and _walk_base < 0.0:
+			_walk_base = pawn.move_mult
+			pawn.move_mult = _walk_base * BLOCK_WALK
+		elif not blocking and _walk_base >= 0.0:
+			pawn.move_mult = _walk_base
+			_walk_base = -1.0
 
 
 ## HealthPool.guard while the shield is raised: a hit from in front is
@@ -330,7 +344,19 @@ func guard(packet: DamagePacket) -> float:
 		return 1.0
 	blocked_hits += 1
 	_wear_shield(maxi(1, ceili(packet.amount)))
+	_play_block()
 	return 0.0
+
+
+## The thud of a blocked hit: a low knock, made once (CombatFeedback's tones).
+func _play_block() -> void:
+	if _block_snd == null:
+		_block_snd = AudioStreamPlayer.new()
+		_block_snd.name = "BlockSound"
+		_block_snd.stream = CombatFeedback._tone([330.0, 165.0, 98.0], 0.12, 28.0, 0.55)
+		_block_snd.bus = &"Master"
+		add_child(_block_snd)
+	_block_snd.play()
 
 
 ## `n` more wear on the shield; worn out, it breaks (gone from the off-hand).
