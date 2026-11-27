@@ -2861,11 +2861,16 @@ func _run_inventory_gate() -> void:
 		await _frames(3)
 		await _click(mk.get_global_rect().get_center())
 		await _frames(3)
-	check.call("picked: the crafting area shows the gravel result",
-			not scr.picked.is_empty() and scr.picked.name == "Gravel" and scr.result_slot().item_id == &"gravel")
+	var g0: ItemStack = inv.craft_grid[0]
+	check.call("picked: the book laid 12 stone in the 2x2 grid, the result shows gravel (Inventory.md 16)",
+			not scr.picked.is_empty() and scr.picked.name == "Gravel" and scr.result_slot().item_id == &"gravel"
+			and inv.craft_n == 2 and g0 != null and g0.count == 12)
 	await _click(scr.result_slot().get_global_rect().get_center())
 	await _frames(3)
-	check.call("a click on the result: 12 stone -> 12 gravel (gravel %d -> %d, stone %d -> %d)" % [gravel0,
+	check.call("a click on the result: 12 gravel onto the cursor (Minecraft's)", inv.cursor != null
+			and inv.cursor.id == &"gravel" and inv.cursor.count == 12 and inv.craft_grid[0] == null)
+	await _key(KEY_ESCAPE)
+	check.call("put back (Escape): 12 stone -> 12 gravel (gravel %d -> %d, stone %d -> %d)" % [gravel0,
 			_carried_count(inv, &"gravel"), stone0, _carried_count(inv, &"stone")],
 			_carried_count(inv, &"gravel") == gravel0 + 12 and _carried_count(inv, &"stone") == stone0 - 12)
 	var sb := scr.recipe_cell("Sandstone")
@@ -2880,6 +2885,31 @@ func _run_inventory_gate() -> void:
 	await _click(only.get_global_rect().get_center())
 	await _frames(3)
 	check.call("... off again: Sandstone back", scr.recipe_cell("Sandstone") != null)
+	# The recipe editor (16.3): its tab, the palette's wood clicked into a cell,
+	# Shift-click: +12. Not saved here (a test writes no recipe tables).
+	var ed_tab: Control = scr.get("_tabs")["editor"]
+	await _click(ed_tab.get_global_rect().get_center())
+	await _frames(5)
+	var ed: RecipeEditorPanel = scr.get("_editor")
+	check.call("the Editor tab shows the recipe editor and the palette", scr.page == "editor" and ed.is_visible_in_tree()
+			and (scr.get("_creative_scroll") as Control).is_visible_in_tree())
+	var wood_cat := _inv_slot(scr, {}, &"wood")
+	if wood_cat != null:
+		(scr.get("_creative_scroll") as ScrollContainer).ensure_control_visible(wood_cat)
+		await _frames(3)
+		await _click(wood_cat.get_global_rect().get_center())
+	var cell0: InvSlot = ed.find_child("EditorCell0", true, false)
+	if cell0 != null:
+		await _click(cell0.get_global_rect().get_center())
+		await _click(cell0.get_global_rect().get_center())
+	var c0 = ed.cells[0]
+	check.call("a held wood clicked into a cell: wood, then +1 (%s)" % str(c0), c0 != null and c0.id == &"wood"
+			and int(c0.count) == 2)
+	await _shot(UserPaths.DEV + "inv_editor.png")
+	inv.cursor = null
+	ed.clear_all()
+	await _click(tab_s.get_global_rect().get_center())
+	await _frames(3)
 	var winr := get_window()
 	var sizer := winr.size
 	winr.size = Vector2i(640, 400)
@@ -3067,9 +3097,11 @@ func _run_inventory_gate() -> void:
 				await _frames(3)
 				await _click(sb2.get_global_rect().get_center())
 				await _frames(3)
+				check.call("at the workbench the grid is 3x3", inv.craft_n == 3)
 				await _click(_inv_screen.result_slot().get_global_rect().get_center())
 				await _frames(3)
-			check.call("a click on the result: 12 sand -> 12 sandstone (%d -> %d)" % [sand0,
+				await _key(KEY_ESCAPE)
+			check.call("a click on the result, put back: 12 sand -> 12 sandstone (%d -> %d)" % [sand0,
 					_carried_count(inv, &"sandstone")], _carried_count(inv, &"sandstone") == sand0 + 12)
 			await _shot(UserPaths.DEV + "inv_workbench.png")
 			await _key(KEY_E)
