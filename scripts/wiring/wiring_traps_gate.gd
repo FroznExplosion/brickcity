@@ -38,6 +38,11 @@ func run(gate) -> void:
 	var wr: MineWiring = w.wiring
 	var stud := BrickWorld.get_stud_metres()
 	var plate := BrickWorld.get_plate_metres()
+	# Flying (the sections before may end on foot: generating again does), so
+	# _fly_to places the player and the builder aims from the flying eye.
+	w.set_on_foot(false)
+	w.builder.set_active(false)
+	await w._frames(10)
 	# A flat patch of stone 30 x 30 studs, 12 to 42 studs in front of the eye.
 	var eye: Vector3 = w._eye()
 	var x0 := floori(eye.x / stud) - 4
