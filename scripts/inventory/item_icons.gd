@@ -362,7 +362,27 @@ static func _model(d: Dictionary) -> Node3D:
 			_part(inner, _box(Vector3(0.1, 0.22, 0.1)), steel, tilt * Vector3(-0.22, 0.66, 0), tilt)
 		"device":
 			var dm := str(d.get("model", ""))
-			if dm == "lamp":
+			if dm == "dispenser" or dm == "dropper":
+				# A stone block, its mouth at the front (+x): round or square.
+				_part(inner, _box(Vector3(0.9, 0.9, 0.9)), _mat(col, 0.65), Vector3(0, 0.45, 0))
+				var dark := _mat(Color(0.06, 0.06, 0.07), 0.8)
+				if dm == "dispenser":
+					_part(inner, _cyl(0.24, 0.24, 0.06), _mat(Color(0.25, 0.25, 0.27), 0.4), Vector3(0.46, 0.45, 0),
+							Basis(Vector3.BACK, PI * 0.5))
+					_part(inner, _cyl(0.15, 0.15, 0.08), dark, Vector3(0.47, 0.45, 0), Basis(Vector3.BACK, PI * 0.5))
+				else:
+					_part(inner, _box(Vector3(0.06, 0.45, 0.5)), _mat(Color(0.25, 0.25, 0.27), 0.4), Vector3(0.46, 0.45, 0))
+					_part(inner, _box(Vector3(0.08, 0.28, 0.3)), dark, Vector3(0.47, 0.45, 0))
+			elif dm == "release":
+				# A yellow brick with a stud, a dark band and its copper stripe.
+				_part(inner, _box(Vector3(0.6, 0.9, 0.6)), _mat(col, 0.5), Vector3(0, 0.45, 0))
+				_part(inner, _cyl(0.18, 0.18, 0.15), _mat(col, 0.5), Vector3(0, 0.97, 0))
+				_part(inner, _box(Vector3(0.63, 0.22, 0.63)), _mat(Color(0.1, 0.1, 0.11), 0.6), Vector3(0, 0.45, 0))
+				_part(inner, _box(Vector3(0.65, 0.06, 0.65)), _mat(Color(1.0, 0.4, 0.15), 0.4, 1.0, true), Vector3(0, 0.45, 0))
+			elif dm == "alarm":
+				_part(inner, _box(Vector3(0.9, 0.5, 0.9)), _mat(Color(0.2, 0.2, 0.22), 0.6), Vector3(0, 0.25, 0))
+				_part(inner, _cyl(0.3, 0.36, 0.45), _mat(col, 0.25, 1.0, true), Vector3(0, 0.72, 0))
+			elif dm == "lamp":
 				_part(inner, _box(Vector3(0.6, 0.85, 0.6)), _mat(col, 0.2, 1.0, true), Vector3(0, 0.425, 0))
 				_part(inner, _cyl(0.18, 0.18, 0.12), _mat(col, 0.2, 1.0, true), Vector3(0, 0.91, 0))
 			elif dm == "gate":

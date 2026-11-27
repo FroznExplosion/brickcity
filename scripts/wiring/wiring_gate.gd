@@ -52,6 +52,8 @@ extends RefCounted
 ##             pushed too; a sticky one pulls its brick (and the one on it)
 ##             back; pushed bricks are where they were pushed after a reload.
 ##   pictures  user://dev/wiring_pistons.png.
+## Stages 5-6 (Docs/MineWiring.md 19): the traps kit, its own file
+## (wiring_traps_gate.gd), at the end; `-- --gate=wiring --traps` runs it alone.
 ## Preloaded by mine_world.gd (`--gate=wiring`).
 
 var w: Node = null
@@ -73,6 +75,10 @@ func run(host: Node) -> void:
 	w.set_on_foot(false)
 	await w._frames(30)
 	w.builder.aim_trees = false
+	if "--traps" in OS.get_cmdline_user_args():
+		await _traps()   # the traps kit alone (Docs/MineWiring.md 19)
+		_finish()
+		return
 
 	# A flat patch by the spawn: 18 x 12 studs of stone, its top a course's
 	# top, nothing over it.
@@ -507,6 +513,16 @@ func run(host: Node) -> void:
 			wr.devices.has(pu) and int(wr.devices[pu].facing) == up and wr.devices.has(p6)
 			and _is_brick(p5 + Vector3i(2, 0, 0), 2, 1) and _is_brick(p6 + Vector3i(1, 0, 0), 1, 1))
 
+	await _traps()
+	_finish()
+
+
+## Stages 5-6, the traps kit: scripts/wiring/wiring_traps_gate.gd.
+func _traps() -> void:
+	await preload("res://scripts/wiring/wiring_traps_gate.gd").new().run(self)
+
+
+func _finish() -> void:
 	print("[wiring-gate] %s" % ("WIRING-GATE PASS" if fails.is_empty() else "WIRING-GATE FAIL: " + "; ".join(fails)))
 	w.get_tree().quit(0 if fails.is_empty() else 1)
 

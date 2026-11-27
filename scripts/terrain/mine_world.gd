@@ -1848,6 +1848,24 @@ func open_chest(key: String) -> void:
 	toggle_inventory()
 
 
+## RMB on a dispenser or dropper (Docs/MineWiring.md 19): its slots in the
+## chest screen, borrowed under its own key (WiringTraps.slot_key).
+func open_wire_slots(cell: Vector3i, slots: Array, title: String) -> void:
+	if _inv_screen != null:
+		_inv_screen.close_screen()
+	builder.inv.open_chest(WiringTraps.slot_key(cell), slots, title)
+	toggle_inventory()
+
+
+## A dispenser taken while its slots are open: the screen lets go of them.
+func close_wire_slots(key: String) -> void:
+	if builder == null or builder.inv.chest_key != key:
+		return
+	if _inv_screen != null:
+		_inv_screen.close_screen()
+	builder.inv.close_chest()
+
+
 ## Shift + RMB on a backpack put down (zylanntest's): it is worn. If one was
 ## worn already they swap -- yours stands where the other stood, its contents
 ## in it. Its contents come along either way (they are the backpack's).

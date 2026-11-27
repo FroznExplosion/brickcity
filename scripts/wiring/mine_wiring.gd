@@ -114,6 +114,11 @@ const DEVICES := {
 	# Stage 4 (section 18). up: may face UP too (FACE_UP).
 	&"piston": {"kind": "piston", "plates": 3, "facing": true, "up": true},
 	&"sticky_piston": {"kind": "piston", "plates": 3, "facing": true, "up": true, "sticky": true},
+	# Stages 5-6, the traps kit (section 19): scripts/wiring/wiring_traps.gd.
+	&"dispenser": {"kind": "dispenser", "plates": 3, "facing": true},
+	&"dropper": {"kind": "dropper", "plates": 3, "facing": true},
+	&"release_brick": {"kind": "release", "plates": 3},
+	&"alarm": {"kind": "alarm", "plates": 3},
 }
 ## The fifth facing: up (a piston laid looking steeply down).
 const FACE_UP := 4
@@ -167,6 +172,9 @@ var pairs := {}
 ## plate cell -> the bottom cell of the device filling it.
 var _occupied := {}
 
+## Ground edits the traps kit queued, made at the end of the tick
+## (WiringTraps.flush): [lo, hi, material, device cell or null].
+var trap_edits: Array = []
 var _changed_cells: Array[Vector3i] = []
 var _logic_dirty := false
 var _draw_dirty := false
@@ -257,6 +265,7 @@ func tick() -> void:
 	if _draw_dirty:
 		_draw_dirty = false
 		_redraw()
+	WiringTraps.flush(self)
 
 
 ## Anything that changes by itself: a sensor, a timer, a gate.
@@ -380,6 +389,8 @@ func _device_at(c: Vector3i):
 ## it at its plate; any other by ground under every cell of its footprint.
 func _supported(c: Vector3i, item: StringName, facing: int) -> bool:
 	var fp := footprint(c, item, facing)
+	if WiringTraps.is_terrain(item):
+		return WiringTraps.held(self, c)
 	if str(DEVICES.get(item, {}).get("kind", "")) == "gatetile":
 		# Ground under it, or another gate tile under or beside it.
 		if _solid(c + Vector3i.DOWN) or _is_gatetile(c + Vector3i.DOWN):
@@ -456,7 +467,8 @@ func place_cable(c: Vector3i, force := false) -> bool:
 	return true
 
 
-func can_place_device(c: Vector3i, item: StringName = &"lamp", facing := 0) -> bool:
+func can_place_device(c0: Vector3i, item: StringName = &"lamp", facing := 0) -> bool:
+	var c := WiringTraps.snap(self, c0, item)
 	if not _supported(c, item, facing):
 		return false
 	for k in cells_of(c, item, facing):
@@ -465,7 +477,8 @@ func can_place_device(c: Vector3i, item: StringName = &"lamp", facing := 0) -> b
 	return true
 
 
-func place_device(c: Vector3i, item: StringName, on := false, force := false, facing := 0, setting := -1) -> bool:
+func place_device(c0: Vector3i, item: StringName, on := false, force := false, facing := 0, setting := -1) -> bool:
+	var c := c0 if force else WiringTraps.snap(self, c0, item)
 	if not is_device(item) or (not force and not can_place_device(c, item, facing)):
 		return false
 	var op := str(DEVICES[item].get("op", ""))
@@ -479,6 +492,7 @@ func place_device(c: Vector3i, item: StringName, on := false, force := false, fa
 			"out": 0, "lit": false, "prev": 0, "queue": [], "step": 0, "node": node}
 	for k in cells_of(c, item, f):
 		_occupied[k] = c
+	WiringTraps.on_place(self, c, devices[c], force)
 	_show_device(c)
 	_poke_cells(c)
 	_logic_dirty = true
@@ -522,6 +536,8 @@ func use_device(c: Vector3i, how := "use") -> bool:
 				d.timer = BUTTON_TICKS
 			"door", "trapdoor":
 				d.on = not bool(d.on)
+			"dispenser", "dropper":
+				return WiringTraps.use(self, c, d)
 			"gate":
 				match str(def.get("op", "")):
 					"delay":
@@ -565,6 +581,7 @@ func remove_device(c: Vector3i, drop := true) -> bool:
 	_poke_cells(c)
 	for k in cells_of(c, d.item, int(d.facing)):
 		_occupied.erase(k)
+	WiringTraps.on_remove(self, c, d)
 	devices.erase(c)
 	if is_instance_valid(d.node):
 		(d.node as Node).queue_free()
@@ -625,6 +642,8 @@ func ray_device(from: Vector3, dir: Vector3, reach: float) -> Dictionary:
 		var box := device_box(c)
 		if box.size.y < _plate * 2.0:
 			box = box.grow(0.02)
+		elif WiringTraps.is_terrain(devices[c].item):
+			box = box.grow(0.015)   # a release brick IS the ground: aimed before it
 		var hit = box.intersects_ray(from, dir)
 		if hit == null:
 			continue
@@ -686,6 +705,8 @@ func check(lo := Vector3i(-WHOLE, -WHOLE, -WHOLE), hi := Vector3i(WHOLE, WHOLE, 
 		var bad := not _supported(c, d.item, int(d.facing))
 		for k in cells_of(c, d.item, int(d.facing)):
 			bad = bad or _solid(k)
+		if WiringTraps.is_terrain(d.item):
+			bad = WiringTraps.broken(self, c, d)   # its cells are ground
 		if bad:
 			remove_device(c)
 			gone += 1
@@ -716,6 +737,7 @@ func clear() -> void:
 	nets.clear()
 	pairs.clear()
 	_changed_cells.clear()
+	trap_edits.clear()
 	_draw_dirty = true
 	_logic_dirty = true
 
@@ -968,6 +990,8 @@ func _evaluate() -> void:
 			if bool(devices[g].on) != open:
 				devices[g].on = open
 				_show_device(g)
+	# 3d. The traps kit: dispensers fire, release bricks let go, alarms call.
+	WiringTraps.evaluate(self)
 	# 4. Gates: the next output from what they read now, applied together.
 	var nexts := {}
 	for c in devices:
@@ -1990,6 +2014,7 @@ func readout(target: Dictionary) -> String:
 				parts.append("sticky")
 			if (int(d.prev) > 0) != bool(d.on) and str(d.get("stall", "")) != "":
 				parts.append("stalled: %s" % d.stall)
+		parts.append_array(WiringTraps.readout(self, c, d))
 		return " | ".join(parts)
 	if target.has("cable") and net_of.has(target.cable):
 		var id: int = net_of[target.cable]
@@ -2150,6 +2175,8 @@ func _device_node(c: Vector3i, item: StringName, facing := 0) -> Node3D:
 	var stone := _mat(Color(0.5, 0.5, 0.52), 0.6)
 	var def: Dictionary = DEVICES[item]
 	match str(def.kind):
+		"dispenser", "dropper", "release", "alarm":
+			WiringTraps.build(self, root, str(def.kind), box, facing)
 		"switch":
 			_add_box(root, Vector3(_stud * 0.92, _plate, _stud * 0.92), Vector3(0, _plate * 0.5, 0), stone)
 			var pivot := Node3D.new()
@@ -2403,6 +2430,8 @@ func _show_device(c: Vector3i) -> void:
 	if not is_instance_valid(node):
 		return
 	match str(DEVICES[d.item].kind):
+		"dispenser", "dropper", "release", "alarm":
+			WiringTraps.show(self, c, d, node)
 		"switch":
 			var arm := node.get_node_or_null("Arm") as Node3D
 			if arm != null:
@@ -2491,6 +2520,7 @@ func to_save() -> Dictionary:
 		var d: Dictionary = devices[c]
 		devs[key_of(c)] = {"item": String(d.item), "on": bool(d.on), "facing": int(d.facing),
 				"setting": int(d.setting)}
+		WiringTraps.save_extra(d, devs[key_of(c)])
 	return {"cables": flat, "devices": devs}
 
 
@@ -2509,8 +2539,10 @@ func restore(saved) -> void:
 			var e = devs[k]
 			if p.size() != 3 or not (e is Dictionary):
 				continue
-			place_device(Vector3i(int(p[0]), int(p[1]), int(p[2])), StringName(str(e.get("item", ""))),
-					bool(e.get("on", false)), true, int(e.get("facing", 0)), int(e.get("setting", -1)))
+			var at := Vector3i(int(p[0]), int(p[1]), int(p[2]))
+			if place_device(at, StringName(str(e.get("item", ""))),
+					bool(e.get("on", false)), true, int(e.get("facing", 0)), int(e.get("setting", -1))):
+				WiringTraps.restore_extra(devices[at], e)
 	# Loading is not a change: no observer fires for it.
 	for c in devices:
 		if str(DEVICES[devices[c].item].kind) == "observer":

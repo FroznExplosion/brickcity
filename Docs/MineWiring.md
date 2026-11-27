@@ -302,9 +302,10 @@ Small stages, each with a probe and a gate, each merged:
    the stand-in slide, the kinematic shove; sticky piston. Moving groups are
    contraptions (section 12): one body, riders carried by contact.
 4b. Turntable brick and winch (the same contraption mover).
-5. Dispenser and dropper (items, arrows, grenades, gun rounds, buckets).
+5. Dispenser and dropper (items, arrows, grenades, gun rounds, buckets). **Built
+   2026-11-27** (section 19; no arrows in the game: guns' rounds).
 5b. Placer and breaker bricks.
-6. Release brick (collapse), alarm (AI).
+6. Release brick (collapse), alarm (AI). **Built 2026-11-27** (section 19).
 6b. Hydraulics (section 11), finite water only: pipes as a second medium of
    the same nets, hydraulic budget (12), hose reel,
    intake, pump, valve, outlet, pressure sensor, hydraulic piston.
@@ -769,6 +770,99 @@ where they were pushed. Picture `user://dev/wiring_pistons.png`.
 Not seen in a test: the slide and hop as drawn (the gate checks where
 things end, not how they move), a player shoved sideways, the stand-in's
 cave light.
+## 19. Stages 5 and 6, built (2026-11-27): dispenser, dropper, release brick, alarm
+
+The traps kit. Its code is `scripts/wiring/wiring_traps.gd` (`WiringTraps`,
+static); MineWiring keeps the four in DEVICES and calls the kit at a few
+hooks (placing, taking, the tick, the look, the readout, saving, `check`), so
+the earlier devices and the kit stay apart.
+
+| Device | Size | Powered by | Does |
+|---|---|---|---|
+| dispenser | 1 stud, a brick, faces | its back and sides (not its front) | 9 slots (RMB: the chest screen). Power turning on fires ONE thing out of the front, the first slot that holds something (see below). Held on, nothing more. |
+| dropper | the same | the same | drops one item of the first slot out of its front (`DroppedItems`), whatever it is |
+| release brick | 1 stud, a brick | any side | a real brick of the ground; powered, its cells turn to air and the collapse survey drops what it alone held; grips again 20 ticks (2 s) after the power goes |
+| alarm | 1 stud, a brick | any side | a siren, a turning red light, and every zombie within 48 m called to it; again every 2 s while on |
+
+**What a dispenser fires.** The game has no arrows, so the "arrow wall" is a
+gun wall:
+
+- **A gun**: one round through the weapon system. The dispenser makes its own
+  `GunController` (the first time, again when the gun in it changes), aimed by
+  a muzzle node at its front, the gun itself mounted there; `on_structure_hit`
+  is the mine world's (a round breaks a whole brick, Docs/MineWorld.md 10),
+  bodies take its damage, crits and all. The gun stays in the slot; its
+  magazine is the stack's `ammo` and reloads by itself when empty, as the
+  player's guns do (a pulse during the reload fires nothing).
+- **A grenade**: thrown out of the front, as far as 17 studs or short of the
+  first solid stud, onto the ground there (`Grenade.throw` with the player's
+  services; its blast breaks bricks and hurts bodies). One used up.
+- **A bucket**: a brick of its water (3 of its 9 tiles) poured as still water
+  into the stud in front. **A source bucket**: its water or lava, as one brick
+  of STILL fluid, never a spring -- finite only, as asked.
+- Anything else is dropped, as the dropper does.
+
+**The release brick: why turning to air.** Section 7 says it "lets go of the
+stud joints of the bricks it touches". The survey (Docs/TerrainCollapse.md
+2-3) has no stored joints to cut: it packs the cells it looks at into virtual
+bricks and solves them. So the simplest real mechanism is that the release
+brick IS ground and stops being ground: a 1x1 brick, 3 plates, laid into the
+field (`fill_box` + `mark_placed`, one brick) in a building colour (the
+filament nearest a warning yellow, `MAT_FIL_BASE + f`), so **no new terrain
+material and no C++**. Powered, its cells are cleared and `terrain_edited`
+runs: the survey solves the box, and what was held only through the release
+brick comes back as a loose group and falls -- a bridge, a floor, a cave roof,
+as real pieces. A wire band with a copper stripe round it (glowing while let
+go) and a yellow ghost while it is air show where it is.
+
+- **Grip again**: 20 ticks after the power goes, if its cells are still air
+  and nobody stands in them (else it tries again every second). The survey
+  must see it gone first: an edit is surveyed after 0.1 s and on a worker, so
+  a shorter hold could fill the hole back before the survey reads the field.
+- **Edits at the end of the tick.** An edit runs `check` at once, which takes
+  devices away; so the kit queues its ground edits (`trap_edits`) and makes
+  them at the end of `tick()`, never while the tick or a check walks the
+  devices. A just-laid release brick is `pending` until then (check leaves it).
+- **It sits on the courses** (a laid block's lattice): placed on a top that is
+  not a course's, it goes up to the next course that is all air (`snap`).
+- **Held** by ground, or another release brick, against any of its faces --
+  it may hang under a ledge or stand beside a cliff, as a block may.
+- **Broken** when a cell of it is not solid while it holds (shot, blown,
+  fallen with what held it): it is gone. Taken by LMB (it is aimed before the
+  ground under the cross-hair), its cells go too. RMB with a block or a device
+  in hand builds on its face, like any brick; the wrench's shift + RMB takes it
+  back.
+- Its cells are reserved while let go (`overlaps`): no block is laid into the
+  hole.
+
+**The alarm.** The mine world has no AI garrison (no AI world, Docs/MineWorld.md;
+the planets' garrisons are elsewhere), so it calls the hostile creatures it
+has: every zombie within 48 m gets `MobZombie.call_to(at)` -- it walks to the
+alarm for up to 30 s unless it sees the player within 8 m first (then it
+chases as ever) or gets there. Herds hear it as a loud noise (`MineMobs.noise`).
+The siren is synthesised once (two tones, looped; the project ships no audio
+files). Wolves and boars are not called yet.
+
+**Not yet.** Placer and breaker bricks (5b); a dispenser that aims; primed
+grenades from a dropper (the grenade chute of section 8 drops them unprimed
+for now: use a dispenser); AI pawns do not press tiles or trip strings
+(section 14); the alarm calls zombies only.
+
+Tests: `tools/probes/wiring_traps_probe.gd` (headless, its own ground) -- 49
+ok: one item a turn-on, nothing held on or from the front, the throw's 17
+studs and the wall stop, the bucket's 3 tiles, the gun staying, empty, the
+dropper, RMB; the release brick's snap, its laying (one edit, a building
+colour), letting go, the 2 s hold, waiting for a body to step out, shot out,
+taken, stacked; the alarm's first call, its repeat and quiet; slots and a
+let-go brick saved; the items and models. `-- --gate=wiring` ends with the
+kit's section (`scripts/wiring/wiring_traps_gate.gd`; `--traps` runs it
+alone): a dispenser laid and opened with the builder, a pressure tile -> a
+dispenser with a kit gun breaking a wall brick, a button -> a grenade that
+breaks a wall, a lever -> a bucket and a dropper, a trip string -> four release
+bricks under a bridge over a trench that falls by the collapse, then grip
+again, an observer -> pulse -> alarm calling a zombie that walks to it, all
+back after generating again. Pictures `user://dev/wiring_traps.png`,
+`wiring_bridge.png`, `wiring_bridge_fell.png`.
 
 ## Sources
 
