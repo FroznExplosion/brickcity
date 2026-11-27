@@ -198,10 +198,11 @@ group_uniforms materials;
 // Each entry is (roughness multiplier, specular multiplier, rim multiplier).
 uniform bool materials_enabled = true;
 // GLASS (Docs/TerrainBuildings.md 5): brick_terrain.h MAT_GLASS, a solid
-// cell drawn see-through. The terrain is one opaque pass, so glass is a
-// screen-door: a fixed 4x4 pattern of its pixels discarded (shadows too),
-// the rest tinted and glossy. No overlay brick is laid over it, so it is
-// never sunk (the recess is for faces under a real brick).
+// cell drawn see-through. A near tile's glass faces are split out of its
+// mesh and drawn blended (shaders/terrain_glass.gdshader, 5b); this
+// screen-door -- a fixed 4x4 pattern of its pixels discarded, the rest
+// tinted and glossy -- is only for a glass face that still reaches this
+// opaque pass. No overlay brick is laid over it, so it is never sunk.
 const int TERRAIN_GLASS = 41;
 const float GLASS_OPEN = 0.55;
 const vec3 MATERIAL_TABLE[7] = {

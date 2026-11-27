@@ -54,5 +54,30 @@ func _init() -> void:
 	var m := MineBuildings.BUILDING_MATERIAL_BASE + 5
 	check(ItemCatalog.block_item(m) == &"plastic_bricks", "a building brick's item: %s" % ItemCatalog.block_item(m))
 	check(ItemCatalog.block_item(glass) == &"glass", "glass's item: %s" % ItemCatalog.block_item(glass))
+	_glass_split(glass)
 	print("[mine-buildings-probe] %s" % ["PASS" if fails == 0 else "%d FAILED" % fails])
 	quit(1 if fails > 0 else 0)
+
+
+## 5b: a tile's glass faces come out of the opaque mesh into "glass_mesh"
+## (TerrainTile draws them blended), none left behind.
+func _glass_split(glass: int) -> void:
+	BrickTerrain.configure(424242)
+	BrickTerrain.clear_terrain_edits()
+	var x0 := 10
+	var z0 := 10
+	var h := BrickTerrain.surface_plate(x0 + 2, z0 + 2)
+	var filled := BrickTerrain.fill_box(Vector3i(x0, h + 1, z0), Vector3i(x0 + 4, h + 9, z0 + 4), glass, false)
+	var data := BrickTerrain.build_tile(0, 0)
+	var gm: Array = data.get("glass_mesh", [])
+	var g_verts := 0 if gm.is_empty() else (gm[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+	var left := 0
+	var main: Array = data.mesh
+	if not main.is_empty():
+		var cu: PackedByteArray = main[Mesh.ARRAY_CUSTOM0]
+		for i in range(0, cu.size(), 4):
+			if cu[i] == glass:
+				left += 1
+	print("[mine-buildings-probe] ground plate %d, filled %d cells" % [h, int(filled.get("changed", 0))])
+	check(g_verts > 0 and left == 0, "a tile's glass is split out to be drawn blended (%d glass vertices, %d left in the opaque mesh)" % [g_verts, left])
+	BrickTerrain.clear_terrain_edits()
