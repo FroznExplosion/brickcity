@@ -57,6 +57,8 @@ const MAX_SLOT := 52.0
 const BOOK_COLS := 7
 ## The off-hand / quick slot column beside the hotbars, with its gap, in slots.
 const HAND_COL := 1.3
+## A tab's width, in slots (the tab rows over the panels).
+const TAB_W := 1.05
 const TAB_ICONS := {
 	"construction": [&"stone", &"sandstone", &"soil"],
 	"equipment": [&"pickaxe", &"mega_pickaxe", &"bucket"],
@@ -1211,7 +1213,14 @@ func _on_relayout(vp_size: Vector2) -> void:
 	# Widths in slots: the right panel 9 + padding; the book 7 + its scroll bar.
 	var w_slots := 9.0 + pad_f * 2.0 + 0.2 + 2.0 * HAND_COL
 	if book:
-		w_slots += BOOK_COLS + 0.5 + pad_f * 2.0 + 0.3
+		# The book is as wide as its recipe columns, or its row of tabs if that
+		# is wider (each tab TAB_W slots and a gap): a new tab (the creatures'
+		# Spawn) must shrink the slots, not push the panels off the screen.
+		var tabs := 0
+		for t in _left_tabs.get_children():
+			if t is McStyle.Tab and (t as Control).visible:
+				tabs += 1
+		w_slots += maxf(BOOK_COLS + 0.5 + pad_f * 2.0 + 0.3, tabs * (TAB_W + 0.08))
 	# Heights in slots: tabs, padding, the top section, titles and notes,
 	# the storage rows, the gap, two hotbars.
 	var store_rows := ceilf(maxf(_storage_n, 0) / 9.0) if _storage_n > 0 else 0.8
@@ -1241,7 +1250,7 @@ func _on_relayout(vp_size: Vector2) -> void:
 		(b as McStyle.Box).set_pad(pad)
 		(b as Control).queue_redraw()
 	_row.add_theme_constant_override("separation", int(roundf(_slot_px * 0.3)))
-	var tab := Vector2(roundf(_slot_px * 1.05), roundf(_slot_px * 0.95))
+	var tab := Vector2(roundf(_slot_px * TAB_W), roundf(_slot_px * 0.95))
 	for t in _tabs.values() + [_book_btn, _here_tab, _close]:
 		(t as McStyle.Tab).custom_minimum_size = tab
 		(t as McStyle.Tab).unit = _unit
