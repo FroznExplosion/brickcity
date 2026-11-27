@@ -25,6 +25,7 @@ before any `git worktree remove` (CLAUDE.md, Building).
 | sprinkler, collector | 21 |
 | far fields, crops lit like caves, refusal messages | 22 |
 | real animals only: no animal events, no fence flood | 23 |
+| fruit trees, more bushes, the auto farmer (section 7, BUILT 2026-11-27) | 24 |
 
 16 crops (incl. 4 saplings), 12 produce items, tools hoe/scythe/watering
 can, compost/grow mix/mulch, compost bin, scarecrow, sprinkler, collector.
@@ -165,7 +166,7 @@ Other chats call into farming: creatures (`animal_eat`, `creature_landed`,
   of the exact catch-up, so a fenced farm keeps working while its ground is
   unloaded.
 
-## 7. Next round, designed (not built)
+## 7. Next round -- BUILT 2026-11-27 (Docs/MineFarming.md 24 says how)
 
 ### 7.1 Fruit trees
 - New crops (crops.json): apple tree, cherry tree, orange tree, lemon tree

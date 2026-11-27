@@ -713,3 +713,78 @@ and a collector put down kept the count, and the collector was never seen
 (the gate's collector harvested nothing). Now they are gathered once a frame
 (a few chests walked) as well as on any count change (`_ensure_gathered`).
 --gate=farm 73 (76, less the four pruned, plus the one added); farm_probe 140.
+
+## 24. Built (2026-11-27): fruit trees, more bushes, the auto farmer
+
+The round designed in Docs/HandoffFarming.md 7, built as designed except
+where noted.
+
+**Fruit trees** (apple on the oak canopy, cherry on birch, orange on acacia,
+lemon on dark oak). Crops with `tree` and a new `fruit_at` (4 of 7 stages)
+and `fruit_hours` (12 h a fruit stage, `FarmPlant.stage_hours`). Planted from
+a sapling on plain soil like the timber saplings; at `fruit_at` MineFarming
+stands the real tree (`host.plant_tree`, near-only, `_tree_due` /
+`_stand_tree`) and KEEPS the plot with `ground = "tree"`, so settle grows the
+fruit exactly while away. `regrow_to = fruit_at`: a pick sends it back to the
+bare tree; a cycle is about two days in practice (light and spread).
+- Drawn: FarmDraw puts the fruit in the leaves, read from the tree recipe
+  (`fruit_spots`: under the wide plates, round the trunk's plate, and on the
+  free outer sides of the ragged brick layer -- never where a brick was left
+  out), small and pale green while growing, round 1x1s in the fruit's colour
+  with a stud when ripe. Instanced at `Trees.placement`, near only (the tree
+  draws itself far). The fruit does not sway with the crown's wind sway.
+- LMB on a fruit tree (MineBuilder `_fell`, before felling): ripe, it is
+  SHAKEN -- `FarmPlant.harvest`, the fruit falls round the canopy as dropped
+  items, the tree stays. Nothing ripe: felled as any tree, the plot goes
+  (`tree_felled`), and in survival always its sapling. Felling an ordinary
+  tree gives a fruit sapling of its canopy 6% of the time
+  (`FRUIT_SAPLING_CHANCE`); `sapling_of` still names the timber sapling.
+- A fruit tree plot is not trampled, eaten or pulled; the label shows when
+  the tree is looked at (`tree_plot` by trunk cell). The collector and the
+  auto farmer pick fruit trees (only timber saplings are skipped:
+  `FarmCrops.is_timber`).
+
+**More bushes:** blueberry bush, grape vine (its own `vine` look: a post, a
+bar, hanging bunches), raspberry bush -- regrowing, planted as their fruit,
+found now and then breaking podzol, dry grass, grass.
+
+**The auto farmer** (item `auto_farmer`, a station: a little brick robot;
+6 iron, 2 gold ingots, a hoe and a scythe at a workbench).
+- Its AREA (FarmAuto): a flood over stud columns from its block, a step
+  within one brick up or down with a BRICK of room over it (HEAD 4 plates:
+  the old stage 5 flood asked for 2, which climbs a fence's rails -- they
+  are 2 plates apart), capped at 12 plots each way. On a WorkerThreadPool
+  job, one farmer at a time, taken when `is_task_completed`; worked out again
+  when the ground changes (the farming terrain version) or the farmer moves,
+  at most every 1.5 s, for farmers near enough to tend a plot in reach.
+- Plots in an area get cached flags `auto`, `auto_by` (the farmer's chest
+  key), settled first whenever they change (`apply_auto`). A plot whose
+  farmer stands out of reach keeps its flag; a farmer gone clears them and
+  what it had not carried drops on the plot.
+- **In settle (pure):** an auto plot that is ripe is picked at that moment
+  (`FarmPlant._auto_pick`: the hand's `_pick`, same rolls), what it gives
+  goes into `auto_out` (merged by item and data), one seed is kept back (its
+  own seeds, or one produce for a crop planted as it is) and sown at once
+  with that seed's traits. The new planting's seed is drawn from the old
+  one, NOT from the time (`seed_for(b, t)` would split on a stage end found
+  a hair apart by bisection over different cuts). Perennials just regrow;
+  timber saplings and giants are left alone. No weed hazard on auto plots.
+  Exact: the probe settles seven crops for 9 days with trouble on, once, in
+  random steps, and saved half way: the same plants, harvests and auto_out.
+- **In reach** (`tend`, once a second a farmer): its plots settled, auto_out
+  carried into the containers within 8 m (nearest first); what does not fit
+  stays on the plot (the label: "N waiting for room"). Bare tilled plots are
+  planted from seeds in those chests (the nearest chest's first stack that
+  grows there), plots under 40 fertility composted from them.
+- Not done: breeding needs a bare plot between two ripe plants, and the
+  farmer plants bare plots, so no crosses happen inside its area. The
+  farmer does not walk (a farmhand needs creatures, 7.4).
+- Rows grow to 42 fields: `auto`, `auto_by`, `auto_out`, `autos` (its
+  harvest count); a 38-field row loads with no farmer.
+
+Tests: farm_probe 208 (fruit, auto sections); --gate=farm fruit (a sapling
+stands as a real tree and keeps its plot, fruit drawn, shaken down, felled)
+and farmer (a stone ring: the plots inside tended, outside not; away three
+days, back exact against one settle, the chest holds the harvest; a full
+chest holds it back; the farmer taken away). Pictures: user://dev/
+farm_fruit.png.
