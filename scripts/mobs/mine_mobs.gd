@@ -257,6 +257,24 @@ func noise(at: Vector3, radius: float, why: String) -> void:
 			(h as Herd).startle(at, why)
 
 
+## A wired ALARM at `at` (terrain frame, Docs/MineWiring.md 19): every zombie
+## within `radius` m is called to it (MobZombie.call_to) -- it walks there
+## unless it sees the player first -- and the herds hear it as a loud noise.
+## Returns how many were called.
+func alarm(at: Vector3, radius: float) -> int:
+	var n := 0
+	for m in mobs:
+		if not is_instance_valid(m) or m.dead or m.kind != &"zombie":
+			continue
+		if (m.last_feet as Vector3).distance_to(at) <= radius:
+			(m as MobZombie).call_to(at, now())
+			n += 1
+	noise(at, radius, "an alarm")
+	if n > 0:
+		log_line("an alarm called %d zombie(s)" % n)
+	return n
+
+
 func on_died(m) -> void:
 	log_line("a %s died" % m.kind)
 	if m.kind == &"zombie":

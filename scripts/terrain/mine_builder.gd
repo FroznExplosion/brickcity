@@ -475,7 +475,14 @@ func update_target() -> void:
 	if host.wiring != null:
 		var dv: Dictionary = host.wiring.ray_device(from, dir, REACH)
 		if not dv.is_empty() and (target.is_empty() or float(dv.dist) < from.distance_to(target.position)):
+			var ground := target
 			target = {"device": dv.cell, "position": dv.point}
+			# A release brick is ground: the face looked at stays, so a block or
+			# a device is laid on it like on any brick (Docs/MineWiring.md 19).
+			var dd: Dictionary = host.wiring.devices[dv.cell]
+			if WiringTraps.is_terrain(dd.item) and not bool(dd.on) and ground.has("cell"):
+				target["cell"] = ground.cell
+				target["normal"] = ground.normal
 			var dbox: AABB = host.wiring.device_box(dv.cell)
 			_outline.visible = true
 			_outline.global_transform = Transform3D(Basis.from_scale(dbox.size * 1.02),
@@ -840,7 +847,9 @@ func place_target() -> bool:
 			host.open_chest(target.chest)
 		target = {}
 		return true
-	if target.has("device"):
+	# A release brick with its face (above) is built on like ground, but the
+	# wrench still takes it back.
+	if target.has("device") and not (target.has("cell") and hand_kind() != "wrench"):
 		# RMB on a device, once a press (Docs/MineWiring.md): a lever turns, a
 		# button presses, a delay steps; with the wrench a gate turns, and
 		# shift takes the device back.

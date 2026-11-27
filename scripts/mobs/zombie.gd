@@ -20,6 +20,16 @@ const CHASE_MULT := 1.25
 const HP := 40.0
 const DAMAGE := 5.0
 
+## A wired alarm's call (Docs/MineWiring.md 19): where it walks, and until
+## when. It goes back to the player when it gets there, sees the player within
+## CALL_SEES m, or the call runs out.
+const CALL_SECONDS := 30.0
+const CALL_SEES := 8.0
+const CALL_THERE := 2.0
+var called_to := Vector3.INF
+var called_until := 0.0
+var calls := 0
+
 var hits := 0
 var on_field := false
 var _next_hit := 0.0
@@ -40,6 +50,15 @@ func think(now: float) -> void:
 		return
 	var f := last_feet
 	pawn.move_mult = CHASE_MULT
+	if called_to != Vector3.INF:
+		if now > called_until or f.distance_to(called_to) < CALL_THERE or f.distance_to(_player) < CALL_SEES:
+			called_to = Vector3.INF
+		else:
+			state = "called"
+			on_field = false
+			face_point = Vector3.INF
+			walk_to(called_to, now)
+			return
 	face_point = _player if f.distance_to(_player) < 6.0 else Vector3.INF
 	on_field = mobs.field_next(f) != Vector3.INF
 	if on_field:
@@ -55,6 +74,14 @@ func think(now: float) -> void:
 		_next_hit = now + HIT_EVERY
 		hits += 1
 		mobs.hurt_player(self, DAMAGE, d.normalized() if d.length() > 0.01 else Vector3.FORWARD)
+
+
+## An alarm calls it to `at` (terrain frame) for CALL_SECONDS.
+func call_to(at: Vector3, now: float) -> void:
+	called_to = at
+	called_until = now + CALL_SECONDS
+	calls += 1
+	asleep = false
 
 
 func steer_point() -> Vector3:
