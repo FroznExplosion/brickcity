@@ -13,7 +13,7 @@ extends RefCounted
 ##   fluid (1 water, 2 lava, 0 none), fluid_kind ("source" / "still").
 
 const KINDS := ["block", "fluid", "bucket", "source_bucket", "chest", "station", "tool", "backpack", "gun", "grenade",
-		"hoe", "seed", "scythe", "can", "fertiliser", "wire", "device", "wrench", "fence", "shield", "spawner", "misc"]
+		"hoe", "seed", "scythe", "can", "fertiliser", "wire", "device", "wrench", "fence", "shield", "spawner", "arrow", "misc"]
 ## Which hand an item may be in (zylanntest's HandUse). Since 2026-11-26
 ## only "two" limits a slot: a two-handed item never goes in the off-hand
 ## (Inventory.slot_accepts); "right" and "off" say how an item is meant to

@@ -770,7 +770,7 @@ where they were pushed. Picture `user://dev/wiring_pistons.png`.
 Not seen in a test: the slide and hop as drawn (the gate checks where
 things end, not how they move), a player shoved sideways, the stand-in's
 cave light.
-## 19. Stages 5 and 6, built (2026-11-27): dispenser, dropper, release brick, alarm
+## 19. Stages 5 and 6, built (2026-11-27): shooter, dropper, release brick, alarm
 
 The traps kit. Its code is `scripts/wiring/wiring_traps.gd` (`WiringTraps`,
 static); MineWiring keeps the four in DEVICES and calls the kit at a few
@@ -779,14 +779,22 @@ the earlier devices and the kit stay apart.
 
 | Device | Size | Powered by | Does |
 |---|---|---|---|
-| dispenser | 1 stud, a brick, faces | its back and sides (not its front) | 9 slots (RMB: the chest screen). Power turning on fires ONE thing out of the front, the first slot that holds something (see below). Held on, nothing more. |
-| dropper | the same | the same | drops one item of the first slot out of its front (`DroppedItems`), whatever it is |
+| shooter (id `dispenser`, kept for saves) | 1 stud, a brick, faces | its back and sides (not its front) | 9 slots (RMB: the chest screen). Power turning on shoots ONE thing out of the front, the first slot that holds something (see below). Held on, nothing more. |
+| dropper | the same | the same | drops one item of the first slot out of its front as a pickup (`DroppedItems`), whatever it is -- even a grenade or an arrow: it never shoots |
 | release brick | 1 stud, a brick | any side | a real brick of the ground; powered, its cells turn to air and the collapse survey drops what it alone held; grips again 20 ticks (2 s) after the power goes |
 | alarm | 1 stud, a brick | any side | a siren, a turning red light, and every zombie within 48 m called to it; again every 2 s while on |
 
-**What a dispenser fires.** The game has no arrows, so the "arrow wall" is a
-gun wall:
+**What a shooter shoots** (the user, 2026-11-27: the dropper only drops
+pickups; the shooter shoots arrows, bullets and grenades that do damage, and
+shoots anything else a distance as an item). Weapons do damage:
 
+- **An arrow** (`arrow`, a new item, kind `arrow`): flies (`WiringArrow`,
+  scripts/wiring/wiring_arrow.gd) at 30 m/s with gravity and a little lift
+  (flat for ~10 m), a ray each physics step against what guns hit. A body
+  with health takes 0.35 melee (21 at level 1: two arrows drop a zombie)
+  through `DamageSystem.resolve`, as a round does; the ground or a wall stops
+  it and it lies there as an arrow to pick up again. Arrows break no bricks.
+  One used a turn-on. The damage is a placeholder: not in the Armory Ledger.
 - **A gun**: one round through the weapon system. The dispenser makes its own
   `GunController` (the first time, again when the gun in it changes), aimed by
   a muzzle node at its front, the gun itself mounted there; `on_structure_hit`
@@ -800,7 +808,9 @@ gun wall:
 - **A bucket**: a brick of its water (3 of its 9 tiles) poured as still water
   into the stud in front. **A source bucket**: its water or lava, as one brick
   of STILL fluid, never a spring -- finite only, as asked.
-- Anything else is dropped, as the dropper does.
+- **Anything else** (food, blocks, wire) is LAUNCHED: 9 m/s out of the front
+  and a little up, a pickup where it comes down (dropped items slow as they
+  fly: it lands about 2-4 m out). It hurts nobody.
 
 **The release brick: why turning to air.** Section 7 says it "lets go of the
 stud joints of the bricks it touches". The survey (Docs/TerrainCollapse.md
@@ -843,13 +853,15 @@ chases as ever) or gets there. Herds hear it as a loud noise (`MineMobs.noise`).
 The siren is synthesised once (two tones, looped; the project ships no audio
 files). Wolves and boars are not called yet.
 
-**Not yet.** Placer and breaker bricks (5b); a dispenser that aims; primed
-grenades from a dropper (the grenade chute of section 8 drops them unprimed
-for now: use a dispenser); AI pawns do not press tiles or trip strings
+**Not yet.** Placer and breaker bricks (5b); a shooter that aims; a recipe
+for arrows (creative catalog only); a bow; primed grenades (the grenade chute
+of section 8: a dropper drops grenades as pickups, a shooter throws them);
+AI pawns do not press tiles or trip strings
 (section 14); the alarm calls zombies only.
 
-Tests: `tools/probes/wiring_traps_probe.gd` (headless, its own ground) -- 49
-ok: one item a turn-on, nothing held on or from the front, the throw's 17
+Tests: `tools/probes/wiring_traps_probe.gd` (headless, its own ground) -- 53
+ok: arrows shot one a turn-on, other items launched, a dropper dropping even
+an arrow; one item a turn-on, nothing held on or from the front, the throw's 17
 studs and the wall stop, the bucket's 3 tiles, the gun staying, empty, the
 dropper, RMB; the release brick's snap, its laying (one edit, a building
 colour), letting go, the 2 s hold, waiting for a body to step out, shot out,
@@ -857,10 +869,14 @@ taken, stacked; the alarm's first call, its repeat and quiet; slots and a
 let-go brick saved; the items and models. `-- --gate=wiring` ends with the
 kit's section (`scripts/wiring/wiring_traps_gate.gd`; `--traps` runs it
 alone): a dispenser laid and opened with the builder, a pressure tile -> a
-dispenser with a kit gun breaking a wall brick, a button -> a grenade that
+shooter with a kit gun breaking a wall brick, a lever -> a shooter of arrows
+hurting a zombie walking down its line, a button -> a shooter launching a
+wire that lands as a pickup, a button -> a grenade that
 breaks a wall, a lever -> a bucket and a dropper, a trip string -> four release
 bricks under a bridge over a trench that falls by the collapse, then grip
-again, an observer -> pulse -> alarm calling a zombie that walks to it, all
+again, an observer -> pulse -> alarm calling a zombie that walks to it (before the
+trench is dug: a zombie stood at the trench's edge, its way over the fallen
+bridge -- unverified, the creatures' nav), all
 back after generating again. Pictures `user://dev/wiring_traps.png`,
 `wiring_bridge.png`, `wiring_bridge_fell.png`.
 
