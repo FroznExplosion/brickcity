@@ -318,6 +318,133 @@
 			"colour": "#6f5a3a",
 			"glyph": "K",
 			"description": "Place it in a field: it harvests the ripe crops within 4 plots (9 x 9) into its own 27 slots and replants them from the seeds it holds. Right-click to open it."
+		},
+		"apple_sapling": {
+			"name": "Apple sapling",
+			"kind": "seed",
+			"crop": "apple_tree",
+			"max_stack": 64,
+			"colour": "#5e9e3b",
+			"glyph": "t",
+			"model": "sapling",
+			"description": "Right-click the top of grass or dirt (no hoe needed): it grows into a apple tree that fruits again and again. Felling a tree of its kind now and then gives one."
+		},
+		"apple": {
+			"name": "Apple",
+			"kind": "misc",
+			"max_stack": 64,
+			"colour": "#c8202a",
+			"glyph": "a",
+			"model": "produce",
+			"description": "Food, from a apple tree: hit the tree when it is ripe.",
+			"tags": [
+				"crop"
+			]
+		},
+		"cherry_sapling": {
+			"name": "Cherry sapling",
+			"kind": "seed",
+			"crop": "cherry_tree",
+			"max_stack": 64,
+			"colour": "#7ab84a",
+			"glyph": "t",
+			"model": "sapling",
+			"description": "Right-click the top of grass or dirt (no hoe needed): it grows into a cherry tree that fruits again and again. Felling a tree of its kind now and then gives one."
+		},
+		"cherries": {
+			"name": "Cherries",
+			"kind": "misc",
+			"max_stack": 64,
+			"colour": "#8e1022",
+			"glyph": "q",
+			"model": "produce",
+			"description": "Food, from a cherry tree: hit the tree when it is ripe.",
+			"tags": [
+				"crop"
+			]
+		},
+		"orange_sapling": {
+			"name": "Orange sapling",
+			"kind": "seed",
+			"crop": "orange_tree",
+			"max_stack": 64,
+			"colour": "#7e8a2e",
+			"glyph": "t",
+			"model": "sapling",
+			"description": "Right-click the top of grass or dirt (no hoe needed): it grows into a orange tree that fruits again and again. Felling a tree of its kind now and then gives one."
+		},
+		"orange": {
+			"name": "Orange",
+			"kind": "misc",
+			"max_stack": 64,
+			"colour": "#f08a1c",
+			"glyph": "O",
+			"model": "produce",
+			"description": "Food, from a orange tree: hit the tree when it is ripe.",
+			"tags": [
+				"crop"
+			]
+		},
+		"lemon_sapling": {
+			"name": "Lemon sapling",
+			"kind": "seed",
+			"crop": "lemon_tree",
+			"max_stack": 64,
+			"colour": "#2f6e34",
+			"glyph": "t",
+			"model": "sapling",
+			"description": "Right-click the top of grass or dirt (no hoe needed): it grows into a lemon tree that fruits again and again. Felling a tree of its kind now and then gives one."
+		},
+		"lemon": {
+			"name": "Lemon",
+			"kind": "misc",
+			"max_stack": 64,
+			"colour": "#f2d43a",
+			"glyph": "L",
+			"model": "produce",
+			"description": "Food, from a lemon tree: hit the tree when it is ripe.",
+			"tags": [
+				"crop"
+			]
+		},
+		"blueberries": {
+			"name": "Blueberries",
+			"kind": "seed",
+			"crop": "blueberry_bush",
+			"max_stack": 99,
+			"colour": "#3c4fa8",
+			"glyph": "u",
+			"model": "produce",
+			"description": "Food. Right-click tilled soil to plant a blueberry bush, which regrows after picking.",
+			"tags": [
+				"crop"
+			]
+		},
+		"grapes": {
+			"name": "Grapes",
+			"kind": "seed",
+			"crop": "grape_vine",
+			"max_stack": 99,
+			"colour": "#6a2c7a",
+			"glyph": "g",
+			"model": "produce",
+			"description": "Food. Right-click tilled soil to plant a grape vine, which regrows after picking.",
+			"tags": [
+				"crop"
+			]
+		},
+		"raspberries": {
+			"name": "Raspberries",
+			"kind": "seed",
+			"crop": "raspberry_bush",
+			"max_stack": 99,
+			"colour": "#d6345a",
+			"glyph": "r",
+			"model": "produce",
+			"description": "Food. Right-click tilled soil to plant a raspberry bush, which regrows after picking.",
+			"tags": [
+				"crop"
+			]
 		}
 	}
 }

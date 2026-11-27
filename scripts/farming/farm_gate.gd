@@ -48,6 +48,14 @@ extends RefCounted
 ##             a collector given seeds harvests ripe crops in reach into its
 ##             slots and replants from them (then it is taken away, so the
 ##             'away' check below sees plain growth).
+##   fruit     (HandoffFarming.md 7.1-7.2) an apple sapling on plain grass
+##             stands as a REAL tree at its fruit stage and its plot is KEPT
+##             (ground "tree", in the planted list); ripe, its fruit is drawn
+##             in the leaves (user://dev/farm_fruit.png, with a ripe grape vine
+##             and blueberry bush); hitting the tree shakes the apples down as
+##             dropped items and the tree stays, back to its bare stage; the
+##             label names the tree when it is looked at; hit again with
+##             nothing ripe it is felled and its plot goes.
 ##   gaps      (Docs/MineFarming.md 22) seeds on plain grass say why over
 ##             the hotbar; crops are drawn sky-lit (the cave's light, per
 ##             instance); from 150 m the field is far patches, not bare soil
@@ -575,6 +583,79 @@ func run(host: Node) -> void:
 			creplanted += 1
 	check("and replants them from its seeds (%d creplanted)" % creplanted, creplanted > 0)
 	w.chests.break_chest(ckey, false)
+
+	# --- fruit trees and new bushes (HandoffFarming.md 7.1-7.2), on a patch
+	# of their own past the field (a canopy is 8 studs)
+	var fx0 := x0 + 24
+	for res in [BrickTerrain.fill_box(Vector3i(fx0, top + 1, z0), Vector3i(fx0 + 15, top + 60, z0 + 11), 0, false),
+			BrickTerrain.fill_box(Vector3i(fx0, top - 9, z0), Vector3i(fx0 + 15, top - 1, z0 + 11), BrickTerrain.MAT_DIRT, false),
+			BrickTerrain.fill_box(Vector3i(fx0, top, z0), Vector3i(fx0 + 15, top, z0 + 11), BrickTerrain.MAT_GRASS, false)]:
+		w.terrain_edited(res)
+	await w._frames(10)
+	var ab := Vector3i(floori(fx0 / 2.0) + 3, top, floori(z0 / 2.0) + 3)
+	_hold(&"apple_sapling")
+	w.builder.target = {"cell": Vector3i(ab.x * 2, top, ab.z * 2), "normal": Vector3i.UP}
+	var ap_ok: bool = w.builder.place_target()
+	check("an apple sapling goes on plain grass", ap_ok and f.store.get_plot(ab).crop == &"apple_tree")
+	var vb := Vector3i(ab.x + 4, top, ab.z - 2)
+	var bbb := Vector3i(ab.x + 4, top, ab.z + 1)
+	for nb in [vb, bbb]:
+		f.till({"cell": Vector3i(nb.x * 2, top, nb.z * 2), "normal": Vector3i.UP})
+	f.plant({"cell": Vector3i(vb.x * 2, top, vb.z * 2)}, &"grapes")
+	f.plant({"cell": Vector3i(bbb.x * 2, top, bbb.z * 2)}, &"blueberries")
+	check("a grape vine and a blueberry bush planted", f.store.get_plot(vb).crop == &"grape_vine"
+			and f.store.get_plot(bbb).crop == &"blueberry_bush")
+	var acrop := FarmCrops.get_crop(&"apple_tree")
+	var acell := Vector2i(ab.x * 2, ab.z * 2)
+	var grown0 := f.trees_grown
+	for _i in 30:
+		w.world_time += FarmPlant.DAY * 0.5
+		await w._frames(2)
+		f.settle_all()
+		if int(f.store.get_plot(ab).get("stage", 0)) >= int(acrop.fruit_at):
+			break
+	var ap := f.store.get_plot(ab)
+	check("the apple sapling stands as a real tree and keeps its plot (stage %d, ground %s, planted: %s)" % [
+			int(ap.get("stage", -1)), ap.get("ground", "?"), w._trees.planted.has(acell)],
+			not ap.is_empty() and str(ap.ground) == "tree" and w._trees.planted.has(acell) and f.trees_grown == grown0 + 1)
+	for _i in 30:
+		w.world_time += FarmPlant.DAY * 0.5
+		await w._frames(2)
+		f.settle_all()
+		if FarmPlant.is_ripe(f.store.get_plot(ab)) and FarmPlant.is_ripe(f.store.get_plot(vb)) \
+				and FarmPlant.is_ripe(f.store.get_plot(bbb)):
+			break
+	check("the apples ripen on the tree, the vine and bush too", FarmPlant.is_ripe(f.store.get_plot(ab))
+			and FarmPlant.is_ripe(f.store.get_plot(vb)) and FarmPlant.is_ripe(f.store.get_plot(bbb)))
+	var cbox := f.canopy_box(f.store.get_plot(ab))
+	var tmid := cbox.get_center() - Vector3(0, cbox.size.y * 0.4, 0)
+	var tcam := tmid + Vector3(-4.6, 0.6, -4.2)
+	var td := (tmid - tcam).normalized()
+	w._fly_to(tcam - Vector3(0, 1.6, 0), Vector3(td.x, 0, td.z))
+	w.walker.pitch = asin(clampf(td.y, -1.0, 1.0))
+	if w._hud_layer != null:
+		w._hud_layer.visible = false
+	await w._frames(60)
+	var fruit_mmi: MultiMeshInstance3D = f.draw._mmis.get("apple_tree:fruit:%d" % (int(acrop.stages) - 1))
+	check("ripe apples are drawn in its leaves (%d trees)" % (fruit_mmi.multimesh.instance_count if fruit_mmi != null else -1),
+			fruit_mmi != null and fruit_mmi.multimesh.instance_count == 1)
+	await w._shot(UserPaths.DEV + "farm_fruit.png")
+	if w._hud_layer != null:
+		w._hud_layer.visible = true
+	check("the label names the tree looked at", f.look_text({"tree": acell}).begins_with("Apple tree"))
+	_hold(&"hoe")
+	var drops0: int = w.drops.count()
+	var shaken0 := f.shaken
+	w.builder.target = {"tree": acell, "position": cbox.get_center()}
+	w.builder.break_target()
+	var ap2 := f.store.get_plot(ab)
+	check("hitting the ripe tree shakes %d apples down, the tree stays (bare stage %d)" % [w.drops.count() - drops0,
+			int(ap2.get("stage", -1))], f.shaken == shaken0 + 1 and w.drops.count() - drops0 >= int(acrop.yield.x)
+			and w._trees.planted.has(acell) and int(ap2.get("stage", -1)) == int(acrop.fruit_at))
+	w.builder.target = {"tree": acell, "position": cbox.get_center()}
+	w.builder.break_target()
+	check("hit with nothing ripe it is felled, its plot gone", not w._trees.planted.has(acell)
+			and f.store.get_plot(ab).is_empty() and f.tree_plot(acell).is_empty())
 
 	# --- the gaps: a refusal said, crops sky-lit, far fields drawn
 	f.plant({"cell": Vector3i((bx0 + 4) * 2, top, (bz0 + 4) * 2), "normal": Vector3i.UP}, &"wheat_seeds")

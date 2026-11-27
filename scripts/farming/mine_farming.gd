@@ -50,6 +50,8 @@ const CHEST_REACH := 8.0
 const CAN_WATER := 16
 ## A felled tree gives its sapling this often (survival).
 const SAPLING_CHANCE := 0.5
+## ... and a fruit sapling of that canopy this often (HandoffFarming.md 7.1).
+const FRUIT_SAPLING_CHANCE := 0.06
 ## Saplings planted by a drag stand this many plots apart (canopies).
 const SAPLING_SPACING := 3
 ## A scarecrow keeps most birds off plots within this (metres).
@@ -95,6 +97,7 @@ var weeded := 0
 var crossed := 0
 var giants := 0
 var collected := 0
+var shaken := 0
 ## Fields and enclosure (stage 5): grouped plots, a flood on a worker.
 var fields := FarmFields.new()
 ## Bumped by every terrain edit (`terrain_changed`): a plot's light is asked
@@ -179,10 +182,7 @@ func step(delta: float, eye: Vector3) -> void:
 			var plot := store.get_plot(_near[_settle_i])
 			if not plot.is_empty() and FarmPlant.settle(plot, t):
 				_draw_dirty = true
-				if _grown_tree(plot):
-					_grow_tree(plot)
-				elif bool(plot.get("packed", false)):
-					_packed(plot)
+				_after_settle(plot)
 				if _near.is_empty():
 					break
 		for _i in mini(COND_PER_FRAME, _near.size()):
@@ -220,10 +220,7 @@ func settle_all() -> void:
 		var plot: Dictionary = store.plots[b]
 		if FarmPlant.settle(plot, t):
 			_draw_dirty = true
-		if _grown_tree(plot):
-			_grow_tree(plot)
-		elif bool(plot.get("packed", false)):
-			_packed(plot)
+		_after_settle(plot)
 
 
 # ---------------------------------------------------------------------------
@@ -401,20 +398,141 @@ static func _find_in(slots: Array, id: StringName, data) -> int:
 # ---------------------------------------------------------------------------
 # Saplings (Docs/MineFarming.md 17)
 
-## The sapling item that grows into tree variant `variant`, or &"".
+## The sapling item that grows into a timber tree of variant `variant`, or &"".
 static func sapling_of(variant: int) -> StringName:
 	if variant < 0:
 		return &""
 	for id in FarmCrops.ids():
 		var c := FarmCrops.get_crop(id)
-		if int(c.tree) == variant:
+		if int(c.tree) == variant and FarmCrops.is_timber(c):
 			return c.seed
 	return &""
 
 
+## The fruit saplings whose trees wear variant `variant`'s canopy.
+static func fruit_saplings_of(variant: int) -> Array[StringName]:
+	var out: Array[StringName] = []
+	for id in FarmCrops.ids():
+		var c := FarmCrops.get_crop(id)
+		if int(c.tree) == variant and FarmCrops.is_fruit_tree(c):
+			out.append(c.seed)
+	return out
+
+
 func _grown_tree(plot: Dictionary) -> bool:
 	var c := FarmPlant.crop_of(plot)
-	return not c.is_empty() and int(c.tree) >= 0 and FarmPlant.is_ripe(plot)
+	return FarmCrops.is_timber(c) and FarmPlant.is_ripe(plot)
+
+
+# ---------------------------------------------------------------------------
+# Fruit trees (HandoffFarming.md 7.1)
+
+## A fruit tree that has grown to its `fruit_at` stage but whose real tree is
+## not standing yet (it grew while away, or just now).
+func _tree_due(plot: Dictionary) -> bool:
+	var c := FarmPlant.crop_of(plot)
+	return FarmCrops.is_fruit_tree(c) and int(plot.stage) >= int(c.fruit_at) \
+			and str(plot.get("ground", "farm")) != "tree"
+
+
+## Its trunk corner (studs, plate it stands on + 1): TerrainTrees' key.
+static func trunk_cell(b: Vector3i) -> Vector3i:
+	return Vector3i(b.x * 2, b.y + 1, b.z * 2)
+
+
+## The fruit tree's real tree stands (TerrainTrees.plant_tree: felled,
+## collided and drawn like any) and the plot is KEPT, `ground` "tree": it goes
+## on growing its fruit, settled exactly like any plot.
+func _stand_tree(plot: Dictionary) -> void:
+	var c := FarmPlant.crop_of(plot)
+	if not host.plant_tree(trunk_cell(plot.b), int(c.tree)):
+		return
+	plot.ground = "tree"
+	store.touch(plot.b)
+	_draw_dirty = true
+	trees_grown += 1
+	log_lines.append("%s stands at %s" % [c.id, plot.b])
+
+
+## After a settle: a timber sapling grown into a tree, a fruit tree standing
+## up, or a plot animals packed down.
+func _after_settle(plot: Dictionary) -> void:
+	if _grown_tree(plot):
+		_grow_tree(plot)
+	elif _tree_due(plot):
+		_stand_tree(plot)
+	elif bool(plot.get("packed", false)):
+		_packed(plot)
+
+
+## The fruit tree plot whose trunk corner is `cell` (x, z studs), or {}.
+func tree_plot(cell: Vector2i) -> Dictionary:
+	if posmod(cell.x, 2) != 0 or posmod(cell.y, 2) != 0:
+		return {}
+	@warning_ignore("integer_division")
+	var bx := cell.x / 2
+	@warning_ignore("integer_division")
+	var bz := cell.y / 2
+	for b in store.plots:
+		if b.x == bx and b.z == bz and str(store.plots[b].get("ground", "")) == "tree":
+			return store.plots[b]
+	return {}
+
+
+## LMB on a tree (MineBuilder._fell, before felling): a fruit tree with ripe
+## fruit is SHAKEN -- the fruit falls round its canopy as dropped items and
+## the tree stays, back to its bare stage. False if it is no fruit tree or
+## nothing on it is ripe (the builder then fells it).
+func shake_tree(cell: Vector2i) -> bool:
+	var plot := tree_plot(cell)
+	if plot.is_empty():
+		return false
+	var t := now()
+	FarmPlant.settle(plot, t)
+	if not FarmPlant.is_ripe(plot):
+		return false
+	var c := FarmPlant.crop_of(plot)
+	var got := FarmPlant.harvest(plot, t)
+	if got.is_empty():
+		return false
+	var box := canopy_box(plot)
+	var mid := box.get_center()
+	var n := int(got.count)
+	for i in n:
+		# Round the canopy's rim, from under its leaves, a little outwards.
+		var a := TAU * (float(i) + randf() * 0.6) / maxf(n, 1)
+		var r := minf(box.size.x, box.size.z) * randf_range(0.25, 0.45)
+		var at := Vector3(mid.x + cos(a) * r, box.position.y - 0.05, mid.z + sin(a) * r)
+		host.drops.spawn(ItemStack.make(got.produce, 1, got.produce_data), at,
+				Vector3(cos(a), 0.6, sin(a)) * randf_range(0.6, 1.4))
+	shaken += 1
+	harvested += 1
+	store.touch(plot.b)
+	_draw_dirty = true
+	log_lines.append("shook %s: %s x%d at %s" % [c.id, got.produce, n, plot.b])
+	return true
+
+
+## The fruit tree at `cell` was felled: its plot goes; the sapling it gives
+## back (always, HandoffFarming.md 7.1), or &"" if it was no fruit tree.
+func tree_felled(cell: Vector2i) -> StringName:
+	var plot := tree_plot(cell)
+	if plot.is_empty():
+		return &""
+	var c := FarmPlant.crop_of(plot)
+	store.remove(plot.b)
+	_near.erase(plot.b)
+	_draw_dirty = true
+	log_lines.append("felled fruit tree %s at %s" % [c.get("id", "?"), plot.b])
+	return c.get("seed", &"")
+
+
+## A fruit tree's canopy, terrain frame (Trees.boxes + Trees.placement).
+func canopy_box(plot: Dictionary) -> AABB:
+	var v := int(FarmPlant.crop_of(plot).get("tree", 0))
+	var xf := Trees.placement(trunk_cell(plot.b), v)
+	var cb: AABB = Trees.boxes(v)[1]
+	return AABB(xf.origin + cb.position, cb.size)
 
 
 ## A grown sapling becomes a real tree (TerrainTrees.plant_tree, saved with
@@ -862,7 +980,7 @@ func _check_giant(plot: Dictionary) -> void:
 ## back). False if there is no crop (the builder then breaks the soil).
 func break_target(target: Dictionary) -> bool:
 	var plot := plot_at_target(target)
-	if plot.is_empty() or plot.crop == &"":
+	if plot.is_empty() or plot.crop == &"" or _is_tree(plot):
 		return false
 	FarmPlant.settle(plot, now())
 	if bool(plot.get("weeds", false)):
@@ -1064,7 +1182,7 @@ func landed(fall: float, feet: Vector3) -> void:
 		return
 	var cell := Vector3i(floori(feet.x / _stud), floori((feet.y - 0.02) / _plate), floori(feet.z / _stud))
 	var plot := plot_at_cell(cell - Vector3i(0, 2, 0))
-	if plot.is_empty():
+	if plot.is_empty() or _is_tree(plot):
 		return
 	trample(plot)
 
@@ -1077,7 +1195,7 @@ func creature_landed(feet: Vector3) -> bool:
 		return false
 	var cell := Vector3i(floori(feet.x / _stud), floori((feet.y - 0.02) / _plate), floori(feet.z / _stud))
 	var plot := plot_at_cell(cell - Vector3i(0, 2, 0))
-	if plot.is_empty() or plot.crop == &"":
+	if plot.is_empty() or plot.crop == &"" or _is_tree(plot):
 		return false
 	trample(plot)
 	return true
@@ -1090,7 +1208,7 @@ func crops_near(at: Vector3, r: float, crops: Array = []) -> Array:
 	var r2 := r * r
 	for b in store.plots:
 		var plot: Dictionary = store.plots[b]
-		if plot.crop == &"" or (not crops.is_empty() and not crops.has(plot.crop)):
+		if plot.crop == &"" or (not crops.is_empty() and not crops.has(plot.crop)) or _is_tree(plot):
 			continue
 		var top := _top_middle(b)
 		var d2 := Vector2(top.x - at.x, top.z - at.z).length_squared()
@@ -1105,7 +1223,7 @@ func crops_near(at: Vector3, r: float, crops: Array = []) -> Array:
 ## already: the crop is eaten up. True if there was a crop to eat.
 func animal_eat(b: Vector3i) -> bool:
 	var plot := store.get_plot(b)
-	if plot.is_empty() or plot.crop == &"":
+	if plot.is_empty() or plot.crop == &"" or _is_tree(plot):
 		return false
 	# A giant is past trouble (Docs/MineFarming.md 20): animals leave it.
 	if int(plot.get("giant", 0)) != 0:
@@ -1127,6 +1245,12 @@ func animal_eat(b: Vector3i) -> bool:
 	eaten += 1
 	log_lines.append("eaten %s" % b)
 	return true
+
+
+## A fruit tree standing on its plot: no trampling, eating or pulling it
+## (its fruit is shaken down, the tree felled: shake_tree, tree_felled).
+static func _is_tree(plot: Dictionary) -> bool:
+	return str(plot.get("ground", "")) == "tree"
 
 
 ## The crop is lost (its seed pops out) and the tilled brick is dirt again.
@@ -1157,7 +1281,9 @@ func refresh(b: Vector3i) -> void:
 		return
 	var lo := _course_lo(b)
 	var m := BrickTerrain.solid_at(lo.x, b.y, lo.z)
-	var soil_plot := str(plot.get("ground", "farm")) == "soil"
+	# A sapling's plot, or a fruit tree's (its tree stands on it, no terrain).
+	var soil_plot := str(plot.get("ground", "farm")) != "farm"
+	var tree_ground := str(plot.get("ground", "farm")) == "tree"
 	if (soil_plot and _top_near(lo.x, lo.z, b.y) < b.y - 3) or (not soil_plot and not is_farmland(m)):
 		_lost(plot, "its soil is gone")
 		return
@@ -1166,7 +1292,7 @@ func refresh(b: Vector3i) -> void:
 		return
 	for x in [lo.x, lo.x + 1]:
 		for z in [lo.z, lo.z + 1]:
-			if BrickTerrain.solid_at(x, b.y + 1, z) != 0:
+			if not tree_ground and BrickTerrain.solid_at(x, b.y + 1, z) != 0:
 				# A block put on it: the crop is crushed and the soil packed down.
 				trample(plot)
 				return
@@ -1215,7 +1341,7 @@ func refresh(b: Vector3i) -> void:
 	_try_giant(plot)
 	# A collector in reach takes a ripe crop (stage 7; not a giant, not a tree).
 	if FarmPlant.is_ripe(plot) and int(plot.get("giant", 0)) == 0 \
-			and int(FarmPlant.crop_of(plot).get("tree", -1)) < 0:
+			and not FarmCrops.is_timber(FarmPlant.crop_of(plot)):
 		var ck := _collector_for(b)
 		if ck != "":
 			_collect(plot, ck)
@@ -1295,6 +1421,9 @@ func cells_changed(lo: Vector3i, hi: Vector3i) -> void:
 
 func look_text(target: Dictionary) -> String:
 	var plot := plot_at_target(target)
+	# A fruit tree is looked at by its trunk or leaves (TerrainTrees.ray).
+	if plot.is_empty() and target.get("tree") is Vector2i:
+		plot = tree_plot(target.tree)
 	if plot.is_empty():
 		return ""
 	var t := now()
@@ -1314,7 +1443,10 @@ func look_text(target: Dictionary) -> String:
 	var head := "%s  %s" % [crop.name, "★".repeat(FarmPlant.stars(plot)) + "☆".repeat(3 - FarmPlant.stars(plot))]
 	var state: String
 	if FarmPlant.is_ripe(plot):
-		state = "RIPE: RMB or LMB to harvest"
+		state = "RIPE: hit the tree to shake the fruit down" if _is_tree(plot) else "RIPE: RMB or LMB to harvest"
+	elif FarmCrops.is_fruit_tree(crop) and int(plot.stage) >= int(crop.fruit_at):
+		state = "fruit %s, ripe in ~%s" % ["growing" if int(plot.stage) > int(crop.fruit_at) else "to come",
+				FarmPlant.span_words(FarmPlant.eta(plot, t))]
 	else:
 		state = "stage %d/%d, %d%%, ripe in ~%s" % [int(plot.stage) + 1, last, roundi(float(plot.p) * 100.0),
 				FarmPlant.span_words(FarmPlant.eta(plot, t))]

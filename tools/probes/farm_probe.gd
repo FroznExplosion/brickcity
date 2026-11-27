@@ -30,6 +30,13 @@ extends SceneTree
 ##             boost and ground; the new crops and the four saplings load, each
 ##             sapling naming its tree; compost, grow mix and the bin have
 ##             recipes; every produce is a #crop for compost.
+##   fruit     the next round (HandoffFarming.md 7.1-7.2): four fruit trees,
+##             each a sapling that stands as a real tree at `fruit_at` and
+##             keeps its plot; its fruit stages run on `fruit_hours`; a pick
+##             sends it back to its bare stage, the tree kept, and it fruits
+##             again; timber saplings stay timber (sapling_of), every canopy
+##             has a fruit sapling; fruit hangs on the canopy (spots inside
+##             its box); three more regrowing bushes.
 ##   can       stage 3: a watering can's water runs out at a set time and the
 ##             catch-up is still exact across it (once == often == saved half
 ##             way); watered grows faster than dry and slows again after; the
@@ -68,6 +75,9 @@ func _init() -> void:
 	_depth()
 	FarmPlant.trouble = true
 	_automation()
+	FarmPlant.trouble = false
+	_fruit()
+	FarmPlant.trouble = true
 	print("farm probe: %d ok, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -400,7 +410,11 @@ func _stage4() -> void:
 		var c := FarmCrops.get_crop(id)
 		if c.produce != &"" and PackedStringArray(ItemCatalog.get_def(c.produce).get("tags", [])).has("crop"):
 			crops += 1
-	_ok("every produce composts (%d tagged crop)" % crops, crops == 12)
+	var with_produce := 0
+	for id in FarmCrops.ids():
+		if FarmCrops.get_crop(id).produce != &"":
+			with_produce += 1
+	_ok("every produce composts (%d of %d tagged crop)" % [crops, with_produce], crops == with_produce and crops >= 12)
 
 
 ## Stage 5: random trouble, drawn from each plot's seed.
@@ -624,3 +638,80 @@ func _automation() -> void:
 	var slots2: Array = [ItemStack.make(&"wheat_seeds", 5, {"g": 3}), ItemStack.make(&"wheat_seeds", 5)]
 	_ok("a seed is found by its traits, or any", MineFarming._find_in(slots2, &"wheat_seeds", {"g": 3}) == 0
 			and MineFarming._find_in(slots2, &"wheat_seeds", {}) == 1 and MineFarming._find_in(slots2, &"wheat_seeds", null) == 0)
+
+
+## The next round: fruit trees and more bushes (HandoffFarming.md 7.1-7.2).
+func _fruit() -> void:
+	print("fruit")
+	var d := FarmPlant.DAY
+	var trees := [&"apple_tree", &"cherry_tree", &"orange_tree", &"lemon_tree"]
+	var variants := {}
+	for id in trees:
+		var c := FarmCrops.get_crop(id)
+		var ok := FarmCrops.is_fruit_tree(c) and not FarmCrops.is_timber(c) and int(c.fruit_at) > 0 \
+				and int(c.fruit_at) < int(c.stages) - 1 and int(c.regrow_to) == int(c.fruit_at) \
+				and str(c.ground) == "soil" and str(ItemCatalog.get_def(c.seed).get("model", "")) == "sapling" \
+				and PackedStringArray(ItemCatalog.get_def(c.produce).get("tags", [])).has("crop")
+		_ok("%s: a fruit tree on tree %d, stands at stage %d, regrows there; sapling %s, fruit %s" % [
+				id, c.tree, c.fruit_at, c.seed, c.produce], ok)
+		variants[int(c.tree)] = true
+	var timber_ok := true
+	var fruit_ok := true
+	for v in Trees.VARIANTS:
+		timber_ok = timber_ok and FarmCrops.is_timber(FarmCrops.get_crop(FarmCrops.crop_of_seed(MineFarming.sapling_of(v))))
+		fruit_ok = fruit_ok and not MineFarming.fruit_saplings_of(v).is_empty()
+	_ok("felling still gives timber saplings (sapling_of skips fruit trees)", timber_ok)
+	_ok("every canopy has a fruit sapling to find", fruit_ok and variants.size() == Trees.VARIANTS)
+	# The fruit's own clock: from the bare tree to ripe on fruit_hours.
+	var ac := FarmCrops.get_crop(&"apple_tree")
+	var a := _plot(&"apple_tree")
+	var t_grow := _time_to_ripe(a)
+	var fa := int(ac.fruit_at)
+	_ok("an apple tree grows up and fruits in %.1f days" % (t_grow / d), FarmPlant.is_ripe(a))
+	var fert0 := float(a.fert)
+	var got := FarmPlant.harvest(a, float(a.t))
+	var y: Vector2i = ac.yield
+	_ok("a ripe apple tree gives %d apples (yield %d-%d, x1.5 at 3 stars)" % [int(got.get("count", 0)), y.x, y.y],
+			got.get("produce") == &"apple" and int(got.count) >= y.x and int(got.count) <= ceili(y.y * 1.5) + 1
+			and int(got.seeds) == 0)
+	_ok("picked, the tree stays: back to its bare stage %d" % fa, a.crop == &"apple_tree" and int(a.stage) == fa
+			and int(a.picks) == 1 and float(a.fert) <= fert0)
+	var t_cycle := _time_to_ripe(a)
+	_ok("it fruits again in %.2f days (two stages of %.0f h, light and spread)" % [t_cycle / d, float(ac.fruit_hours)],
+			FarmPlant.is_ripe(a) and t_cycle < t_grow and t_cycle > d * 0.5 and t_cycle < d * 3.0)
+	var sh := a.duplicate()
+	sh.stage = fa
+	_ok("the fruit stages use fruit_hours, the sapling's stage_hours", is_equal_approx(FarmPlant.stage_hours(sh, ac),
+			float(ac.fruit_hours)) and is_equal_approx(FarmPlant.stage_hours(_plot(&"apple_tree"), ac), float(ac.stage_hours)))
+	# Exact across the switch to the fruit clock and through several picks'
+	# worth of time (ripe holds: nobody picks it).
+	var once := _plot(&"cherry_tree")
+	once.ground = "tree"
+	var often := once.duplicate()
+	var t_end := float(once.t) + d * 4.3
+	FarmPlant.settle(once, t_end)
+	var t := float(often.t)
+	while t < t_end:
+		t = minf(t_end, t + 13.7)
+		FarmPlant.settle(often, t)
+	_ok("a cherry tree over 4.3 days: once == often (stage %d)" % once.stage,
+			int(once.stage) == int(often.stage) and absf(float(once.p) - float(often.p)) < 1e-6)
+	var row := FarmPlant.from_row(FarmPlant.to_row(once))
+	_ok("a row keeps a standing tree's ground", str(row.ground) == "tree")
+	_ok("no weeds or blight on a fruit tree", FarmPlant.hazard(_plot(&"lemon_tree"), FarmCrops.get_crop(&"lemon_tree")) == 0.0)
+	# The fruit's places on each canopy: some, and all in its leaves' box.
+	for v in Trees.VARIANTS:
+		var spots := FarmDraw.fruit_spots(v)
+		var cb: AABB = (Trees.boxes(v)[1] as AABB).grow(0.05)
+		var inside := true
+		for sp in spots:
+			inside = inside and cb.has_point(sp[0])
+		_ok("tree %d: %d fruit spots, all on its canopy" % [v, spots.size()], spots.size() >= 8 and inside)
+	for id in [&"blueberry_bush", &"grape_vine", &"raspberry_bush"]:
+		var bc := FarmCrops.get_crop(id)
+		var bush := _plot(id)
+		_time_to_ripe(bush)
+		var g := FarmPlant.harvest(bush, float(bush.t))
+		_ok("%s: planted from %s, picked it regrows from stage %d" % [id, bc.seed, int(bc.regrow_to) + 1],
+				bc.seed == bc.produce and g.get("produce") == bc.produce and bush.crop == id
+				and int(bush.stage) == int(bc.regrow_to))

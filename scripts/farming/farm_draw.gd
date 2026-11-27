@@ -93,6 +93,12 @@ func rebuild(plots: Dictionary, eye: Vector3) -> void:
 		var d2 := Vector2(at.x - eye.x, at.z - eye.z).length_squared()
 		if d2 > f2:
 			continue
+		if str(plot.get("ground", "")) == "tree":
+			# A fruit tree: the real tree draws itself (TerrainTrees); its
+			# fruit is drawn in its leaves, near only.
+			if d2 <= r2:
+				_add_fruit(by, plot)
+			continue
 		if d2 > r2:
 			far.append(plot)
 			continue
@@ -118,8 +124,13 @@ func rebuild(plots: Dictionary, eye: Vector3) -> void:
 		var mmi: MultiMeshInstance3D = _mmis.get(key)
 		if mmi == null:
 			var parts: PackedStringArray = key.split(":")
-			var mesh := giant_mesh(StringName(parts[0])) if parts[1] == "giant" \
-					else mesh_for(StringName(parts[0]), int(parts[1]))
+			var mesh: Mesh
+			if parts[1] == "giant":
+				mesh = giant_mesh(StringName(parts[0]))
+			elif parts[1] == "fruit":
+				mesh = fruit_mesh(StringName(parts[0]), int(parts[2]))
+			else:
+				mesh = mesh_for(StringName(parts[0]), int(parts[1]))
 			if mesh == null:
 				continue
 			mmi = MultiMeshInstance3D.new()
@@ -178,7 +189,10 @@ func mesh_for(crop_id: StringName, stage: int) -> Mesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var last := int(crop.stages) - 1
-	var k := float(stage) / float(maxi(last, 1))
+	# A fruit tree is a sapling up to the stage its tree stands at.
+	if int(crop.get("fruit_at", -1)) > 0:
+		last = int(crop.fruit_at) - 1
+	var k := clampf(float(stage) / float(maxi(last, 1)), 0.0, 1.0)
 	var ripe := stage >= last
 	var leaf: Color = crop.leaf
 	var fruit: Color = crop.ripe
@@ -258,6 +272,24 @@ func mesh_for(crop_id: StringName, stage: int) -> Mesh:
 					var y := h * (0.3 + 0.45 * float(i % 3) / 2.0)
 					var c := Vector3(cos(a) * w * 0.5, y, sin(a) * w * 0.5)
 					_cyl(st, c - Vector3(0, 0.03, 0), 0.06, 0.07, fruit)
+		"vine":
+			# A grape vine: a post, a cross bar, leaves along it; ripe, purple
+			# bunches (round 1x1s stacked smaller downwards) hang under it.
+			var h := lerpf(P * 2.0, P * 3.0 * 2.4, k)
+			_cyl(st, Vector3.ZERO, 0.04, h, Color(0.45, 0.32, 0.2))
+			if k >= 0.3:
+				_box(st, Vector3(0, h - P * 0.25, 0), Vector3(S * 1.7, P * 0.5, 0.06), Color(0.45, 0.32, 0.2))
+			var n := 2 + stage * 2
+			for i in n:
+				var x := lerpf(-S * 0.8, S * 0.8, float(i) / maxf(n - 1, 1)) * clampf(k * 1.5, 0.3, 1.0)
+				_leaf(st, Vector3(x, h * 0.85, 0), Vector3(0.3 if i % 2 == 0 else -0.3, 0, 1.0 if i % 2 == 0 else -1.0),
+						S * 0.55, leaf.darkened(0.07 * (i % 2)))
+			if stage >= last - 1:
+				var col := leaf.lightened(0.1).lerp(fruit, 1.0 if ripe else 0.2)
+				for x in [-0.55, 0.0, 0.55]:
+					for j in 3:
+						var r := 0.06 * (1.0 - 0.22 * j)
+						_cyl(st, Vector3(x * S, h - P * (1.2 + 0.9 * j), 0.04), r, P * 0.8, col, 8)
 		"corn":
 			# Two tall stalks with long leaves; ripe, a yellow cob on each.
 			var h := lerpf(P * 2.0, P * 3.0 * 4.0, k)
@@ -303,6 +335,135 @@ func mesh_for(crop_id: StringName, stage: int) -> Mesh:
 				_box(st, Vector3(0, h + w * 0.85, 0), Vector3(w * 0.6, w * 0.4, w * 0.6), leaf.lightened(0.08))
 		_:
 			_box(st, Vector3(0, P, 0), Vector3(S, P * 2.0, S), leaf)
+	st.generate_normals()
+	var mesh := st.commit()
+	_meshes[key] = mesh
+	return mesh
+
+
+## A standing fruit tree's fruit (HandoffFarming.md 7.1): instanced at the
+## tree's own placement (Trees.placement: its recipe rebased to its min
+## corner, as TerrainTrees lays it), keyed "crop:fruit:stage". None at the
+## bare stage (`fruit_at`).
+func _add_fruit(by: Dictionary, plot: Dictionary) -> void:
+	var crop := FarmCrops.get_crop(plot.crop)
+	if crop.is_empty() or int(plot.stage) <= int(crop.get("fruit_at", 0)):
+		return
+	var key := "%s:fruit:%d" % [plot.crop, plot.stage]
+	if not by.has(key):
+		by[key] = []
+	var b: Vector3i = plot.b
+	var xf := Trees.placement(Vector3i(b.x * 2, b.y + 1, b.z * 2), int(crop.tree))
+	by[key].append([xf, _light(plot)])
+
+
+## Where fruit hangs on tree variant `v`, in its placed recipe's frame: under
+## the canopy's wide layer of plates (round the trunk's plate, which hangs
+## lower), and on the outer sides of its ragged layer of bricks -- read from
+## the recipe itself, so fruit never floats where a brick was left out.
+static var _fruit_spots := {}
+
+
+static func fruit_spots(v: int) -> Array:
+	if _fruit_spots.has(v):
+		return _fruit_spots[v]
+	var r := Trees.recipe(v)
+	var o := r.origin()
+	var size := BrickWorld.get_cell_size()
+	var leaf_parts: Array = []
+	var lo := Vector3i(1 << 20, 1 << 20, 1 << 20)
+	var hi := -lo
+	for i in r.size():
+		if r.material_of(i) != Trees.LEAF:
+			continue
+		var c := r.cell_of(i) - o
+		var ps := BuildRecipe.part_size(r.part_of(i))
+		leaf_parts.append([c, ps])
+		lo = Vector3i(mini(lo.x, c.x), mini(lo.y, c.y), mini(lo.z, c.z))
+		hi = Vector3i(maxi(hi.x, c.x + ps.x), maxi(hi.y, c.y + ps.y), maxi(hi.z, c.z + ps.z))
+	var spots: Array = []
+	# 1. Under the wide plates (the second layer, one plate over the bottom).
+	var y_under := (lo.y + 1) * size.y
+	for e in leaf_parts:
+		var c: Vector3i = e[0]
+		var ps: Vector3i = e[1]
+		if c.y != lo.y + 1:
+			continue
+		for x in range(c.x, c.x + ps.x):
+			for z in range(c.z, c.z + ps.z):
+				# Not over the bottom plate (it hangs a plate lower there).
+				var inner := false
+				for e2 in leaf_parts:
+					var c2: Vector3i = e2[0]
+					var p2: Vector3i = e2[1]
+					if c2.y == lo.y and x >= c2.x and x < c2.x + p2.x and z >= c2.z and z < c2.z + p2.z:
+						inner = true
+				if not inner and (x + z) % 2 == 0:
+					spots.append([Vector3((x + 0.5) * size.x, y_under, (z + 0.5) * size.z), Vector3.DOWN])
+	# 2. The outer sides of the bricks (the third layer) on the canopy's rim.
+	for e in leaf_parts:
+		var c: Vector3i = e[0]
+		var ps: Vector3i = e[1]
+		if ps.y < 3:
+			continue
+		var ym := (c.y + ps.y * 0.5) * size.y
+		var mid := Vector3((c.x + ps.x * 0.5) * size.x, ym, (c.z + ps.z * 0.5) * size.z)
+		for d in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
+			# Its face on that side free (no leaf brick beside it).
+			var nx := c.x + (ps.x if d.x > 0 else (-1 if d.x < 0 else 0))
+			var nz := c.z + (ps.z if d.z > 0 else (-1 if d.z < 0 else 0))
+			var covered := false
+			for e2 in leaf_parts:
+				var c2: Vector3i = e2[0]
+				var p2: Vector3i = e2[1]
+				if p2.y >= 3 and c2.y == c.y and nx >= c2.x and nx < c2.x + p2.x and nz >= c2.z and nz < c2.z + p2.z:
+					covered = true
+			if covered:
+				continue
+			var face := mid + Vector3(d.x * ps.x * 0.5 * size.x, 0, d.z * ps.z * 0.5 * size.z)
+			spots.append([face, Vector3(d)])
+	# A fixed share of them, so a tree is not a fruit wall (the same per variant).
+	var out: Array = []
+	for i in spots.size():
+		if Trees._hash(v + 11, i, 7) < 0.55:
+			out.append(spots[i])
+	_fruit_spots[v] = out
+	return out
+
+
+## The fruit of `crop_id` at `stage` on its tree: small and green while it
+## grows, round 1x1 bricks in its colour with a stud when ripe.
+func fruit_mesh(crop_id: StringName, stage: int) -> Mesh:
+	var key := "%s:fruit:%d" % [crop_id, stage]
+	if _meshes.has(key):
+		return _meshes[key]
+	var crop := FarmCrops.get_crop(crop_id)
+	if crop.is_empty():
+		return null
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var last := int(crop.stages) - 1
+	var fa := int(crop.get("fruit_at", 0))
+	var k := clampf(float(stage - fa) / float(maxi(last - fa, 1)), 0.0, 1.0)
+	var ripe := stage >= last
+	var leaf: Color = crop.leaf
+	var col := leaf.lightened(0.25).lerp(crop.ripe, 1.0 if ripe else 0.15)
+	var r := _stud * lerpf(0.18, 0.42, k)
+	var h := _plate * lerpf(1.0, 2.4, k)
+	for sp in fruit_spots(int(crop.tree)):
+		var p: Vector3 = sp[0]
+		var d: Vector3 = sp[1]
+		var base: Vector3
+		if d == Vector3.DOWN:
+			# Hanging: a short stem, the fruit under it.
+			_cyl(st, p - Vector3(0, _plate * 0.6, 0), 0.012, _plate * 0.6, leaf.darkened(0.4), 4)
+			base = p - Vector3(0, _plate * 0.6 + h, 0)
+		else:
+			# On a side: sitting against the leaves.
+			base = p + d * r * 0.9 - Vector3(0, h * 0.5, 0)
+		_cyl(st, base, r, h, col, 10)
+		if ripe:
+			_stud_on(st, base + Vector3(0, h, 0), col)
 	st.generate_normals()
 	var mesh := st.commit()
 	_meshes[key] = mesh

@@ -285,7 +285,16 @@ static func rate(plot: Dictionary, crop: Dictionary, wet: bool, boost := false) 
 			* (GROW_BOOST if boost else 1.0) * (WEEDS_SLOW if bool(plot.get("weeds", false)) else 1.0) \
 			* (1.0 + GROWTH_PER * int(plot.get("tg", 0))) \
 			* (COMPANION_BONUS if bool(plot.get("companion", false)) else 1.0) \
-			/ (float(crop.stage_hours) * HOUR * jitter(plot))
+			/ (stage_hours(plot, crop) * HOUR * jitter(plot))
+
+
+## In-game hours of the plot's stage at full rate: a fruit tree's fruit
+## stages have their own (`fruit_hours`).
+static func stage_hours(plot: Dictionary, crop: Dictionary) -> float:
+	var fa := int(crop.get("fruit_at", -1))
+	if fa >= 0 and int(plot.stage) >= fa:
+		return float(crop.get("fruit_hours", crop.stage_hours))
+	return float(crop.stage_hours)
 
 
 ## Stress points a stage ending now earns (what held it back).

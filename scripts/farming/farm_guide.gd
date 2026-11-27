@@ -20,6 +20,7 @@ const HOW := [
 	"   SEED TRAITS: every seed has Growth, Yield and Hardiness (G Y H, 0-10). Growth: 4% faster a point; Yield: 8% more a point; Hardiness: dry soil hurts less, and at 5+ a dry stage is no stress. A 3-star harvest's seeds gain a point 30% of the time (2 stars 10%), and the harvest replants with its own seeds -- so keep a crop well and it gets better generation by generation.",
 	"   BREEDING: leave a tilled plot bare between two ripe plants of the same crop (in a line). While you are near, it may sprout a cross: each trait the better parent's, and half the time one point more.",
 	"   COMPANIONS: some crops grow 15% faster next to others (beans by corn or wheat, carrots by cabbage...). GIANTS: a 2x2 of pumpkins or melons, all ripe at 3 stars, may merge into one giant -- worth twice what the four plots give.",
+	"   FRUIT TREES: apple, cherry, orange and lemon saplings go on grass or dirt like any sapling, grow into a real tree that keeps its plot, and fruit again about every day: green in the leaves while it grows, its own colour when ripe. Hit the tree when it is ripe to shake the fruit down -- the tree stays. Hit it with nothing ripe and it is felled (its sapling back). Felling an ordinary tree now and then gives a fruit sapling of its kind. More bushes: blueberries, grapes and raspberries, planted as they are and picked again and again.",
 	"   BIOME CROPS: cactus fruit only in desert, badlands or savanna; frostberries only where it snows; pineapple only in jungle.",
 	"   AUTOMATION: a SPRINKLER (3 iron ingots at a workbench) keeps every plot within 3 plots of it wet, no water needed. A COLLECTOR (a chest, 4 iron and 1 gold ingot at a workbench) harvests the ripe crops within 4 plots into its own slots and replants them from the seeds it holds -- put seeds in it, come back to a full bin. It leaves giants for you, and waits when it is full.",
 	"7  QUALITY: every stage spent dry (for thirsty crops), too dark, on poor soil or in a biome it dislikes is a stress point. 0-1 points: 3 stars, 50% more; 4 or more: 1 star, less.",
@@ -35,8 +36,20 @@ static func ripe_seconds(crop: Dictionary, wet: bool, fert := 70.0) -> float:
 	plot.wet = wet
 	var soil := FarmPlant.soil_factor(plot, crop)
 	var water := FarmPlant.water_factor(crop, wet)
-	var stages := int(crop.stages) - 1
-	return float(crop.stage_hours) * FarmPlant.HOUR * stages / (soil * water * FarmPlant.mean_light(plot))
+	var hours := 0.0
+	for st in int(crop.stages) - 1:
+		plot.stage = st
+		hours += FarmPlant.stage_hours(plot, crop)
+	return hours * FarmPlant.HOUR / (soil * water * FarmPlant.mean_light(plot))
+
+
+## A fruit tree's cycle: from its bare tree to ripe fruit again.
+static func fruit_seconds(crop: Dictionary, wet: bool, fert := 70.0) -> float:
+	var plot := FarmPlant.new_plot(Vector3i.ZERO, 0.0, fert, -1)
+	plot.wet = wet
+	var stages := int(crop.stages) - 1 - int(crop.fruit_at)
+	return float(crop.fruit_hours) * FarmPlant.HOUR * stages / (FarmPlant.soil_factor(plot, crop)
+			* FarmPlant.water_factor(crop, wet) * FarmPlant.mean_light(plot))
 
 
 static func _item_name(id: StringName) -> String:
@@ -51,7 +64,9 @@ static func _range(v: Vector2i) -> String:
 static func crop_text(crop: Dictionary) -> String:
 	var lines := PackedStringArray()
 	var gives := "%s %s" % [_item_name(crop.produce), _range(crop.yield)]
-	if int(crop.tree) >= 0:
+	if FarmCrops.is_fruit_tree(crop):
+		gives = "a fruit tree: %s %s a picking, again and again" % [_item_name(crop.produce), _range(crop.yield)]
+	elif int(crop.tree) >= 0:
 		gives = "a tree (wood, leaves, and its sapling half the time)"
 	elif crop.seeds_back.y > 0:
 		gives += " and %s %s" % [_item_name(crop.seed), _range(crop.seeds_back)]
@@ -61,7 +76,9 @@ static func crop_text(crop: Dictionary) -> String:
 	var grow := ("Grown in ~%s" if int(crop.tree) >= 0 else "Ripe in ~%s") + " on wet soil in full sun, ~%s dry (%d%% speed)   ·   %d stages"
 	grow = grow % [
 			wet_t, dry_t, roundi(float(crop.dry_rate) * 100.0), int(crop.stages) - 1]
-	if int(crop.regrow_to) >= 0:
+	if FarmCrops.is_fruit_tree(crop):
+		grow += "   ·   then fruits every ~%s (shake it: hit the tree)" % FarmPlant.span_words(fruit_seconds(crop, true))
+	elif int(crop.regrow_to) >= 0:
 		grow += "   ·   regrows after picking (back to stage %d)" % (int(crop.regrow_to) + 1)
 	lines.append(grow)
 	var wants := PackedStringArray()
