@@ -52,6 +52,15 @@ extends RefCounted
 ##             pushed too; a sticky one pulls its brick (and the one on it)
 ##             back; pushed bricks are where they were pushed after a reload.
 ##   pictures  user://dev/wiring_pistons.png.
+## Stage 7 (Docs/MineWiring.md 20):
+##   wire brick laid with the builder, the wiring knows it; a wall of wire
+##             bricks (one up a course) carries a lever's power to a lamp;
+##             a real shot breaking one cuts it.
+##   links     a receiver 14 studs off gives its transmitter's level; RMB
+##             steps its channel (dark), the transmitter stepped too (lit); a
+##             shot breaking the transmitter darkens it; channels and wire
+##             bricks back after a reload. Picture
+##             user://dev/wiring_wire_bricks.png.
 ## Stages 5-6 (Docs/MineWiring.md 19): the traps kit, its own file
 ## (wiring_traps_gate.gd), at the end; `-- --gate=wiring --traps` runs it alone.
 ## The gaps after stage 4 (Docs/MineWiring.md 21-27): wiring_gaps_gate.gd,
@@ -500,6 +509,69 @@ func run(host: Node) -> void:
 	check("a chest on a brick pushed sideways stalls it (%s)" % wr.last_stall, not bool(wr.devices[p8].on)
 			and _is_brick(blo, 2, 2) and ch.chests.has(MineChests.key_of(Vector3i(bx2, y + 3, bz2))))
 
+	# --- stage 7: wire bricks and wireless links (Docs/MineWiring.md 20)
+	var zw := z0 + 30
+	for res in [BrickTerrain.fill_box(Vector3i(x0 - 2, top + 1, zw - 2), Vector3i(x0 + 17, top + 60, zw + 10), 0, false),
+			BrickTerrain.fill_box(Vector3i(x0 - 2, top - 6, zw - 2), Vector3i(x0 + 17, top, zw + 10), BrickTerrain.MAT_STONE, false)]:
+		w.terrain_edited(res)
+	await w._frames(20)
+	var wire := BrickTerrain.MAT_WIRE_BRICK
+	# Laid with the builder, as a block: the edit's check finds it.
+	w._fly_to(Vector3((x0 + 8) * stud, y * plate + 1.0, (zw - 3) * stud), Vector3(0, 0, 1))
+	w.walker.pitch = -0.6
+	await w._frames(4)
+	_hold(&"wire_brick")
+	w.builder.target = {"cell": Vector3i(x0 + 8, top, zw), "normal": Vector3i.UP}
+	check("RMB with wire bricks lays one: the wiring knows it", w.builder.place_target()
+			and BrickTerrain.solid_at(x0 + 8, y, zw) == wire and wr.wires.has(Vector3i(x0 + 8, y, zw)))
+	# A wall: a 3-long wire brick on the ground, a 1x1 on its far end, a
+	# lever at its near end, a lamp beside the top one.
+	_lay_brick(Vector3i(x0 + 3, y, zw), 3, 1, wire)
+	_lay_brick(Vector3i(x0 + 5, y + 3, zw), 1, 1, wire)
+	w.terrain_edited(BrickTerrain.fill_box(Vector3i(x0 + 6, y, zw), Vector3i(x0 + 6, y + 2, zw), BrickTerrain.MAT_STONE, false))
+	var wlev := Vector3i(x0 + 2, y, zw)
+	var wlamp := Vector3i(x0 + 6, y + 3, zw)
+	wr.place_device(wlev, &"lever")
+	wr.place_device(wlamp, &"lamp")
+	await w._frames(16)
+	check("a wall of wire bricks is one net (%d wire nodes)" % wr.wires.size(), wr.wires.has(Vector3i(x0 + 3, y, zw))
+			and wr.wires.has(Vector3i(x0 + 5, y + 3, zw)) and wr.net_of.has(Vector3i(x0 + 3, y, zw))
+			and wr.net_of[Vector3i(x0 + 3, y, zw)] == wr.net_of.get(Vector3i(x0 + 5, y + 3, zw), -1))
+	check("lever off: the lamp dark", not wr.is_lit(wlamp))
+	wr.use_device(wlev)
+	await w._frames(16)
+	check("lever on: through the wall and up it, the lamp lit", wr.is_lit(wlamp))
+	await _picture(Vector3((x0 + 4) * stud, y * plate, zw * stud), Vector3(-1.2, 1.6, -2.6), "wiring_wire_bricks.png")
+	# A real shot at the wall's lower brick cuts the circuit.
+	var hitp := Vector3((x0 + 4.5) * stud, (y + 1.5) * plate, zw * stud + 0.01)
+	w._mine(w.to_global(hitp), Vector3(0, 0, 1), null)
+	await w._frames(30)
+	check("a shot breaks the lower wire brick: out of the net, the lamp dark (solid %d)" % BrickTerrain.solid_at(x0 + 4, y, zw),
+			not wr.wires.has(Vector3i(x0 + 4, y, zw)) and not wr.is_lit(wlamp))
+	# Wireless: a transmitter beside a lever, a receiver 14 studs off with a lamp.
+	# Clear of the builder's wire brick (a 2x2 block at x0+8..9).
+	var tx := Vector3i(x0 + 12, y, zw)
+	var rx := Vector3i(x0 + 16, y, zw + 8)
+	var rlamp := Vector3i(x0 + 16, y, zw + 7)
+	check("a lever beside the transmitter", wr.place_device(Vector3i(x0 + 11, y, zw), &"lever", true))
+	wr.place_device(tx, &"wire_transmitter")
+	wr.place_device(rx, &"wire_receiver")
+	wr.place_device(rlamp, &"lamp")
+	await w._frames(20)
+	check("the receiver gives its transmitter's level: its lamp lit", wr.output_of(rx) == 15 and wr.is_lit(rlamp))
+	w.builder.target = {"device": rx, "position": wr.device_box(rx).get_center()}
+	_hold(&"stone")
+	check("RMB on the receiver steps its channel", w.builder.place_target() and int(wr.devices[rx].setting) == 8)
+	await w._frames(20)
+	check("on another channel: dark", not wr.is_lit(rlamp))
+	wr.use_device(tx)
+	await w._frames(20)
+	check("the transmitter stepped to the same channel: lit again", wr.is_lit(rlamp))
+	var txb: AABB = wr.device_box(tx)
+	w._mine(w.to_global(txb.get_center() - Vector3(0, 0, txb.size.z * 0.5 - 0.01)), Vector3(0, 0, 1), null)
+	await w._frames(20)
+	check("a shot breaks the transmitter: the far lamp dark", not wr.devices.has(tx) and not wr.is_lit(rlamp))
+
 	# --- save: generated again
 	var n_cables: int = wr.cables.size()
 	var n_dev: int = wr.devices.size()
@@ -515,6 +587,8 @@ func run(host: Node) -> void:
 			and wr.devices.has(trap) and wr.is_open(trap))
 	check("the gate tile wall is back, solid; the display reads 15", wall.all(func(t): return wr.devices.has(t) and not wr.is_open(t))
 			and wr.output_of(disp) == 15)
+	check("the wire bricks and the receiver (its channel) are back", wr.wires.has(Vector3i(x0 + 8, y, zw))
+			and wr.wires.has(Vector3i(x0 + 3, y, zw)) == false and wr.devices.has(rx) and int(wr.devices[rx].setting) == 8)
 	check("the pistons are back (one facing up); the pushed bricks where they were pushed",
 			wr.devices.has(pu) and int(wr.devices[pu].facing) == up and wr.devices.has(p6)
 			and _is_brick(p5 + Vector3i(2, 0, 0), 2, 1) and _is_brick(p6 + Vector3i(1, 0, 0), 1, 1))

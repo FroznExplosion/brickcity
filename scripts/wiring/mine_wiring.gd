@@ -128,6 +128,10 @@ const DEVICES := {
 	&"dropper": {"kind": "dropper", "plates": 3, "facing": true},
 	&"release_brick": {"kind": "release", "plates": 3},
 	&"alarm": {"kind": "alarm", "plates": 3},
+	# Stage 7 (section 20): scripts/wiring/wiring_links.gd. A receiver drives
+	# every side (omni); a transmitter drives nothing.
+	&"wire_transmitter": {"kind": "transmitter", "plates": 3},
+	&"wire_receiver": {"kind": "receiver", "plates": 3, "omni": true},
 }
 ## The fifth facing: up (a piston laid looking steeply down).
 const FACE_UP := 4
@@ -169,6 +173,9 @@ var animate := true
 
 ## cell -> true: a cable tile there.
 var cables := {}
+## A wire brick's stud of a course, keyed by its bottom plate cell -> true
+## (stage 7, WiringLinks): nodes of the nets as cables are.
+var wires := {}
 ## bottom cell -> {"item", "on", "facing", "setting", "timer", "out", "lit",
 ## "prev", "queue", "node"}
 var devices := {}
@@ -206,6 +213,8 @@ var _plate := 0.14
 var _tiles_mi: MultiMeshInstance3D = null
 var _cable_mi: MultiMeshInstance3D = null
 var _string_mi: MultiMeshInstance3D = null
+## Wire bricks' copper bands (stage 7).
+var _wire_mi: MultiMeshInstance3D = null
 ## The wrench's view: the cables again, through walls.
 var _xray_tiles: MultiMeshInstance3D = null
 var _xray_cable: MultiMeshInstance3D = null
@@ -702,6 +711,8 @@ func use_device(c: Vector3i, how := "use") -> bool:
 		_pairs_dirty = true
 	else:
 		match str(def.kind):
+			"transmitter", "receiver":
+				WiringLinks.use(self, c, d, how)
 			"switch":
 				d.on = not bool(d.on)
 			"button":
@@ -898,6 +909,8 @@ func check(lo := Vector3i(-WHOLE, -WHOLE, -WHOLE), hi := Vector3i(WHOLE, WHOLE, 
 	# whole check, which is not a change).
 	if lo.x != -WHOLE:
 		_poke(lo, hi)
+		# Wire bricks found or gone in the box (stage 7).
+		WiringLinks.scan(self, lo, hi)
 	return gone
 
 
@@ -973,6 +986,7 @@ func clear() -> void:
 		_lamps_dirty = true
 	_light_todo.clear()
 	_light_queued.clear()
+	wires.clear()
 	net_of.clear()
 	nets.clear()
 	pairs.clear()
@@ -993,6 +1007,10 @@ func _changed() -> void:
 ## The cables `c` joins: four sides, up to a brick up or down.
 func links(c: Vector3i) -> Array[Vector3i]:
 	var out: Array[Vector3i] = []
+	if not wires.is_empty():
+		WiringLinks.links(self, c, out)
+		if wires.has(c):
+			return out
 	for s in SIDES:
 		for dy in range(-STEP, STEP + 1):
 			var n := c + s + Vector3i(0, dy, 0)
@@ -1016,13 +1034,13 @@ func _rebuild(changed: Array[Vector3i]) -> void:
 				for c in nets[id].cells:
 					redo[c] = true
 				nets.erase(id)
-		if cables.has(s):
+		if cables.has(s) or wires.has(s):
 			redo[s] = true
 	for c in redo:
 		net_of.erase(c)
 	last_flooded = 0
 	for c in redo:
-		if not cables.has(c) or net_of.has(c):
+		if not (cables.has(c) or wires.has(c)) or net_of.has(c):
 			continue
 		var id := _next_net
 		_next_net += 1
@@ -1046,6 +1064,8 @@ func side_nets(c: Vector3i, s: Vector3i) -> Array:
 		var n := c + s + Vector3i(0, dy, 0)
 		if net_of.has(n) and not out.has(net_of[n]):
 			out.append(net_of[n])
+	if not wires.is_empty():
+		WiringLinks.side_nets(self, c, s, plates_of(devices[c].item) if devices.has(c) else COURSE, out)
 	return out
 
 
@@ -1232,6 +1252,8 @@ func _evaluate() -> void:
 				_show_device(g)
 	# 3d. The traps kit: dispensers fire, release bricks let go, alarms call.
 	WiringTraps.evaluate(self)
+	# 3e. Wireless links: each channel's level, out of its receivers.
+	WiringLinks.evaluate(self)
 	# 4. Gates: the next output from what they read now, applied together.
 	var nexts := {}
 	for c in devices:
@@ -2394,7 +2416,13 @@ func readout(target: Dictionary) -> String:
 			if (int(d.prev) > 0) != bool(d.on) and str(d.get("stall", "")) != "":
 				parts.append("stalled: %s" % d.stall)
 		parts.append_array(WiringTraps.readout(self, c, d))
+		parts.append_array(WiringLinks.readout(self, c, d))
 		return " | ".join(parts)
+	if target.has("cell") and not wires.is_empty():
+		var wk := WiringLinks.key(target.cell)
+		if wires.has(wk) and net_of.has(wk):
+			var wid: int = net_of[wk]
+			return "Wire brick -- net level %d | %d parts" % [int(nets[wid].level), nets[wid].cells.size()]
 	if target.has("cable") and net_of.has(target.cable):
 		var id: int = net_of[target.cable]
 		var n_dev := 0
@@ -2439,6 +2467,7 @@ func _make_draw() -> void:
 	_tiles_mi = _multi("CableTiles", _box_mesh(Vector3(0.94, 0.86, 0.94)), mat)
 	_cable_mi = _multi("Cables", _box_mesh(Vector3(1, 1, 1)), mat)
 	_string_mi = _multi("TripStrings", _box_mesh(Vector3(1, 1, 1)), mat)
+	_wire_mi = _multi("WireBands", _box_mesh(Vector3(1, 1, 1)), mat)
 	var xmat := ShaderMaterial.new()
 	xmat.shader = Shader.new()
 	xmat.shader.code = _XRAY_SHADER
@@ -2478,6 +2507,8 @@ static func _box_mesh(size: Vector3) -> BoxMesh:
 func _redraw() -> void:
 	if _tiles_mi == null:
 		return
+	if _wire_mi != null:
+		WiringLinks.draw(self, _wire_mi.multimesh)
 	var tiles := _tiles_mi.multimesh
 	var arms := _cable_mi.multimesh
 	var tile_h := _plate * 0.86
@@ -2553,6 +2584,8 @@ func _device_node(c: Vector3i, item: StringName, facing := 0) -> Node3D:
 	match str(def.kind):
 		"dispenser", "dropper", "release", "alarm":
 			WiringTraps.build(self, root, str(def.kind), box, facing)
+		"transmitter", "receiver":
+			WiringLinks.build(self, root, str(def.kind), box)
 		"switch":
 			_add_box(root, Vector3(_stud * 0.92, _plate, _stud * 0.92), Vector3(0, _plate * 0.5, 0), stone)
 			var pivot := Node3D.new()
@@ -2866,7 +2899,9 @@ func _light_device(root: Node3D) -> void:
 		if std == null:
 			continue
 		var m: ShaderMaterial = _sky.item_material(std)
-		if std.emission_enabled or std.transparency != BaseMaterial3D.TRANSPARENCY_DISABLED:
+		# Its own copy where its glow, see-through or colour changes (set_glow,
+		# set_alpha, set_colour: a link's antennas take its channel's colours).
+		if std.emission_enabled or std.transparency != BaseMaterial3D.TRANSPARENCY_DISABLED 				or str(mi.name).begins_with("Ant"):
 			m = m.duplicate()
 			if std.emission_enabled:
 				m.set_shader_parameter(&"emission", std.emission)
@@ -2883,6 +2918,18 @@ static func set_glow(mi: GeometryInstance3D, energy: float) -> void:
 		(m as StandardMaterial3D).emission_energy_multiplier = energy
 	elif m is ShaderMaterial:
 		(m as ShaderMaterial).set_shader_parameter(&"emission_energy", energy)
+
+
+## A device mesh's colour (a link's antenna), either material; its alpha kept.
+static func set_colour(mi: GeometryInstance3D, col: Color) -> void:
+	if mi == null:
+		return
+	var m := mi.material_override
+	if m is StandardMaterial3D:
+		(m as StandardMaterial3D).albedo_color = col
+	elif m is ShaderMaterial:
+		var old: Color = (m as ShaderMaterial).get_shader_parameter(&"albedo")
+		(m as ShaderMaterial).set_shader_parameter(&"albedo", Color(col.r, col.g, col.b, old.a))
 
 
 ## A device mesh's alpha (a gate tile open), either material.
@@ -2912,6 +2959,8 @@ func _show_device(c: Vector3i) -> void:
 	match str(DEVICES[d.item].kind):
 		"dispenser", "dropper", "release", "alarm":
 			WiringTraps.show(self, c, d, node)
+		"transmitter", "receiver":
+			WiringLinks.show(self, d, node)
 		"switch":
 			var arm := node.get_node_or_null("Arm") as Node3D
 			if arm != null:
@@ -3003,7 +3052,10 @@ func to_save() -> Dictionary:
 		if d.has("program"):
 			devs[key_of(c)]["program"] = (d.program as Array).duplicate()
 		WiringTraps.save_extra(d, devs[key_of(c)])
-	return {"cables": flat, "devices": devs}
+	var wflat: Array = []
+	for k in wires:
+		wflat.append_array([k.x, k.y, k.z])
+	return {"cables": flat, "devices": devs, "wires": wflat}
 
 
 func restore(saved) -> void:
@@ -3014,6 +3066,14 @@ func restore(saved) -> void:
 	if flat is Array:
 		for i in range(0, flat.size() - 2, 3):
 			place_cable(Vector3i(int(flat[i]), int(flat[i + 1]), int(flat[i + 2])), true)
+	# Wire bricks as saved (the ground may not be laid yet; the next check
+	# over them sets them right).
+	var wflat = saved.get("wires", [])
+	if wflat is Array:
+		for i in range(0, wflat.size() - 2, 3):
+			var wk := Vector3i(int(wflat[i]), int(wflat[i + 1]), int(wflat[i + 2]))
+			wires[wk] = true
+			_changed_cells.append(wk)
 	var devs = saved.get("devices", {})
 	if devs is Dictionary:
 		for k in devs:
