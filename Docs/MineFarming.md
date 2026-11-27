@@ -652,3 +652,32 @@ then broken so the 'away' check sees plain growth.
 **All stages of section 12 are built.** Set aside, by the user's choice:
 what crops are for (selling, health, hunger, crafting), real animals, crops
 dying, and a farmhand.
+
+## 22. Gaps closed (2026-11-27)
+
+**Far fields.** Past DRAW_M (96 m) a plot is drawn out to FAR_M (512 m) as
+a low 2 x 2-stud patch (FarmDraw `_far`: one MultiMesh of boxes, colour per
+instance) as tall as its crop has grown -- a plate to two bricks -- in its
+leaf colour turning to its ripe one. The stage is the plot's own as last
+settled (a plot out of reach is not touched), so a far field shows how it
+stood. The gate: from 150 m, 14 far patches and no near crops
+(user://dev/farm_far.png). Before, a field past 96 m was bare soil.
+
+**Crops in caves.** When the mine world draws sky light (MineSkyLit), crops
+and far patches use the falling sand's sky-lit item shader
+(`MineSkyLit.sand_material`, roughness 0.45): each instance's custom data
+carries the plot's own cached light (r sky, g lamp, 0..1), so a cave farm is
+as dark as the cave unless lamp-lit, with no extra light asked. A plot whose
+light changes is redrawn. That shader takes COLOR as linear, so the crops'
+colours are converted from sRGB when it is used (`FarmDraw._c`); unconverted
+they were washed out (ripe carrots tan).
+
+**Why it was refused.** Tilling and planting say why, over the hotbar, for 3
+s (`MineFarming.refuse`, `hud_text`, the mine world's farm label): "Wheat seeds
+go on tilled soil: use a hoe first", "Cactus fruit only grows in Desert,
+Badlands, Savanna", "Hoe: only grass, dirt or podzol can be tilled", "Hoe:
+clear what stands on it first", "Hoe: the 2x2 under it must be flat", "Hoe:
+the top of soil, not its side".
+
+Tests: --gate=farm 76 (+3): the refusal line, crops sky-lit with light per
+instance, the far patches from 150 m.

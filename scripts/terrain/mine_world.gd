@@ -2454,7 +2454,7 @@ func _build_hud() -> void:
 func _update_farm_label() -> void:
 	if _farm_label == null or farming == null or builder == null:
 		return
-	_farm_label.text = farming.look_text(builder.target) if builder.active else ""
+	_farm_label.text = farming.hud_text(builder.target) if builder.active else ""
 
 
 func _update_hud() -> void:
