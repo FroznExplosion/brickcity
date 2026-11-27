@@ -476,35 +476,33 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
     }
 
     // Under it, the bond: every other solid cell's brick, laid once. The
-    // fitted bricks where the game draws them (TerrainFit.set_enabled).
-    const bool fit_on = brick::fit_enabled();
+    // pattern library's bricks where the game draws them
+    // (TerrainFit.set_enabled; Docs/HandoffBrickPatterns.md): BondView::rect's
+    // rule, on the region's cells (courses outside it cut a brick).
+    brick::PatternView pat;
+    const bool fit_on = pat.on();
     const int64_t float_cells = brick::fit_float_cells();
-    brick::FitView fit;
-    std::unordered_map<int64_t, bool> whole_memo;
-    // A bond cell (absolute x, z; local course y) in a fitted brick whose
-    // every cell in the region still bonds.
-    auto in_fitted = [&](int ax, int y, int az, brick::FitBrick &b) -> bool {
-        const int g = group_local(ax - x0, y, az - z0);
-        if ((g != BOND_MEDIUM && g != BOND_STRONG) || !fit.at(ax, y0 + y, az, b)) {
+    // Ground built by edits (filled in, a landed pile): the old pattern among
+    // its own cells, as the tiles draw it (BondView::rect). Memoised a cell.
+    std::vector<int8_t> built_memo(fit_on ? (size_t)W * D * H : 0, -1);
+    auto built = [&](int ax, int y, int az) -> bool {
+        const int x = ax - x0, z = az - z0;
+        if (!fit_on || x < 0 || z < 0 || x >= W || z >= D || y < 0 || y >= H) {
             return false;
         }
-        const int64_t k = bond_key(b.x, b.c, b.z);
-        auto it = whole_memo.find(k);
-        if (it != whole_memo.end()) {
-            return it->second;
+        int8_t &b = built_memo[idx(x, y, z)];
+        if (b < 0) {
+            const int gq = group_local(x, y, z);
+            b = (gq == BOND_MEDIUM || gq == BOND_STRONG) && built_cell(ax, y0 + y, az) ? 1 : 0;
         }
-        bool ok = true;
-        for (int cc = b.c; cc < b.c + b.h && ok; ++cc) {
-            for (int zz = b.z; zz < b.z + b.sz && ok; ++zz) {
-                for (int xx = b.x; xx < b.x + b.sx && ok; ++xx) {
-                    // Out of the region's courses: not known whole.
-                    const int gq = (cc - y0 >= 0 && cc - y0 < H) ? group_local(xx - x0, cc - y0, zz - z0) : (int)BOND_NONE;
-                    ok = gq == BOND_MEDIUM || gq == BOND_STRONG;
-                }
-            }
+        return b != 0;
+    };
+    auto group_course = [&](int ax, int course, int az) -> int {
+        const int y = course - y0;
+        if (y < 0 || y >= H || built(ax, y, az)) {
+            return BOND_NONE;
         }
-        whole_memo[k] = ok;
-        return ok;
+        return group_local(ax - x0, y, az - z0);
     };
     for (int y = 0; y < H; ++y) {
         const int course = y0 + y;
@@ -516,24 +514,21 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
                     continue;
                 }
                 BondRect r;
-                brick::FitBrick fb;
                 int bh = 1;
-                if (fit_on && in_fitted(x0 + x, y, z0 + z, fb)) {
-                    // The fitted brick (Docs/TerrainRegions.md 12). A tall
-                    // one met at its bottom course is ONE body, all its
-                    // courses (stage D); in_fitted has every course of it
-                    // in the region.
-                    r = BondRect{ fb.x, fb.z, fb.sx, fb.sz };
-                    if (TALL_BODIES && fb.h > 1 && fb.c - y0 == y) {
-                        bh = fb.h;
-                    }
-                } else if (fit_on) {
-                    // Ground no fitted brick holds whole: the old pattern
-                    // among those cells, as the tiles draw it.
+                const int g0 = group_abs(x0 + x, z0 + z);
+                if (fit_on && built(x0 + x, y, z0 + z)) {
                     r = bond_rect(x0 + x, course, z0 + z, [&](int ax, int az) {
-                        brick::FitBrick q;
-                        return in_fitted(ax, y, az, q) ? (int)BOND_NONE : group_abs(ax, az);
+                        return built(ax, y, az) ? group_abs(ax, az) : (int)BOND_NONE;
                     });
+                } else if (fit_on && (g0 == BOND_MEDIUM || g0 == BOND_STRONG)
+                        && pat.rect(x0 + x, course, z0 + z, group_course, r)) {
+                    // The pattern's brick, or its piece where the ground cuts
+                    // it. A tall one met at its bottom course is ONE body,
+                    // all its courses (stage D; rect gives a tall brick only
+                    // with every course of it in the region).
+                    if (TALL_BODIES && r.h > 1 && r.c - y0 == y) {
+                        bh = r.h;
+                    }
                 } else {
                     r = bond_rect(x0 + x, course, z0 + z, group_abs);
                 }

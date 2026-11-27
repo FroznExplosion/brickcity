@@ -47,6 +47,12 @@ extends Node3D
 ##                  on/off steps out of its front (RMB picks the program) --
 ##                  Create's sequenced gearshift.
 ##   number display a 2-stud brick showing the level beside it, 0-15.
+##   piston         faces a way or UP: power rising pushes the placed brick in
+##                  front (and every placed brick clutched on its top, and
+##                  any in its line) one stud, or one course up; falling
+##                  retracts. A sticky piston pulls the brick back. Generated
+##                  ground, a device or more than 12 bricks stall it (stage
+##                  4, section 18).
 ##
 ## The TICK (10 Hz, with the water): sensors, then drivers' outputs, then net
 ## levels, then lamps, then every gate works out its next output from what it
@@ -105,12 +111,27 @@ const DEVICES := {
 	&"gate_tile": {"kind": "gatetile", "plates": 3},
 	&"sequencer": {"kind": "gate", "op": "sequence", "plates": 3, "facing": true, "colour": Color(0.85, 0.45, 0.2)},
 	&"number_display": {"kind": "display", "plates": 3, "w": 2, "facing": true},
+	# Stage 4 (section 18). up: may face UP too (FACE_UP).
+	&"piston": {"kind": "piston", "plates": 3, "facing": true, "up": true},
+	&"sticky_piston": {"kind": "piston", "plates": 3, "facing": true, "up": true, "sticky": true},
 	# Stages 5-6, the traps kit (section 19): scripts/wiring/wiring_traps.gd.
 	&"dispenser": {"kind": "dispenser", "plates": 3, "facing": true},
 	&"dropper": {"kind": "dropper", "plates": 3, "facing": true},
 	&"release_brick": {"kind": "release", "plates": 3},
 	&"alarm": {"kind": "alarm", "plates": 3},
 }
+## The fifth facing: up (a piston laid looking steeply down).
+const FACE_UP := 4
+## Plates in a course (a brick's height): a placed brick is one course of
+## plate cells.
+const COURSE := 3
+## The most bricks one push moves (Minecraft's 12).
+const PISTON_LIMIT := 12
+## Pushes started in one tick; the rest wait for the next.
+const PUSHES_PER_TICK := 4
+## A move's slide (s), and the longest wait for the tiles at each end.
+const MOVE_TIME := 0.2
+const MOVE_WAIT := 0.35
 const SIDES: Array[Vector3i] = [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
 const SIDE_NAMES := ["+x", "-x", "+z", "-z"]
 
@@ -127,6 +148,15 @@ var solid_fn: Callable = func(x: int, y: int, z: int) -> int: return BrickTerrai
 ## The feet of whoever can press a tile or cross a string (terrain frame).
 ## The host's player by default; a probe gives its own.
 var bodies_fn: Callable = func() -> Array: return _host_bodies()
+## The placed brick holding cell (x, course, z), Vector4i(rx, rz, sx, sz) or
+## zeros; clearing and laying plate boxes; marking a placed brick. The real
+## field's by default; a probe gives its own ground (pistons, section 18).
+var rect_fn: Callable = func(x: int, course: int, z: int) -> Vector4i: return BrickTerrain.placed_rect(x, course, z)
+var clear_fn: Callable = func(lo: Vector3i, hi: Vector3i) -> Dictionary: return BrickTerrain.fill_box(lo, hi, BrickTerrain.MAT_AIR, false)
+var lay_fn: Callable = func(lo: Vector3i, hi: Vector3i, mat: int) -> Dictionary: return BrickTerrain.fill_box(lo, hi, mat, false)
+var mark_fn: Callable = func(lo: Vector3i, hi: Vector3i, mat: int) -> int: return BrickTerrain.mark_placed(lo, hi, mat)
+## Pistons' moves drawn sliding (a host in the tree); off: written at once.
+var animate := true
 
 ## cell -> true: a cable tile there.
 var cables := {}
@@ -153,6 +183,12 @@ var _clock := 0.0
 ## Ticks run (probes), cells flooded by the last rebuild.
 var ticks := 0
 var last_flooded := 0
+## Pistons: moves under way (each {bricks, step, phase, ...}), pushes started
+## this tick, moves done (probes), why the last push stalled.
+var _moves: Array = []
+var _pushes := 0
+var moves_done := 0
+var last_stall := ""
 
 var _stud := 0.35
 var _plate := 0.14
@@ -199,6 +235,8 @@ func set_hud(layer: CanvasLayer) -> void:
 
 
 func _process(delta: float) -> void:
+	if not _moves.is_empty():
+		_step_moves(delta)
 	_clock += delta
 	if _clock < TICK:
 		return
@@ -210,6 +248,7 @@ func _process(delta: float) -> void:
 ## the logic run (when anything can change), drawn.
 func tick() -> void:
 	ticks += 1
+	_pushes = 0
 	if not _changed_cells.is_empty():
 		_rebuild(_changed_cells)
 		_changed_cells.clear()
@@ -238,6 +277,8 @@ func _live() -> bool:
 			return true
 		if k == "trip" and pairs.has(c):
 			return true
+		if k == "piston" and bool(d.on) != (int(d.prev) > 0):
+			return true    # a stalled push tries again each tick
 	return false
 
 
@@ -269,6 +310,22 @@ static func facing_of(dir: Vector3) -> int:
 	if absf(dir.x) >= absf(dir.z):
 		return 0 if dir.x >= 0.0 else 1
 	return 2 if dir.z >= 0.0 else 3
+
+
+static func can_face_up(item: StringName) -> bool:
+	return DEVICES.has(item) and bool(DEVICES[item].get("up", false))
+
+
+## The facing a device is laid with, from the camera's direction: away from
+## the player, or UP for a piston when the camera looks steeply down.
+static func facing_for(item: StringName, dir: Vector3) -> int:
+	if can_face_up(item) and dir.normalized().y < -0.75:
+		return FACE_UP
+	return facing_of(dir)
+
+
+static func facing_name(f: int) -> String:
+	return "up" if f == FACE_UP else SIDE_NAMES[clampi(f, 0, 3)]
 
 
 func cell_of(p: Vector3) -> Vector3i:
@@ -395,7 +452,8 @@ func _host_bodies() -> Array:
 
 ## Would a cable fit at `c`: air, ground under it, nothing there.
 func can_place_cable(c: Vector3i) -> bool:
-	return not cables.has(c) and _device_at(c) == null and not _solid(c) and _solid(c + Vector3i.DOWN)
+	return not cables.has(c) and _device_at(c) == null and not _solid(c) and _solid(c + Vector3i.DOWN) \
+			and not _in_head(c)
 
 
 func place_cable(c: Vector3i, force := false) -> bool:
@@ -414,7 +472,7 @@ func can_place_device(c0: Vector3i, item: StringName = &"lamp", facing := 0) -> 
 	if not _supported(c, item, facing):
 		return false
 	for k in cells_of(c, item, facing):
-		if _solid(k) or cables.has(k) or _device_at(k) != null:
+		if _solid(k) or cables.has(k) or _device_at(k) != null or _in_head(k):
 			return false
 	return true
 
@@ -427,7 +485,7 @@ func place_device(c0: Vector3i, item: StringName, on := false, force := false, f
 	var st := setting
 	if st < 0:
 		st = 2 if op == "delay" else (5 if op == "pulse" else 0)
-	var f := clampi(facing, 0, 3)
+	var f := clampi(facing, 0, FACE_UP if can_face_up(item) else 3)
 	var node := _device_node(c, item, f)
 	add_child(node)
 	devices[c] = {"item": item, "on": on, "facing": f, "setting": st, "timer": 0,
@@ -454,7 +512,20 @@ func use_device(c: Vector3i, how := "use") -> bool:
 	if how == "turn":
 		if not bool(def.get("facing", false)) or footprint(c, d.item, 0).size() > 1:
 			return false   # a door or trapdoor is taken up and laid again
-		d.facing = right_of(int(d.facing))
+		if str(def.kind) == "piston":
+			if bool(d.on):
+				return false   # extended: not turned
+			# +x, +z, -x, -z, then up, then +x again.
+			var f0 := int(d.facing)
+			d.facing = FACE_UP if f0 == 3 else (0 if f0 == FACE_UP else right_of(f0))
+			# Built again: facing up is a different shape.
+			var old: Node = d.node
+			d.node = _device_node(c, d.item, int(d.facing))
+			add_child(d.node)
+			if is_instance_valid(old):
+				old.queue_free()
+		else:
+			d.facing = right_of(int(d.facing))
 		_show_device(c)
 		_pairs_dirty = true
 	else:
@@ -547,6 +618,18 @@ func overlaps(box: AABB) -> bool:
 	for c in devices:
 		if device_box(c).grow(-0.01).intersects(box):
 			return true
+	# An out piston's head fills the stud in front.
+	for c in devices:
+		var d: Dictionary = devices[c]
+		if bool(d.on) and str(DEVICES[d.item].kind) == "piston":
+			for k in head_cells(c, int(d.facing), 1):
+				if _cell_box(k).grow(-0.01).intersects(box):
+					return true
+	# A piston's move under way: its old place and its new one are kept.
+	for m in _moves:
+		var mb: AABB = m.box
+		if mb.merge(AABB(mb.position + _metres(m.step), mb.size)).grow(-0.01).intersects(box):
+			return true
 	return false
 
 
@@ -608,12 +691,15 @@ func check(lo := Vector3i(-WHOLE, -WHOLE, -WHOLE), hi := Vector3i(WHOLE, WHOLE, 
 	var lo2 := lo - Vector3i(1, DEVICE_PLATES + 1, 1)
 	var hi2 := hi + Vector3i(1, 1, 1)
 	var gone := 0
+	var riding := _riding() if not _moves.is_empty() else {}
 	for c in cables.keys():
+		if riding.has(c):
+			continue
 		if _inside(c, lo2, hi2) and (_solid(c) or not _solid(c + Vector3i.DOWN)):
 			remove_cable(c)
 			gone += 1
 	for c in devices.keys():
-		if not _inside(c, lo2, hi2):
+		if not _inside(c, lo2, hi2) or riding.has(c):
 			continue
 		var d: Dictionary = devices[c]
 		var bad := not _supported(c, d.item, int(d.facing))
@@ -637,6 +723,10 @@ static func _inside(c: Vector3i, lo: Vector3i, hi: Vector3i) -> bool:
 
 
 func clear() -> void:
+	for m in _moves:
+		if is_instance_valid(m.node):
+			(m.node as Node).queue_free()
+	_moves.clear()
 	for c in devices:
 		if is_instance_valid(devices[c].node):
 			(devices[c].node as Node).queue_free()
@@ -833,6 +923,26 @@ func _evaluate() -> void:
 		var lit := lvl > 0
 		if lit != bool(d.lit):
 			d.lit = lit
+			_show_device(c)
+	# 3a. Pistons: power rising pushes, falling retracts (a sticky one pulls
+	# its brick back). A stalled push tries again next tick; past
+	# PUSHES_PER_TICK the rest wait a tick. Gone through a copy of the keys:
+	# a move's edit can break devices (`check`).
+	for c in devices.keys():
+		if not devices.has(c) or str(DEVICES[devices[c].item].kind) != "piston":
+			continue
+		var d: Dictionary = devices[c]
+		var want := piston_power(c) > 0
+		d.prev = 1 if want else 0
+		if want == bool(d.on) or _pushes >= PUSHES_PER_TICK:
+			continue
+		if want:
+			if not _piston_push(c):
+				continue
+		else:
+			_piston_pull(c)
+		if devices.has(c):
+			d.on = want
 			_show_device(c)
 	# 3b. Doors and trapdoors: power turning on opens them, turning off shuts
 	# them; RMB in between opens or shuts by hand (Minecraft's iron door is
@@ -1057,6 +1167,804 @@ func output_of(c: Vector3i) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Pistons (Docs/MineWiring.md 6, 17, 18)
+#
+# The unit that moves is a PLACED brick (BrickTerrain.mark_placed): one course
+# of plate cells over a rectangle of studs. The group is the brick the head
+# meets, every placed brick clutched on a group brick's top studs (clutch is
+# slime, 6.3), and -- pushing -- every placed brick in the way. Generated
+# ground (bonded into the hillside), bedrock, a device or a cable in a cell
+# the group moves into, a chest there, or more than PISTON_LIMIT bricks stall
+# the push.
+#
+# A move: the group's cells cleared (no collapse survey yet), a stand-in of
+# its bricks drawn sliding from the old place to the new once the tiles have
+# rebuilt without them (a hop -- up a plate, across, down -- for a sideways
+# push of bricks resting on studs), then the bricks laid and marked at the
+# new place, the edit's box the old and new places together, and the
+# stand-in hidden once the tiles have them. Without a host (a probe) the move
+# is written at once.
+
+## The move one push makes, in plate cells: a stud the way it faces, or a
+## course up.
+static func piston_step(f: int) -> Vector3i:
+	return Vector3i(0, COURSE, 0) if f == FACE_UP else SIDES[clampi(f, 0, 3)]
+
+
+## The plate cells a piston's head meets: the stud in front (`reach` 1), or
+## the one past its extended head (2), its height; above it, facing up.
+static func head_cells(c: Vector3i, f: int, reach: int) -> Array[Vector3i]:
+	var out: Array[Vector3i] = []
+	var base := c + piston_step(f) * reach
+	for p in COURSE:
+		out.append(base + Vector3i(0, p, 0))
+	return out
+
+
+## The power reaching a piston: any side but its front (its head's side).
+func piston_power(c: Vector3i) -> int:
+	var f := int(devices[c].facing)
+	var lvl := 0
+	for s in SIDES:
+		if f != FACE_UP and s == SIDES[f]:
+			continue
+		lvl = maxi(lvl, int(side_input(c, s)[0]))
+	return lvl
+
+
+func _metres(step: Vector3i) -> Vector3:
+	return Vector3(step.x * _stud, step.y * _plate, step.z * _stud)
+
+
+## The placed brick holding plate cell `k`: {key, rect, course, cols, mat},
+## or {} (air, or generated ground). `cols`: the studs of its rectangle that
+## are still its own.
+func brick_at(k: Vector3i) -> Dictionary:
+	var course := floori(float(k.y) / COURSE)
+	var r: Vector4i = rect_fn.call(k.x, course, k.z)
+	if r.z <= 0 or r.w <= 0:
+		return _loose_at(k, course)
+	var cols: Array[Vector2i] = []
+	for bx in range(r.x, r.x + r.z):
+		for bz in range(r.y, r.y + r.w):
+			if (bx == k.x and bz == k.z) or rect_fn.call(bx, course, bz) == r:
+				cols.append(Vector2i(bx, bz))
+	return {"key": Vector3i(r.x, course, r.y), "rect": r, "course": course, "cols": cols,
+			"mat": int(solid_fn.call(k.x, course * COURSE, k.z))}
+
+
+## Sand, red sand or gravel filling a whole course of a stud (generated, not
+## placed): a 1x1 unit a piston moves, laid loose again (not marked), so it
+## still falls as sand does. {} for anything else.
+func _loose_at(k: Vector3i, course: int) -> Dictionary:
+	var m := int(solid_fn.call(k.x, k.y, k.z))
+	if not is_loose(m):
+		return {}
+	for p in COURSE:
+		if int(solid_fn.call(k.x, course * COURSE + p, k.z)) != m:
+			return {}
+	var cols: Array[Vector2i] = [Vector2i(k.x, k.z)]
+	return {"key": Vector3i(k.x, course, k.z), "rect": Vector4i(k.x, k.z, 1, 1), "course": course,
+			"cols": cols, "mat": m, "loose": true}
+
+
+static var _loose_ids: Array = []
+
+
+## Does terrain material `m` fall loose (terrain_bond.h BOND_LOOSE)?
+static func is_loose(m: int) -> bool:
+	if _loose_ids.is_empty():
+		var names := Array(BrickTerrain.material_names())
+		_loose_ids = [names.find("sand"), names.find("red sand"), names.find("gravel")]
+	return m > 0 and _loose_ids.has(m)
+
+
+static func brick_cells(b: Dictionary) -> Array[Vector3i]:
+	var out: Array[Vector3i] = []
+	for col: Vector2i in b.cols:
+		for p in COURSE:
+			out.append(Vector3i(col.x, int(b.course) * COURSE + p, col.y))
+	return out
+
+
+## The plate boxes a brick is written as, moved by `off`: its whole
+## rectangle, or stud by stud when part of it is no longer its own.
+static func _boxes_of(b: Dictionary, off: Vector3i) -> Array:
+	var r: Vector4i = b.rect
+	var y0 := int(b.course) * COURSE
+	if (b.cols as Array).size() == r.z * r.w:
+		return [[Vector3i(r.x, y0, r.y) + off, Vector3i(r.x + r.z - 1, y0 + COURSE - 1, r.y + r.w - 1) + off]]
+	var out: Array = []
+	for col: Vector2i in b.cols:
+		out.append([Vector3i(col.x, y0, col.y) + off, Vector3i(col.x, y0 + COURSE - 1, col.y) + off])
+	return out
+
+
+## Is plate cell `k` the old or new place of a move under way?
+func _reserved(k: Vector3i) -> bool:
+	for m in _moves:
+		if (m.cells as Dictionary).has(k):
+			return true
+	return false
+
+
+func _chests() -> MineChests:
+	if host == null or not ("chests" in host):
+		return null
+	return host.chests
+
+
+## A chest in `box` (metres, terrain frame), but those in `except` (keys)?
+func _chest_in(box: AABB, except: Array = []) -> bool:
+	var ch := _chests()
+	if ch == null:
+		return false
+	for key in ch.chests:
+		if not except.has(key) and ch.box_of(ch.chests[key].block).grow(-0.01).intersects(box):
+			return true
+	return false
+
+
+## The chests (keys) standing on any of the cells in `src`.
+func _chests_on(src: Dictionary) -> Array:
+	var ch := _chests()
+	var out: Array = []
+	if ch == null:
+		return out
+	for key in ch.chests:
+		var lo: Vector3i = ch.lo_cell(ch.chests[key].block)
+		var on := false
+		for x in MineChests.STUDS:
+			for z in MineChests.STUDS:
+				on = on or src.has(Vector3i(lo.x + x, lo.y - 1, lo.z + z))
+		if on:
+			out.append(key)
+	return out
+
+
+func _cell_box(k: Vector3i) -> AABB:
+	return AABB(Vector3(k.x * _stud, k.y * _plate, k.z * _stud), Vector3(_stud, _plate, _stud))
+
+
+## What a head meets: {"seeds": [bricks]} (none: air) or {"stall": why}.
+func _head_meets(c: Vector3i, f: int, reach: int) -> Dictionary:
+	var seeds: Array = []
+	var keys := {}
+	for k in head_cells(c, f, reach):
+		if cables.has(k) or _device_at(k) != null:
+			return {"stall": "a device in front"}
+		if _reserved(k):
+			return {"stall": "a move under way"}
+		if _chest_in(_cell_box(k).grow(-0.01)):
+			return {"stall": "a chest in front"}
+		if not _solid(k):
+			continue
+		var b := brick_at(k)
+		if b.is_empty():
+			return {"stall": "ground in front"}
+		if not keys.has(b.key):
+			keys[b.key] = true
+			seeds.append(b)
+	return {"seeds": seeds}
+
+
+## The group one move of `step` (plate cells) takes, from the bricks the head
+## meets: {"bricks": [...]} or {"stall": why}. With `line` (a push), a placed
+## brick in the way comes too; a pull takes only what is clutched on top.
+func piston_group(seeds: Array, step: Vector3i, line: bool, pusher := Vector3i(WHOLE, WHOLE, WHOLE)) -> Dictionary:
+	var group := {}
+	var order: Array = []
+	var queue: Array = seeds.duplicate()
+	while not queue.is_empty():
+		var b: Dictionary = queue.pop_back()
+		if group.has(b.key):
+			continue
+		group[b.key] = true
+		order.append(b)
+		if order.size() > PISTON_LIMIT:
+			return {"stall": "more than %d bricks" % PISTON_LIMIT}
+		for col: Vector2i in b.cols:
+			# Clutched on its top studs: comes along.
+			var up := Vector3i(col.x, (int(b.course) + 1) * COURSE, col.y)
+			if _solid(up):
+				var nb := brick_at(up)
+				if not nb.is_empty() and not group.has(nb.key):
+					queue.append(nb)
+			if not line:
+				continue
+			for p in COURSE:
+				var d := Vector3i(col.x, int(b.course) * COURSE + p, col.y) + step
+				if _solid(d):
+					var nb2 := brick_at(d)
+					if not nb2.is_empty() and not group.has(nb2.key):
+						queue.append(nb2)
+	var src := {}
+	for b in order:
+		for k in brick_cells(b):
+			src[k] = true
+	# Riders: wires and devices standing on a group brick's top come along
+	# (a device by any of its bottom cells; the pushing piston never).
+	var r_cables: Array[Vector3i] = []
+	var r_devices: Array[Vector3i] = []
+	var riding := {}
+	for b in order:
+		for col: Vector2i in b.cols:
+			var t := Vector3i(col.x, (int(b.course) + 1) * COURSE, col.y)
+			if src.has(t):
+				continue
+			if cables.has(t) and not riding.has(t):
+				r_cables.append(t)
+				riding[t] = true
+			var dc = _occupied.get(t, null)
+			if dc != null and dc != pusher and (dc as Vector3i).y == t.y and not r_devices.has(dc):
+				r_devices.append(dc)
+				for k in cells_of(dc, devices[dc].item, int(devices[dc].facing)):
+					riding[k] = true
+	# A chest on the group rides a move up or down; sideways it would leave
+	# its 2-stud grid, so it stalls the push.
+	var r_chests := _chests_on(src)
+	if not r_chests.is_empty() and step.y == 0:
+		return {"stall": "a chest stands on it"}
+	var ch := _chests()
+	for key in r_chests:
+		var lo: Vector3i = ch.lo_cell(ch.chests[key].block)
+		for x in MineChests.STUDS:
+			for z in MineChests.STUDS:
+				for p in MineChests.PLATES:
+					riding[lo + Vector3i(x, p, z)] = true
+	for b in order:
+		for k in brick_cells(b):
+			var d: Vector3i = k + step
+			if src.has(d) or riding.has(d):
+				continue
+			if _solid(d):
+				return {"stall": "ground in the way at %s" % key_of(d)}
+			if cables.has(d) or _device_at(d) != null or _in_head(d, pusher):
+				return {"stall": "a device in the way at %s" % key_of(d)}
+			if _reserved(d):
+				return {"stall": "a move under way"}
+		var dst := _bricks_box([b])
+		if _chest_in(AABB(dst.position + _metres(step), dst.size).grow(-0.01), r_chests):
+			return {"stall": "a chest in the way"}
+	for k in riding:
+		var d: Vector3i = k + step
+		if src.has(d) or riding.has(d):
+			continue
+		if _solid(d):
+			return {"stall": "ground in the way of what rides at %s" % key_of(d)}
+		if cables.has(d) or _device_at(d) != null or _in_head(d, pusher):
+			return {"stall": "a device in the way of what rides at %s" % key_of(d)}
+		if _reserved(d):
+			return {"stall": "a move under way"}
+	for key in r_chests:
+		var cb: AABB = ch.box_of(ch.chests[key].block)
+		if _chest_in(AABB(cb.position + _metres(step), cb.size).grow(-0.01), r_chests):
+			return {"stall": "a chest in the way of what rides"}
+	return {"bricks": order, "cables": r_cables, "devices": r_devices, "chests": r_chests}
+
+
+## Does a loose group the collapse found rest on a piston -- on its body's
+## top, or on its head's top while out? Then the collapse leaves it standing.
+## `g`: the survey's bricks, 6 ints each (x, bottom plate, z, sx, sz, mat).
+func holds(g: PackedInt32Array) -> bool:
+	var held := _held_cells()
+	if held.is_empty():
+		return false
+	for i in range(0, g.size() - 5, 6):
+		for dz in g[i + 4]:
+			for dx in g[i + 3]:
+				if held.has(Vector3i(g[i] + dx, g[i + 1], g[i + 2] + dz)):
+					return true
+	return false
+
+
+## The bottom cells of every brick a piston holds up: the brick on its body's
+## top (and on its head's top while out), and every brick clutched on those,
+## repeated -- the push's own rule. The survey may hand back the bricks of
+## one stack as groups of their own (a 1x2 on a 2x2 came back alone), so a
+## group is held when it is anywhere in that chain, not only at its foot.
+func _held_cells() -> Dictionary:
+	var queue: Array = []
+	for c in devices:
+		var d: Dictionary = devices[c]
+		if str(DEVICES[d.item].kind) != "piston":
+			continue
+		var tops: Array[Vector3i] = [c + Vector3i(0, COURSE, 0)]
+		if bool(d.on):
+			tops.append(c + piston_step(int(d.facing)) + Vector3i(0, COURSE, 0))
+		for t in tops:
+			if _solid(t):
+				var b := brick_at(t)
+				if not b.is_empty() and int(b.course) * COURSE == t.y:
+					queue.append(b)
+	var seen := {}
+	var out := {}
+	while not queue.is_empty() and seen.size() < PISTON_LIMIT * 8:
+		var b: Dictionary = queue.pop_back()
+		if seen.has(b.key):
+			continue
+		seen[b.key] = true
+		for col: Vector2i in b.cols:
+			out[Vector3i(col.x, int(b.course) * COURSE, col.y)] = true
+			var up := Vector3i(col.x, (int(b.course) + 1) * COURSE, col.y)
+			if _solid(up):
+				var nb := brick_at(up)
+				if not nb.is_empty() and not seen.has(nb.key):
+					queue.append(nb)
+	return out
+
+
+## Ask the host's collapse to look at a box (plate cells): what it holds up
+## may have gone.
+func _survey(lo: Vector3i, hi: Vector3i) -> void:
+	if host != null and "collapse" in host and host.collapse != null:
+		host.collapse.queue({"box_lo": lo, "box_hi": hi})
+
+
+## The box (metres) round some bricks.
+func _bricks_box(bricks: Array) -> AABB:
+	var box := AABB()
+	var first := true
+	for b in bricks:
+		for bx in _boxes_of(b, Vector3i.ZERO):
+			var lo: Vector3i = bx[0]
+			var hi: Vector3i = bx[1]
+			var one := AABB(Vector3(lo.x * _stud, lo.y * _plate, lo.z * _stud),
+					Vector3((hi.x - lo.x + 1) * _stud, (hi.y - lo.y + 1) * _plate, (hi.z - lo.z + 1) * _stud))
+			box = one if first else box.merge(one)
+			first = false
+	return box
+
+
+func _stalled(d: Dictionary, why: String) -> bool:
+	d.stall = why
+	last_stall = why
+	return false
+
+
+## Power rose: push what the head meets. False if it stalled (the head stays
+## in, and it tries again next tick).
+func _piston_push(c: Vector3i) -> bool:
+	var d: Dictionary = devices[c]
+	var f := int(d.facing)
+	var meet := _head_meets(c, f, 1)
+	if meet.has("stall"):
+		return _stalled(d, meet.stall)
+	var seeds: Array = meet.seeds
+	if seeds.is_empty():
+		d.stall = ""
+		return true          # the head goes out into the air
+	var g := piston_group(seeds, piston_step(f), true, c)
+	if g.has("stall"):
+		return _stalled(d, g.stall)
+	_move(g, piston_step(f))
+	d.stall = ""
+	return true
+
+
+## Power fell: the head comes in; a sticky one brings the brick at its face
+## back with it (with what is clutched on it). What will not come stays --
+## and what only the head held up is surveyed, so it falls.
+func _piston_pull(c: Vector3i) -> void:
+	var d: Dictionary = devices[c]
+	var f0 := int(d.facing)
+	var hc := head_cells(c, f0, 2 if f0 == FACE_UP else 1)
+	_survey(hc[0] - Vector3i(1, 1, 1), hc[COURSE - 1] + Vector3i(1, COURSE + 1, 1))
+	if not bool(DEVICES[d.item].get("sticky", false)):
+		return
+	var f := int(d.facing)
+	var meet := _head_meets(c, f, 2)
+	if meet.has("stall") or (meet.seeds as Array).is_empty():
+		return
+	var g := piston_group(meet.seeds, -piston_step(f), false, c)
+	if g.has("stall"):
+		last_stall = g.stall
+		return
+	_move(g, -piston_step(f))
+
+
+func _move(g: Dictionary, step: Vector3i) -> void:
+	var bricks: Array = g.bricks
+	_pushes += 1
+	var cells := {}
+	var lo := Vector3i(WHOLE, WHOLE, WHOLE)
+	var hi := -lo
+	for b in bricks:
+		for k in brick_cells(b):
+			for q in [k, k + step]:
+				cells[q] = true
+				lo = Vector3i(mini(lo.x, q.x), mini(lo.y, q.y), mini(lo.z, q.z))
+				hi = Vector3i(maxi(hi.x, q.x), maxi(hi.y, q.y), maxi(hi.z, q.z))
+	var r_cables: Array = g.get("cables", [])
+	var r_devices: Array = g.get("devices", [])
+	var base := {}
+	for c in r_cables:
+		cells[c] = true
+		cells[c + step] = true
+	for dc in r_devices:
+		for k in cells_of(dc, devices[dc].item, int(devices[dc].facing)):
+			cells[k] = true
+			cells[k + step] = true
+		if is_instance_valid(devices[dc].node):
+			base[dc] = (devices[dc].node as Node3D).position
+	var r_chests: Array = g.get("chests", [])
+	var chest_base := {}
+	var ch := _chests()
+	for key in r_chests:
+		var clo: Vector3i = ch.lo_cell(ch.chests[key].block)
+		for x in MineChests.STUDS:
+			for z in MineChests.STUDS:
+				for p in MineChests.PLATES:
+					cells[clo + Vector3i(x, p, z)] = true
+					cells[clo + Vector3i(x, p, z) + step] = true
+		ch.riding[key] = true
+		if is_instance_valid(ch.chests[key].node):
+			chest_base[key] = (ch.chests[key].node as Node3D).position
+	var m := {"bricks": bricks, "step": step, "cells": cells, "lo": lo, "hi": hi, "phase": 0, "t": 0.0,
+			"wait": 0.0, "off": Vector3.ZERO, "box": _bricks_box(bricks), "node": null, "rect": Rect2i(),
+			"cables": r_cables, "devices": r_devices, "base": base, "chests": r_chests, "chest_base": chest_base}
+	if host == null or not animate or not is_inside_tree():
+		_lift(bricks)
+		_land(m)
+		return
+	m.hop = step.y == 0 and hops(bricks)
+	m.node = _standin(bricks)
+	add_child(m.node)
+	var res := _lift(bricks)
+	# The collapse judges it once, when it lands (the old place and the new).
+	res["anchored"] = true
+	m.rect = _tile_rect(res)
+	_moves.append(m)
+	_edited(res)
+
+
+## Does any of the group rest on STUDS that stay (6.2)? Then a sideways move
+## hops; on smooth tiles (road, farmland, glass: no studs) or hanging free it
+## slides plainly.
+func hops(bricks: Array) -> bool:
+	var src := {}
+	for b in bricks:
+		for k in brick_cells(b):
+			src[k] = true
+	for b in bricks:
+		for col: Vector2i in b.cols:
+			var under := Vector3i(col.x, int(b.course) * COURSE - 1, col.y)
+			if not src.has(under) and _solid(under) and studded(int(solid_fn.call(under.x, under.y, under.z))):
+				return true
+	return false
+
+
+## Has terrain material `m` studs on its top (brick_terrain.h material_studded)?
+static func studded(m: int) -> bool:
+	return m != 0 and m != BrickTerrain.MAT_ROAD and m != BrickTerrain.MAT_FARMLAND \
+			and m != BrickTerrain.MAT_WET_FARMLAND and m != MineBuildings.glass_material()
+
+
+func _lift(bricks: Array) -> Dictionary:
+	var out := {}
+	for b in bricks:
+		for bx in _boxes_of(b, Vector3i.ZERO):
+			out = _merge(out, clear_fn.call(bx[0], bx[1]))
+	return out
+
+
+## The group laid at its new place and marked, one brick each again; the
+## edit's box is the old and new places together.
+func _land(m: Dictionary) -> void:
+	var out := {}
+	var step: Vector3i = m.step
+	for b in m.bricks:
+		for bx in _boxes_of(b, step):
+			out = _merge(out, lay_fn.call(bx[0], bx[1], int(b.mat)))
+	for b in m.bricks:
+		if bool(b.get("loose", false)):
+			continue
+		var r: Vector4i = b.rect
+		var lo := Vector3i(r.x, int(b.course) * COURSE, r.y) + step
+		mark_fn.call(lo, lo + Vector3i(r.z - 1, COURSE - 1, r.w - 1), int(b.mat))
+	out["box_lo"] = m.lo
+	out["box_hi"] = m.hi
+	_shift_riders(m)
+	m.rect = _tile_rect(out)
+	m.phase = 2
+	m.wait = 0.0
+	m.off = _metres(step)
+	moves_done += 1
+	_edited(out)
+
+
+## What rode on the group goes to its new cells (before the landing's check,
+## which then finds them held).
+func _shift_riders(m: Dictionary) -> void:
+	var step: Vector3i = m.step
+	var moved_cables: Array = []
+	for c in m.get("cables", []):
+		if cables.has(c):
+			cables.erase(c)
+			_changed_cells.append(c)
+			moved_cables.append(c)
+	for c in moved_cables:
+		cables[c + step] = true
+		_changed_cells.append(c + step)
+	var moved := {}
+	for dc in m.get("devices", []):
+		if not devices.has(dc):
+			continue
+		var d: Dictionary = devices[dc]
+		for k in cells_of(dc, d.item, int(d.facing)):
+			if _occupied.get(k, null) == dc:
+				_occupied.erase(k)
+		devices.erase(dc)
+		moved[dc + step] = d
+	for nc in moved:
+		var d: Dictionary = moved[nc]
+		devices[nc] = d
+		for k in cells_of(nc, d.item, int(d.facing)):
+			_occupied[k] = nc
+		if is_instance_valid(d.node):
+			var box := device_box(nc)
+			(d.node as Node3D).position = Vector3(box.get_center().x, box.position.y, box.get_center().z)
+	var ch := _chests()
+	for key in m.get("chests", []):
+		if ch != null:
+			ch.riding.erase(key)
+			ch.move(key, step.y)
+	m.devices = []
+	m.cables = []
+	m.chests = []
+	if not moved_cables.is_empty() or not moved.is_empty():
+		_pairs_dirty = true
+		_logic_dirty = true
+		_draw_dirty = true
+		_changed()
+
+
+## Wires and devices riding a move under way: `check` leaves them be (their
+## ground is cleared while they slide).
+func _riding() -> Dictionary:
+	var out := {}
+	for m in _moves:
+		if int(m.phase) >= 2:
+			continue
+		for c in m.get("cables", []):
+			out[c] = true
+		for dc in m.get("devices", []):
+			out[dc] = true
+	return out
+
+
+## Is plate cell `k` the stud an out piston's head fills?
+func _in_head(k: Vector3i, skip := Vector3i(WHOLE, WHOLE, WHOLE)) -> bool:
+	for c in devices:
+		if c == skip:
+			continue
+		var d: Dictionary = devices[c]
+		if bool(d.on) and str(DEVICES[d.item].kind) == "piston" and head_cells(c, int(d.facing), 1).has(k):
+			return true
+	return false
+
+
+static func _merge(a: Dictionary, b: Dictionary) -> Dictionary:
+	if a.is_empty():
+		return b.duplicate()
+	if b.is_empty():
+		return a
+	var out := a.duplicate()
+	var t := PackedInt32Array(a.get("tiles", PackedInt32Array()))
+	t.append_array(PackedInt32Array(b.get("tiles", PackedInt32Array())))
+	out["tiles"] = t
+	out["changed"] = int(a.get("changed", 0)) + int(b.get("changed", 0))
+	if a.has("box_lo") and b.has("box_lo"):
+		var al: Vector3i = a.box_lo
+		var ah: Vector3i = a.box_hi
+		var bl: Vector3i = b.box_lo
+		var bh: Vector3i = b.box_hi
+		out["box_lo"] = Vector3i(mini(al.x, bl.x), mini(al.y, bl.y), mini(al.z, bl.z))
+		out["box_hi"] = Vector3i(maxi(ah.x, bh.x), maxi(ah.y, bh.y), maxi(ah.z, bh.z))
+	elif b.has("box_lo"):
+		out["box_lo"] = b.box_lo
+		out["box_hi"] = b.box_hi
+	return out
+
+
+## The ground changed: the host rebakes, surveys and checks (terrain_edited);
+## a probe's wiring checks itself.
+func _edited(res: Dictionary) -> void:
+	if not res.has("tiles"):
+		res["tiles"] = PackedInt32Array()
+	if host != null and host.has_method("terrain_edited"):
+		host.terrain_edited(res)
+	elif res.has("box_lo"):
+		check(res.box_lo, res.box_hi)
+
+
+static func _tile_rect(res: Dictionary) -> Rect2i:
+	var tiles: PackedInt32Array = res.get("tiles", PackedInt32Array())
+	if tiles.is_empty():
+		return Rect2i()
+	var lo := Vector2i(1 << 30, 1 << 30)
+	var hi := -lo
+	for i in range(0, tiles.size(), 2):
+		lo = Vector2i(mini(lo.x, tiles[i]), mini(lo.y, tiles[i + 1]))
+		hi = Vector2i(maxi(hi.x, tiles[i]), maxi(hi.y, tiles[i + 1]))
+	return Rect2i(lo, hi - lo + Vector2i.ONE)
+
+
+func _fresh(rect: Rect2i) -> bool:
+	if not rect.has_area() or host == null or not host.has_method("tiles_fresh"):
+		return true
+	return host.tiles_fresh(rect)
+
+
+## Moves under way, each frame: waiting for the tiles to let the old place
+## go (0), sliding (1), waiting for the tiles to show the new place (2).
+func _step_moves(delta: float) -> void:
+	var i := 0
+	while i < _moves.size():
+		var m: Dictionary = _moves[i]
+		m.wait = float(m.wait) + delta
+		match int(m.phase):
+			0:
+				if _fresh(m.rect) or float(m.wait) > MOVE_WAIT:
+					m.phase = 1
+			1:
+				m.t = minf(float(m.t) + delta, MOVE_TIME)
+				var off := _path(m, float(m.t) / MOVE_TIME)
+				_carry(m, m.off, off)
+				m.off = off
+				if is_instance_valid(m.node):
+					(m.node as Node3D).position = off
+				for dc in m.devices:
+					if devices.has(dc) and is_instance_valid(devices[dc].node) and (m.base as Dictionary).has(dc):
+						(devices[dc].node as Node3D).position = m.base[dc] + off
+				var chs := _chests()
+				for key in m.chests:
+					if chs != null and chs.chests.has(key) and is_instance_valid(chs.chests[key].node) \
+							and (m.chest_base as Dictionary).has(key):
+						(chs.chests[key].node as Node3D).position = m.chest_base[key] + off
+				if float(m.t) >= MOVE_TIME:
+					_land(m)
+			2:
+				if _fresh(m.rect) or float(m.wait) > MOVE_WAIT:
+					if is_instance_valid(m.node):
+						(m.node as Node).queue_free()
+					_moves.remove_at(i)
+					continue
+		i += 1
+
+
+## Every move written now and its stand-in gone (a save, a probe).
+func finish_moves() -> void:
+	for m in _moves:
+		if int(m.phase) < 2:
+			_land(m)
+		if is_instance_valid(m.node):
+			(m.node as Node).queue_free()
+	_moves.clear()
+
+
+## Where the stand-in is at `u` (0..1) of the slide, metres: straight up or
+## down, straight across hanging free, or the HOP across studs (6.2): up a
+## plate, across, pressed down.
+func _path(m: Dictionary, u: float) -> Vector3:
+	var full := _metres(m.step)
+	if full.y != 0.0 or not bool(m.get("hop", false)):
+		return full * smoothstep(0.0, 1.0, u)
+	var lift := _plate
+	if u < 1.0 / 3.0:
+		return Vector3(0, lift * smoothstep(0.0, 1.0, u * 3.0), 0)
+	if u < 2.0 / 3.0:
+		return full * smoothstep(0.0, 1.0, (u - 1.0 / 3.0) * 3.0) + Vector3(0, lift, 0)
+	return full + Vector3(0, lift * (1.0 - smoothstep(0.0, 1.0, (u - 2.0 / 3.0) * 3.0)), 0)
+
+
+static func _over(p: Vector3, box: AABB, grow: float) -> bool:
+	return p.x >= box.position.x - grow and p.x <= box.end.x + grow \
+			and p.z >= box.position.z - grow and p.z <= box.end.z + grow
+
+
+## The player in the way of a moving group (the carried-by-contact rule kept
+## simple, Hulls.md 7b.3): standing on it, carried along and kept on its top;
+## beside it as it moves across, shoved; under a rising one, lifted onto it.
+func _carry(m: Dictionary, was: Vector3, now: Vector3) -> void:
+	if host == null or not host.has_method("shove_player_local"):
+		return
+	var feet: Vector3 = host.player_feet_local()
+	if feet == Vector3.INF:
+		return
+	var box: AABB = m.box
+	box.position += now
+	var top := box.end.y
+	var dv := now - was
+	var step: Vector3i = m.step
+	var by := Vector3.ZERO
+	if _over(feet, box, 0.12) and feet.y >= top - 0.2 and feet.y <= top + 0.3:
+		by = Vector3(dv.x, 0.0, dv.z)
+		if feet.y < top:
+			by.y = top - feet.y
+	elif step.y == 0 and _over(feet, box, 0.3) and feet.y > box.position.y - 1.7 and feet.y < top - 0.2:
+		by = Vector3(dv.x, 0.0, dv.z)
+	elif step.y > 0 and _over(feet, box, 0.05) and feet.y >= box.position.y - 0.05 and feet.y < top:
+		by.y = top - feet.y
+	if by != Vector3.ZERO:
+		host.shove_player_local(by)
+
+
+## The stand-in of a moving group: its bricks as boxes with studs on their
+## tops (one MultiMesh each), a kinematic body of the same boxes to stand on.
+func _standin(bricks: Array) -> Node3D:
+	var root := Node3D.new()
+	root.name = "PistonMove"
+	root.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = 0.5
+	var body := AnimatableBody3D.new()
+	body.name = "Body"
+	body.sync_to_physics = false
+	body.collision_layer = Layers.WORLD
+	body.collision_mask = 0
+	root.add_child(body)
+	var src := {}
+	for b in bricks:
+		for k in brick_cells(b):
+			src[k] = true
+	var boxes: Array = []
+	var tops: Array = []
+	var stud_h := _plate * 0.53
+	for b in bricks:
+		var col := BrickWorld.get_filament_colour(BrickTerrain.material_filament_index(int(b.mat)))
+		for bx in _boxes_of(b, Vector3i.ZERO):
+			var lo: Vector3i = bx[0]
+			var hi: Vector3i = bx[1]
+			var size := Vector3((hi.x - lo.x + 1) * _stud, (hi.y - lo.y + 1) * _plate, (hi.z - lo.z + 1) * _stud)
+			var mid := Vector3(lo.x * _stud, lo.y * _plate, lo.z * _stud) + size * 0.5
+			boxes.append([Transform3D(Basis.from_scale(size - Vector3.ONE * 0.004), mid), col])
+			var shape := CollisionShape3D.new()
+			var bs := BoxShape3D.new()
+			bs.size = size
+			shape.shape = bs
+			shape.position = mid
+			body.add_child(shape)
+		for c2: Vector2i in b.cols:
+			var top_y := (int(b.course) + 1) * COURSE
+			if not src.has(Vector3i(c2.x, top_y, c2.y)):
+				tops.append([Transform3D(Basis(), Vector3((c2.x + 0.5) * _stud, top_y * _plate + stud_h * 0.5,
+						(c2.y + 0.5) * _stud)), col])
+	# Lit where it is (a cave is dark): the falling sand's material, its sky and
+	# lava levels per instance, asked once just over the group's top.
+	var sky: MineSkyLit = host.get("sky_lit") if host != null else null
+	var light := Color()
+	if sky != null:
+		var gb := _bricks_box(bricks)
+		var lv := sky.levels_at(Vector3(gb.get_center().x, gb.end.y + _plate * 0.5, gb.get_center().z))
+		light = Color(lv.x / 15.0, lv.y / 15.0, 0.0, 0.0)
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = _stud * 0.3
+	cyl.bottom_radius = _stud * 0.3
+	cyl.height = stud_h
+	cyl.radial_segments = 12
+	for pair in [[_box_mesh(Vector3.ONE), boxes], [cyl, tops]]:
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		mm.use_custom_data = sky != null
+		mm.mesh = pair[0]
+		var list: Array = pair[1]
+		mm.instance_count = list.size()
+		for k in list.size():
+			mm.set_instance_transform(k, list[k][0])
+			mm.set_instance_color(k, list[k][1])
+			if sky != null:
+				mm.set_instance_custom_data(k, light)
+		var mi := MultiMeshInstance3D.new()
+		mi.multimesh = mm
+		mi.material_override = MineSkyLit.sand_material() if sky != null else mat
+		root.add_child(mi)
+	return root
+
+
+# ---------------------------------------------------------------------------
 # The wrench
 
 ## What the wrench shows for a builder target (a cable or a device), or "".
@@ -1069,7 +1977,7 @@ func readout(target: Dictionary) -> String:
 		var def: Dictionary = DEVICES[d.item]
 		if bool(def.get("facing", false)):
 			var f := int(d.facing)
-			parts.append("faces %s" % SIDE_NAMES[f])
+			parts.append("faces %s" % facing_name(f))
 			if str(def.kind) == "gate":
 				var back := -SIDES[f]
 				var right := SIDES[right_of(f)]
@@ -1099,6 +2007,13 @@ func readout(target: Dictionary) -> String:
 			parts.append("power %d" % power_in(c))
 		if str(def.kind) == "observer":
 			parts.append("watches %s" % key_of(_watched(c)[0]))
+		if str(def.kind) == "piston":
+			parts.append("extended" if bool(d.on) else "retracted")
+			parts.append("power %d" % piston_power(c))
+			if bool(def.get("sticky", false)):
+				parts.append("sticky")
+			if (int(d.prev) > 0) != bool(d.on) and str(d.get("stall", "")) != "":
+				parts.append("stalled: %s" % d.stall)
 		parts.append_array(WiringTraps.readout(self, c, d))
 		return " | ".join(parts)
 	if target.has("cable") and net_of.has(target.cable):
@@ -1430,6 +2345,43 @@ func _device_node(c: Vector3i, item: StringName, facing := 0) -> Node3D:
 			glow.emission_energy_multiplier = 0.0
 			var dot := _add_box(turn, Vector3(_stud * 0.06, _plate * 0.6, _stud * 0.3), Vector3(-_stud * 0.49, _plate * 1.5, 0), glow)
 			dot.name = "Glow"
+		"piston":
+			# A grey body, a tan head plate (green on a sticky one) at the
+			# front (+x before the turn; up, turned about z). The head slides
+			# out a stud, or a course facing up, on a rod. A collider.
+			var up_f := facing == FACE_UP
+			var len_f := COURSE * _plate if up_f else _stud
+			var h := _stud if up_f else COURSE * _plate
+			root.set_meta("reach", len_f)
+			var pbody := StaticBody3D.new()
+			pbody.collision_layer = Layers.WORLD
+			pbody.collision_mask = 0
+			var pshape := CollisionShape3D.new()
+			var pbs := BoxShape3D.new()
+			pbs.size = box.size
+			pshape.shape = pbs
+			pshape.position = Vector3(0, box.size.y * 0.5, 0)
+			pbody.add_child(pshape)
+			root.add_child(pbody)
+			var pturn := Node3D.new()
+			pturn.name = "Turn"
+			pturn.position = Vector3(0, box.size.y * 0.5, 0)
+			if up_f:
+				pturn.rotation.z = PI * 0.5
+			else:
+				pturn.rotation.y = _yaw(facing)
+			root.add_child(pturn)
+			_add_box(pturn, Vector3(len_f * 0.7, h * 0.96, _stud * 0.96), Vector3(-len_f * 0.15, 0, 0),
+					_mat(Color(0.33, 0.34, 0.37), 0.6))
+			var head := Node3D.new()
+			head.name = "Head"
+			pturn.add_child(head)
+			var face := Color(0.36, 0.66, 0.3) if bool(def.get("sticky", false)) else Color(0.76, 0.62, 0.4)
+			_add_box(head, Vector3(len_f * 0.26, h * 0.98, _stud * 0.98), Vector3(len_f * 0.36, 0, 0), _mat(face, 0.55))
+			var rod := _add_box(head, Vector3(len_f, minf(h, _stud) * 0.22, _stud * 0.22), Vector3(-len_f * 0.24, 0, 0),
+					_mat(Color(0.7, 0.7, 0.72), 0.3))
+			rod.name = "Rod"
+			rod.visible = false
 		"gate":
 			# A slab, a coloured brick on it, an arrow at the front (+x before
 			# the turn), a light on top that glows while the output is on.
@@ -1529,6 +2481,19 @@ func _show_device(c: Vector3i) -> void:
 				var g2 := turn2.get_node_or_null("Glow") as MeshInstance3D
 				if g2 != null:
 					(g2.material_override as StandardMaterial3D).emission_energy_multiplier = 3.0 if int(d.out) > 0 else 0.0
+		"piston":
+			var head := node.get_node_or_null("Turn/Head") as Node3D
+			if head != null:
+				var reach := float(node.get_meta("reach", _stud))
+				var to := reach if bool(d.on) else 0.0
+				var rod := head.get_node_or_null("Rod") as Node3D
+				if rod != null:
+					rod.visible = bool(d.on)
+				if node.is_inside_tree() and not is_equal_approx(head.position.x, to):
+					var tw := node.create_tween()
+					tw.tween_property(head, "position:x", to, MOVE_TIME)
+				else:
+					head.position.x = to
 		"gate":
 			var turn := node.get_node_or_null("Turn") as Node3D
 			if turn != null:
@@ -1544,6 +2509,9 @@ func _show_device(c: Vector3i) -> void:
 ## {"cables": [x, y, z, ...], "devices": {"x,y,z": {"item", "on", "facing",
 ## "setting"}}}: JSON.
 func to_save() -> Dictionary:
+	# A piston's move under way is written now: its bricks are in no cell
+	# while they slide.
+	finish_moves()
 	var flat: Array = []
 	for c in cables:
 		flat.append_array([c.x, c.y, c.z])

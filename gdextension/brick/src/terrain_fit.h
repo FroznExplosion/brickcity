@@ -7,6 +7,8 @@
 
 using namespace godot;
 
+#include "terrain_bond.h"
+
 #include <array>
 #include <functional>
 #include <memory>
@@ -20,34 +22,99 @@ namespace brick {
 struct FitBrick {
     int x = 0, z = 0, c = 0, sx = 1, sz = 1, h = 1, mat = 0;
 };
-/// THE LOOKUP (Docs/TerrainRegions.md 12): the fitted brick a GENERATED cell
-/// is in, at any depth. Any thread; a region's first ask fits it (with its
-/// tile's others), later ones are a lookup. False where no brick is fitted:
-/// air, the top course (the surface's pieces), sand and gravel (their own
-/// 1x1s), partly solid cells, no biome generator, not configured. Edits are
-/// the caller's to check.
-bool fitted_brick(int x, int course, int z, FitBrick &out);
-/// Many lookups from one thread (a tile's mesh, a survey): the regions it
-/// has read stay open, no lock taken for them.
-class FitView {
+/// THE PATTERN LIBRARY (Docs/HandoffBrickPatterns.md, TerrainRegions.md 13):
+/// the game's fitted bricks. At world set-up the fitter fills SOLID 16 x 16
+/// regions (one layer of 3 courses) with the world's shares, `pattern_count`
+/// of them a depth band and layer parity. A cell's brick is the brick over
+/// it in the pattern its region (square of its course, odd courses shifted,
+/// as the fit's) picks by hash: no generated cells read, nothing cached but
+/// the library. Where the ground cuts a pattern brick (cave air, a hole, an
+/// edit, the top course, sand), that brick ALONE is split, course by course,
+/// into the largest listed shapes its remaining bond cells hold -- from its
+/// own cells only, so every cell of it names the same piece.
+struct PatternLib;
+class PatternView {
 public:
-    FitView();
-    ~FitView();
-    FitView(const FitView &) = delete;
-    FitView &operator=(const FitView &) = delete;
-    bool at(int x, int course, int z, FitBrick &out);
-    /// The regions holding these cells {x, course, z} fitted in one go (a
-    /// tile's mesh asks its open faces first): a miss in `at` fits the
-    /// whole of its tile's layers instead.
-    void prefetch(const std::vector<std::array<int, 3>> &cells);
-    void clear();
+    PatternView();   ///< the world's library (none while the fit is off)
+    explicit PatternView(std::shared_ptr<const PatternLib> lib);
+    ~PatternView();
+    PatternView(const PatternView &) = delete;
+    PatternView &operator=(const PatternView &) = delete;
+    bool on() const { return (bool)lib_; }
+    /// The pattern's whole brick over (x, course, z), as laid in solid
+    /// ground. False without a library.
+    bool brick(int x, int course, int z, FitBrick &out);
+    /// The brick of bond cell (x, course, z) as the ground has it:
+    /// `group(x, course, z)` gives a cell's BondGroup (MEDIUM / STRONG bond;
+    /// anything else cuts). `out.c` / `out.h` always set.
+    template <typename G>
+    bool rect(int x, int course, int z, const G &group, BondRect &out);
+    /// The column's top course for the depth bands (default: the generator's).
+    void set_top(std::function<int(int, int)> top) { top_ = std::move(top); }
+    /// The pieces of cut brick `b` (cells' groups `g`, course, then z, then
+    /// x) added to `out`; true (nothing added) when it stands whole. A cut
+    /// brick may have no pieces at all (no bond cell left in it).
+    bool split(const FitBrick &b, const uint8_t *g, std::vector<BondRect> &out) const;
 
 private:
-    struct Open;
-    std::unordered_map<int64_t, std::unique_ptr<Open>> open_;
-    Open *last_ = nullptr;
-    uint64_t gen_ = 0;
+    std::shared_ptr<const PatternLib> lib_;
+    std::function<int(int, int)> top_;
+    std::unordered_map<int64_t, int> band_;   ///< region column -> its generated top course
+    int64_t band_key_ = INT64_MIN;            ///< the last region column asked, and its top
+    int band_top_ = 0;
+    /// Each brick asked: its pieces in `pieces_` (n -1: whole). Open
+    /// addressing, no allocation a brick (a tile's mesh asks thousands).
+    struct Slot {
+        int64_t key = INT64_MIN;
+        int32_t first = 0, n = 0;
+    };
+    std::vector<Slot> slots_;
+    size_t used_ = 0;
+    std::vector<BondRect> pieces_;
+    const Slot *last_ = nullptr;
+    Slot &slot(int64_t key);
 };
+
+template <typename G>
+bool PatternView::rect(int x, int course, int z, const G &group, BondRect &out) {
+    FitBrick b;
+    if (!brick(x, course, z, b)) {
+        return false;
+    }
+    const int64_t k = bond_key(b.x, b.c, b.z);
+    const Slot *sl = last_;
+    if (!sl || sl->key != k) {
+        Slot &ns = slot(k);
+        if (ns.key != k) {
+            uint8_t g[3 * 8 * 8];
+            int i = 0;
+            for (int cc = b.c; cc < b.c + b.h; ++cc)
+                for (int zz = b.z; zz < b.z + b.sz; ++zz)
+                    for (int xx = b.x; xx < b.x + b.sx; ++xx) g[i++] = (uint8_t)group(xx, cc, zz);
+            const size_t first = pieces_.size();
+            const bool whole = split(b, g, pieces_);
+            ns.key = k;
+            ns.first = (int32_t)first;
+            ns.n = whole ? -1 : (int32_t)(pieces_.size() - first);
+        }
+        sl = &ns;
+        last_ = sl;
+    }
+    if (sl->n < 0) {
+        out = BondRect{ b.x, b.z, b.sx, b.sz, b.c, b.h };
+        return true;
+    }
+    for (int32_t j = sl->first; j < sl->first + sl->n; ++j) {
+        const BondRect &r = pieces_[(size_t)j];
+        if (x >= r.x && x < r.x + r.sx && z >= r.z && z < r.z + r.sz && course >= r.c && course < r.c + r.h) {
+            out = r;
+            return true;
+        }
+    }
+    out = BondRect{ x, z, 1, 1, course, 1 };   // not a bond cell: its own
+    return true;
+}
+
 /// The game's ground bricks come from the fit (TerrainFit.set_enabled).
 bool fit_enabled();
 
@@ -78,8 +145,6 @@ int fit_float_cells();
 /// off: the old pattern's top course over the fitted ground).
 bool fit_top_enabled();
 
-/// Drops every kept region (new settings, a new world).
-void fitted_clear();
 } // namespace brick
 
 /// THE REGION FIT (Docs/TerrainRegions.md 3, 11): bricks of random sizes,
@@ -114,12 +179,9 @@ public:
     static Dictionary get_configured();
     /// What configure's calibration did: calibration_ms, calibration_error.
     static Dictionary get_calibration();
-    /// fitted_brick for scripts: {x, z, c, sx, sz, h, mat, loose}, or empty.
+    /// The pattern library's whole brick over a cell, for scripts:
+    /// {x, z, c, sx, sz, h, mat}, or empty (the fit off).
     static Dictionary brick_at(int x, int course, int z);
-    static Dictionary lookup_stats();
-    /// The lookup against the batch fit (region_fit_probe): counts of cells
-    /// checked, wrong and missing, from `threads` threads.
-    static Dictionary check_lookup(Vector2i tile, int threads = 4, int depth = 0);
     /// The game's ground bricks from the fit (off: the old pattern). Every
     /// tile is drawn again.
     static void set_enabled(bool on);

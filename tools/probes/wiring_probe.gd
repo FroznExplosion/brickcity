@@ -46,6 +46,17 @@ extends SceneTree
 ##   sequencer program [5, 5, 5]: 5 on, 5 off, 5 on, then off though its back
 ##             stays on; RMB picks the next program; it is saved.
 ##   display   shows the level beside it: 15 with the lever on, 0 off.
+## Stage 4 (Docs/MineWiring.md 18), on placed bricks of the probe's own:
+##   piston    facing up, a 2x2 placed brick rises a course and is still one
+##             brick; a plain piston leaves it, a sticky one pulls it back
+##             (with what is clutched on it); a stack of 3 clutched bricks
+##             rides along, a brick only under an overhang does not; 12
+##             move, 13 stall (and it tries again); generated ground on top
+##             or over the head stalls; sideways the brick in its line is
+##             pushed too and a cable left without ground breaks; a device in
+##             the way stalls; power at its front does not count; 4 pushes
+##             a tick, the fifth the next; laid facing up when looking down
+##             (a gate not); the wrench's turn order; saved.
 
 var _pass := 0
 var _fail := 0
@@ -55,6 +66,8 @@ var _extra := {}
 var _holes := {}
 ## Who stands where (feet, terrain frame): the sensors' bodies.
 var _bodies: Array = []
+## Placed bricks (stage 4): Vector3i(x, course, z) -> Vector4i(rx, rz, sx, sz).
+var _placed := {}
 
 
 func _ok(what: String, cond: bool, detail: String = "") -> void:
@@ -71,7 +84,7 @@ func _solid(x: int, y: int, z: int) -> int:
 	if _holes.has(c):
 		return 0
 	if _extra.has(c):
-		return 1
+		return int(_extra[c]) if _extra[c] is int else 1
 	if y < 0:
 		return 1
 	if x >= 20 and x < 26 and z >= 3 and z < 10 and y < 3:
@@ -83,6 +96,10 @@ func _init() -> void:
 	var w := MineWiring.new()
 	w.solid_fn = _solid
 	w.bodies_fn = func() -> Array: return _bodies
+	w.rect_fn = _rect
+	w.clear_fn = func(lo: Vector3i, hi: Vector3i) -> Dictionary: return _box_edit(lo, hi, 0)
+	w.lay_fn = _box_edit
+	w.mark_fn = _mark
 	root.add_child(w)
 	_nets(w)
 	_power(w)
@@ -94,6 +111,7 @@ func _init() -> void:
 	_wrench(w)
 	_stage3(w)
 	_stage3b(w)
+	_stage4(w)
 	_save(w)
 	_save2(w)
 	_items()
@@ -639,7 +657,308 @@ func _items() -> void:
 	_ok("in game it is called Wire, and the ore Wire ore (names decided 2026-11-26)", str(ItemCatalog.get_def(&"cable").name) == "Wire"
 			and ItemCatalog.has(&"redstone_ore") and str(ItemCatalog.get_def(&"redstone_ore").name) == "Wire ore")
 	_ok("their kinds: wire, device", ItemCatalog.kind(&"cable") == "wire" and ItemCatalog.kind(&"lever") == "device")
-	for id in [&"cable", &"lever", &"lamp", &"button", &"pressure_tile", &"trip_hook", &"and_gate", &"wrench"]:
+	for id in [&"cable", &"lever", &"lamp", &"button", &"pressure_tile", &"trip_hook", &"and_gate", &"wrench", &"piston", &"sticky_piston"]:
 		var m := ItemIcons._model(ItemCatalog.get_def(id))
 		_ok("%s has a model" % id, m != null and m.get_child(0).get_child_count() >= 2)
 		m.free()
+
+
+# --- stage 4: pistons, on the probe's own placed bricks --------------------
+
+func _rect(x: int, course: int, z: int) -> Vector4i:
+	return _placed.get(Vector3i(x, course, z), Vector4i())
+
+
+## Any edit to a cell makes it ground again (BrickTerrain's set_edit).
+func _box_edit(lo: Vector3i, hi: Vector3i, mat: int) -> Dictionary:
+	var n := 0
+	for x in range(lo.x, hi.x + 1):
+		for y in range(lo.y, hi.y + 1):
+			for z in range(lo.z, hi.z + 1):
+				var c := Vector3i(x, y, z)
+				_placed.erase(Vector3i(x, floori(y / 3.0), z))
+				if mat == 0:
+					_extra.erase(c)
+					_holes[c] = true
+				else:
+					_holes.erase(c)
+					_extra[c] = mat
+				n += 1
+	return {"tiles": PackedInt32Array(), "changed": n, "box_lo": lo, "box_hi": hi}
+
+
+func _mark(lo: Vector3i, hi: Vector3i, mat: int) -> int:
+	var n := 0
+	for course in range(floori(lo.y / 3.0), floori(hi.y / 3.0) + 1):
+		for x in range(lo.x, hi.x + 1):
+			for z in range(lo.z, hi.z + 1):
+				var all := true
+				for p in 3:
+					all = all and _solid(x, course * 3 + p, z) == mat
+				if all:
+					_placed[Vector3i(x, course, z)] = Vector4i(lo.x, lo.z, hi.x - lo.x + 1, hi.z - lo.z + 1)
+					n += 1
+	return n
+
+
+## A placed brick sx x sz studs at course `course`, its low corner (x, z).
+func _brick(x: int, course: int, z: int, sx: int, sz: int, mat := 5) -> void:
+	var lo := Vector3i(x, course * 3, z)
+	var hi := Vector3i(x + sx - 1, course * 3 + 2, z + sz - 1)
+	_box_edit(lo, hi, mat)
+	_mark(lo, hi, mat)
+
+
+## Is there one whole placed brick sx x sz at (x, course, z)?
+func _is_brick(x: int, course: int, z: int, sx: int, sz: int) -> bool:
+	for bx in range(x, x + sx):
+		for bz in range(z, z + sz):
+			if _rect(bx, course, bz) != Vector4i(x, z, sx, sz):
+				return false
+			for p in 3:
+				if _solid(bx, course * 3 + p, bz) == 0:
+					return false
+	return true
+
+
+func _reset(w: MineWiring) -> void:
+	w.clear()
+	_extra.clear()
+	_holes.clear()
+	_placed.clear()
+
+
+func _stage4(w: MineWiring) -> void:
+	print("stage 4: pistons")
+	var up := MineWiring.FACE_UP
+	# Facing up: a 2x2 brick over it, a lever beside it.
+	_reset(w)
+	var p := Vector3i(40, 0, 80)
+	var lev := Vector3i(39, 0, 80)
+	_ok("a piston may face up", w.place_device(p, &"piston", false, false, up) and int(w.devices[p].facing) == up)
+	_brick(40, 1, 80, 2, 2)
+	w.place_device(lev, &"lever")
+	w.tick()
+	_ok("unpowered: in, the brick where it was", not bool(w.devices[p].on) and _is_brick(40, 1, 80, 2, 2))
+	w.use_device(lev)
+	w.tick()
+	_ok("powered: out, the brick a course up and still one 2x2 brick", bool(w.devices[p].on)
+			and _is_brick(40, 2, 80, 2, 2) and _solid(40, 3, 80) == 0 and _solid(41, 5, 81) == 0)
+	_ok("the wrench readout says it is out", w.readout({"device": p}).contains("extended"))
+	w.use_device(lev)
+	w.tick()
+	_ok("off: a plain piston comes in and leaves the brick", not bool(w.devices[p].on) and _is_brick(40, 2, 80, 2, 2))
+	# A stack of 3 clutched on each other, offset: all ride up; a brick under
+	# the overhang (not on a group brick's top) stays.
+	_reset(w)
+	w.place_device(p, &"piston", false, false, up)
+	w.place_device(lev, &"lever")
+	_brick(40, 1, 80, 2, 2)
+	_brick(41, 2, 80, 2, 1)
+	_brick(42, 3, 80, 1, 1)
+	_brick(42, 1, 80, 1, 1)
+	w.use_device(lev)
+	w.tick()
+	_ok("a stack of 3 clutched on each other rides up", _is_brick(40, 2, 80, 2, 2) and _is_brick(41, 3, 80, 2, 1)
+			and _is_brick(42, 4, 80, 1, 1))
+	_ok("the brick under the overhang stays", _is_brick(42, 1, 80, 1, 1))
+	# The collapse may hand back a stack's top brick as a group of its own:
+	# held all the same, since it is clutched in a chain down to the head; a
+	# brick on the ground beside is not.
+	_ok("a group of only the stack's top brick is held by the piston", w.holds(PackedInt32Array([42, 12, 80, 1, 1, 5])))
+	_brick(50, 0, 80, 1, 1)
+	_ok("a brick not on the piston's chain is not", not w.holds(PackedInt32Array([50, 0, 80, 1, 1, 5])))
+	# The limit: 12 move, 13 stall (and it tries again each tick).
+	for n in [12, 13]:
+		_reset(w)
+		w.place_device(p, &"piston", false, false, up)
+		w.place_device(lev, &"lever")
+		for k in n:
+			_brick(40, 1 + k, 80, 1, 1)
+		w.use_device(lev)
+		w.tick()
+		if n == 12:
+			_ok("12 bricks: pushed", bool(w.devices[p].on) and _is_brick(40, 13, 80, 1, 1) and _solid(40, 3, 80) == 0)
+		else:
+			_ok("13 bricks: stalled, nothing moved (%s)" % w.last_stall, not bool(w.devices[p].on)
+					and _is_brick(40, 1, 80, 1, 1) and w.last_stall.contains("more than"))
+			_ok("and it tries again each tick", w._live())
+	# Generated ground: on top of the brick, or right over the piston.
+	_reset(w)
+	w.place_device(p, &"piston", false, false, up)
+	w.place_device(lev, &"lever")
+	_brick(40, 1, 80, 1, 1)
+	for y in range(6, 9):
+		_extra[Vector3i(40, y, 80)] = true
+	w.use_device(lev)
+	w.tick()
+	_ok("generated ground on the brick's top stalls it (%s)" % w.last_stall, not bool(w.devices[p].on)
+			and _is_brick(40, 1, 80, 1, 1) and w.last_stall.contains("ground"))
+	_reset(w)
+	w.place_device(p, &"piston", false, false, up)
+	w.place_device(lev, &"lever")
+	for y in range(3, 6):
+		_extra[Vector3i(40, y, 80)] = true
+	w.use_device(lev)
+	w.tick()
+	_ok("generated ground over the head stalls it (%s)" % w.last_stall, not bool(w.devices[p].on)
+			and w.last_stall.contains("ground in front"))
+	# Nothing in front: the head goes out into the air.
+	_reset(w)
+	w.place_device(p, &"piston", false, false, up)
+	w.place_device(lev, &"lever", true)
+	w.tick()
+	_ok("nothing over it: out all the same", bool(w.devices[p].on))
+	# Sideways (+x): the brick a stud over, the one in its line too; a cable
+	# on the brick's top is left without ground and breaks.
+	_reset(w)
+	var sp := Vector3i(60, 0, 80)
+	var slev := Vector3i(59, 0, 80)
+	w.place_device(sp, &"piston", false, false, 0)
+	_brick(61, 0, 80, 2, 1)
+	_brick(63, 0, 80, 1, 1)
+	w.place_cable(Vector3i(61, 3, 80))
+	w.place_device(slev, &"lever")
+	w.use_device(slev)
+	w.tick()
+	_ok("sideways: the 2x1 a stud over, the brick in its line pushed too", bool(w.devices[sp].on)
+			and _is_brick(62, 0, 80, 2, 1) and _is_brick(64, 0, 80, 1, 1) and _solid(61, 0, 80) == 0)
+	_ok("the wire on the pushed brick's top rode along", not w.cables.has(Vector3i(61, 3, 80))
+			and w.cables.has(Vector3i(62, 3, 80)))
+	# A lamp in the way stalls it.
+	_reset(w)
+	w.place_device(sp, &"piston", false, false, 0)
+	_brick(61, 0, 80, 1, 1)
+	w.place_device(Vector3i(62, 0, 80), &"lamp")
+	w.place_device(slev, &"lever", true)
+	w.tick()
+	_ok("a device in the way stalls it (%s)" % w.last_stall, not bool(w.devices[sp].on) and _is_brick(61, 0, 80, 1, 1)
+			and w.last_stall.contains("device"))
+	# Power at its front (the head's side) does not count.
+	_reset(w)
+	w.place_device(sp, &"piston", false, false, 1)   # faces -x: its front is x 59
+	w.place_device(slev, &"lever", true)
+	w.tick()
+	_ok("a lever at its front does not power it", not bool(w.devices[sp].on))
+	# Sticky: pushed out, pulled back with the brick clutched on it.
+	_reset(w)
+	w.place_device(sp, &"sticky_piston", false, false, 0)
+	_brick(61, 0, 80, 1, 1)
+	_brick(61, 1, 80, 1, 1)
+	w.place_device(slev, &"lever")
+	w.use_device(slev)
+	w.tick()
+	_ok("sticky: pushed out", _is_brick(62, 0, 80, 1, 1) and _is_brick(62, 1, 80, 1, 1))
+	w.use_device(slev)
+	w.tick()
+	_ok("power off: pulled back, the brick on it too", not bool(w.devices[sp].on)
+			and _is_brick(61, 0, 80, 1, 1) and _is_brick(61, 1, 80, 1, 1) and _solid(62, 0, 80) == 0)
+	# A sticky one facing up pulls down.
+	_reset(w)
+	w.place_device(p, &"sticky_piston", false, false, up)
+	_brick(40, 1, 80, 2, 1)
+	w.place_device(lev, &"lever")
+	w.use_device(lev)
+	w.tick()
+	w.use_device(lev)
+	w.tick()
+	_ok("sticky, facing up: up and back down", not bool(w.devices[p].on) and _is_brick(40, 1, 80, 2, 1)
+			and _solid(40, 6, 80) == 0)
+	# At most 4 pushes a tick: five pistons on one lever.
+	_reset(w)
+	w.place_device(Vector3i(70, 0, 100), &"lever")
+	for k in 5:
+		w.place_cable(Vector3i(71, 0, 100 + k))
+		w.place_device(Vector3i(72, 0, 100 + k), &"piston", false, false, 0)
+		_brick(73, 0, 100 + k, 1, 1)
+	w.tick()
+	w.use_device(Vector3i(70, 0, 100))
+	w.tick()
+	var out := 0
+	for k in 5:
+		out += 1 if bool(w.devices[Vector3i(72, 0, 100 + k)].on) else 0
+	_ok("five pistons, one lever: 4 push this tick (%d)" % out, out == 4)
+	w.tick()
+	out = 0
+	for k in 5:
+		out += 1 if _is_brick(74, 0, 100 + k, 1, 1) else 0
+	_ok("the fifth the next (%d bricks moved)" % out, out == 5)
+	# Laying and turning: looking steeply down gives up (a gate never); the
+	# wrench turns +x, +z, -x, -z, up, +x; not while out.
+	_ok("looking steeply down lays a piston facing up, a gate not",
+			MineWiring.facing_for(&"piston", Vector3(0.1, -0.95, 0.1)) == up
+			and MineWiring.facing_for(&"not_gate", Vector3(0.1, -0.95, 0.1)) != up
+			and MineWiring.facing_for(&"piston", Vector3(1, -0.3, 0)) == 0)
+	_reset(w)
+	w.place_device(sp, &"piston", false, false, 3)
+	w.use_device(sp, "turn")
+	var f1 := int(w.devices[sp].facing)
+	w.use_device(sp, "turn")
+	_ok("the wrench turns -z to up, up to +x (%d, %d)" % [f1, int(w.devices[sp].facing)], f1 == up
+			and int(w.devices[sp].facing) == 0)
+	# What stands on a moved brick rides: a lever and a wire on a brick a
+	# piston lifts go up a course with it, and still work.
+	_reset(w)
+	w.place_device(p, &"piston", false, false, up)
+	w.place_device(lev, &"lever")
+	_brick(40, 1, 80, 3, 1)
+	var rider := Vector3i(40, 6, 80)
+	var rlev := Vector3i(42, 6, 80)
+	w.place_device(rider, &"lamp")
+	w.place_cable(Vector3i(41, 6, 80))
+	w.place_device(rlev, &"lever")
+	w.use_device(lev)
+	w.tick()
+	var up3 := Vector3i(0, 3, 0)
+	_ok("a lamp, a wire and a lever on the lifted brick ride up a course", _is_brick(40, 2, 80, 3, 1)
+			and w.devices.has(rider + up3) and not w.devices.has(rider) and w.devices.has(rlev + up3)
+			and w.cables.has(Vector3i(41, 9, 80)) and not w.cables.has(Vector3i(41, 6, 80)))
+	w.use_device(rlev + up3)
+	_ticks(w, 2)
+	_ok("and still work there: the lever lights the lamp through the wire", w.is_lit(rider + up3))
+	# An out head fills its stud: no wire, no device, no block there.
+	_reset(w)
+	w.place_device(sp, &"piston", false, false, 0)
+	w.place_device(slev, &"lever", true)
+	w.tick()
+	_ok("an out head's stud takes no wire, no device, no block", bool(w.devices[sp].on)
+			and not w.can_place_cable(Vector3i(61, 0, 80)) and not w.can_place_device(Vector3i(61, 0, 80), &"lamp")
+			and w.overlaps(AABB(Vector3(61 * 0.35, 0.0, 80 * 0.35), Vector3(0.35, 0.42, 0.35))))
+	# Sand (generated, loose) a course deep moves as a 1x1 and stays loose;
+	# sand only part of a course is ground: it stalls.
+	_reset(w)
+	w.place_device(sp, &"piston", false, false, 0)
+	for y in 3:
+		_extra[Vector3i(61, y, 80)] = BrickTerrain.MAT_SAND
+	w.place_device(slev, &"lever", true)
+	w.tick()
+	_ok("a course of sand pushed a stud over, still sand, still loose (not placed)", bool(w.devices[sp].on)
+			and _solid(61, 0, 80) == 0 and _solid(62, 2, 80) == BrickTerrain.MAT_SAND and _rect(62, 0, 80) == Vector4i())
+	_reset(w)
+	w.place_device(sp, &"piston", false, false, 0)
+	_extra[Vector3i(61, 0, 80)] = BrickTerrain.MAT_SAND
+	_extra[Vector3i(61, 1, 80)] = true
+	w.place_device(slev, &"lever", true)
+	w.tick()
+	_ok("sand under stone in one course: ground, it stalls", not bool(w.devices[sp].on))
+	# A sideways move hops over studs, slides on smooth tiles (road).
+	_reset(w)
+	_brick(61, 0, 80, 1, 1)
+	var b1 := w.brick_at(Vector3i(61, 0, 80))
+	var hop_stone := w.hops([b1])
+	for x in range(61, 62):
+		_extra[Vector3i(x, -1, 80)] = BrickTerrain.MAT_ROAD
+	var hop_road := w.hops([b1])
+	_ok("on studs it hops, on road it slides (%s, %s)" % [hop_stone, hop_road], hop_stone and not hop_road)
+	# Saved: facing up, out.
+	w.clear()
+	w.place_device(p, &"sticky_piston", true, false, up)
+	var saved: Variant = JSON.parse_string(JSON.stringify(w.to_save()))
+	var w2 := MineWiring.new()
+	w2.solid_fn = _solid
+	root.add_child(w2)
+	w2.restore(saved)
+	_ok("a sticky piston facing up, out, comes back so", w2.devices.has(p) and int(w2.devices[p].facing) == up
+			and w2.devices[p].item == &"sticky_piston")
+	w2.queue_free()
+	_reset(w)
