@@ -912,6 +912,8 @@ func place_target() -> bool:
 				log_blocks.append("plant %s %s" % [d.id, target.cell])
 			target = {}
 			return ok2
+	if k == "fence":
+		return _place_fence(d)      # a panel of posts and rails (MineFences)
 	if k == "chest" or k == "station" or k == "backpack":
 		return _place_chest()          # a workbench, furnace or backpack stands like a chest
 	var b := _block_of(target.cell)
@@ -943,6 +945,37 @@ func place_target() -> bool:
 	placed += 1
 	log_blocks.append("place %s" % to)
 	host.terrain_edited(res)
+	target = {}
+	return true
+
+
+## A fence item's RMB (Docs/MineCreatures.md 5.3): one panel over the face
+## aimed at, across the view, `plates` high, in the item's material.
+func _place_fence(d: Dictionary) -> bool:
+	var n: Vector3i = target.normal
+	var at: Vector3i = (target.cell as Vector3i) + n
+	var right := Vector3.RIGHT
+	if host.cam != null:
+		right = (host.cam as Node3D).global_transform.basis.x
+	var along_x := absf(right.x) >= absf(right.z)
+	var plates := int(d.get("plates", 6))
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	for bx in MineFences.panel_boxes(at, along_x, plates):
+		var lo: Vector3i = bx[0]
+		var hi: Vector3i = bx[1]
+		var box := AABB(Vector3(lo.x * stud, lo.y * plate, lo.z * stud),
+				Vector3((hi.x - lo.x + 1) * stud, (hi.y - lo.y + 1) * plate, (hi.z - lo.z + 1) * stud))
+		if _box_hits_player(box):
+			return false
+	var res := MineFences.place(at, along_x, plates, lay_material(d))
+	if res.is_empty():
+		return false
+	for r in res:
+		host.terrain_edited(r)
+	inv.consume_hand(1)
+	placed += 1
+	log_blocks.append("fence %s %s" % [at, "x" if along_x else "z"])
 	target = {}
 	return true
 

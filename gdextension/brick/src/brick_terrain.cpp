@@ -3109,6 +3109,37 @@ int BrickTerrain::surface_plate(int x, int z) {
     return floor_p;
 }
 
+/// TerrainNav (ai/terrain_nav.cpp, Docs/MineCreatures.md 2): plates
+/// [y0, y0 + n) of column (x, z), 1 solid, 0 air. The same answer as
+/// solid_at per plate, with the biome column decided once and each brick's
+/// cell once -- solid_at decides the column again for every plate. Safe from
+/// a worker: the edit tables are read lock-free (edit_lock).
+void terrain_column_solid(int x, int z, int y0, int n, uint8_t *out) {
+    if (biomes_on()) {
+        const BColumn c = biome_column(g_field.seed, x, z);
+        const bool any_edits = !edits_empty();
+        int last_b = INT_MIN;
+        int last_v = MAT_AIR;
+        for (int i = 0; i < n; ++i) {
+            const int yp = y0 + i;
+            int v = any_edits ? edit_at(pack_cell(x, yp, z)) : -1;
+            if (v < 0) {
+                const int yb = floor_div(yp, PLATES_PER_CELL);
+                if (yb != last_b) {
+                    last_b = yb;
+                    last_v = biome_cell(c, g_field.seed, x, yb, z);
+                }
+                v = last_v;
+            }
+            out[i] = v != MAT_AIR ? 1 : 0;
+        }
+        return;
+    }
+    for (int i = 0; i < n; ++i) {
+        out[i] = g_field.solid_at(x, y0 + i, z) != MAT_AIR ? 1 : 0;
+    }
+}
+
 int BrickTerrain::generated_plate(int x, int z) {
     if (biomes_on()) {
         // The biome world's own surface, not the classic field's: the shore
@@ -6079,6 +6110,9 @@ static bool sample_section(int tx, int sy, int tz, TileSample &out) {
 // bound plate) -- not a whole sample with its derived arrays, nor a section's
 // flood fill, which a neighbour's slice was costing.
 static thread_local bool t_gen_made_only = false;
+/// generated_cells samples a missing tile whole and keeps it (shared with
+/// the bake), rather than making only the slice it needs.
+static bool g_gen_share = false;
 void brick::set_generated_made_only(bool on) { t_gen_made_only = on; }
 
 bool brick::generated_cells(int tx, int tz, int y_lo, int y_hi, std::vector<uint8_t> &vox,
@@ -6111,6 +6145,14 @@ bool brick::generated_cells(int tx, int tz, int y_lo, int y_hi, std::vector<uint
     };
     const uint64_t gkey = (uint64_t)tile_key(tx, tz);
     std::shared_ptr<const GenTile> gen = t_gen_made_only ? nullptr : gen_find(g_gen, gkey, field);
+    if (!gen && !t_gen_made_only && g_gen_share && y_hi > INT_MIN / 2) {
+        // The tile's own sample makes its generated cells and KEEPS them
+        // (the noise is ~all of a sample): its bake, soon after, reuses them
+        // instead of making the same noise again.
+        TileSample tmp;
+        sample_tile(g_field, tx, tz, tmp);
+        gen = gen_find(g_gen, gkey, field);
+    }
     if (gen) {
         for (int lz = lz0; lz < lz1; ++lz) {
             for (int lx = lx0; lx < lx1; ++lx) {

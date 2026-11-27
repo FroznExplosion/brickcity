@@ -1,6 +1,7 @@
-# Mine world creatures: animals, enemies, pathfinding (plan)
+# Mine world creatures: animals, enemies, pathfinding
 
-A plan, written 2026-11-26. Nothing here is built yet. The scene is
+A plan, written 2026-11-26; the user's answers are section 9, what is built
+section 10 (stages 1, 2, 6 in part, 9 in part and 10). The scene is
 `scenes/terrain_test.tscn` (Docs/MineWorld.md); farming is Docs/MineFarming.md.
 
 ## 0. What is asked
@@ -277,3 +278,137 @@ probe or gate passes.
    or brick-built animals too (build them in the asset workshop)?
 6. **Fence height**: just too high for a deer (more than 2 bricks), or should
    deer jump them and only walls stop deer?
+
+## 9. The user's answers (2026-11-26)
+
+1. **Day**: zombies are active all the time; no day rule yet.
+2. **Death**: no player death yet. A zombie's blow is a shove.
+3. **Walls**: zombies cannot break bricks. Anything in their way they do
+   not fit through stops them. They get over 1 brick; 2 bricks stop them.
+4. **Scent and wind**: yes.
+5. **Looks**: placeholder block-outs. For now one pig herd and one zombie.
+6. **Fences**: deer will jump a 2-brick fence. So fences come 2 bricks tall
+   and 3 bricks tall.
+7. **Trampling** happens only when a creature FALLS onto a crop: a zombie
+   from 3 bricks, a pig from 2. Bigger animals later may trample from 1
+   brick, or just by walking (`Mob.trample_bricks` 0 is "by walking").
+   This replaces section 3's "1 in 4 walking over".
+
+## 10. Built (2026-11-26)
+
+**TerrainNav** (`gdextension/brick/src/ai/terrain_nav.*`, section 2). Reads
+the field through `terrain_column_solid` (brick_terrain.cpp: the biome
+column decided once a column, not once a plate). Sections of 16 x 16 x 32
+plates are made on first use and dropped by `invalidate_box` (MineWorld's
+`terrain_edited` passes every edit's box). A body is a Vector4i: width
+studs, height plates, step up, drop. Zombie (2, 12, 3, 19); pig (2, 6, 3, 9).
+
+- `find_path(from, to, body, max_nodes)` is A*. When the goal cannot be
+  reached it goes to the nearest node it can reach (`reached` false). That
+  is how a shut-out zombie waits at the wall.
+- `build_field(goal, radius, body, max_nodes)` is a Dijkstra run backwards
+  over the moves. A node joins only if its forward move lands exactly on
+  the one already in the field, so a drop it can take but not climb back is
+  right. `field_next(id, from)` gives the next node down the field.
+- `line_clear(from, to)` is sight for the herds. `stand_near(at, body, r)`
+  finds a spawn or flee spot.
+- `set_obstacles(id, boxes)` / `remove_obstacles(id)` add solids that are
+  not terrain. **Tree trunks** are TerrainTrees' physics boxes, not cells.
+  Without them a zombie walked into a trunk and stayed there.
+  `MineMobs._trees_step` registers each tree cell within 100 m and does it
+  again when its count of trees changes (a tree felled or planted).
+- Cost (terrain_nav_probe, the real ground at the spawn):
+  - a field of radius 96 studs is 37k nodes: 120-150 ms on a worker with
+    the sections already made, 290-550 ms the first time;
+  - a 30 m path takes 0.3 ms.
+
+  The field is built again at most once a second, and only when the player
+  has moved 1.5 m or an edit landed.
+
+**Creatures** (`scripts/mobs/`).
+
+| File | What |
+|---|---|
+| `mine_mobs.gd` (MineMobs) | Owns the nav, the creatures and the zombies' shared field (one worker job at a time, polled). Turns the wind and shows it top right (an arrow in the view, the counts and the herd's alert). Spawns one zombie at 28 m and one herd of 3 pigs at 24 m once the player has been on foot 4 s. A zombie comes back 25 s after it dies; the herd 60 s after the last pig dies. Creatures past 80 m sleep (no physics) and those past 150 m go. A shot (the gun's `fired`) is a noise heard 60 m off. **F7**: a zombie; **Shift+F7**: a herd |
+| `mob.gd` (Mob) | A Pawn's body. Asks for paths on a worker and takes them when done. Steers, pushes apart from other creatures, hops when stuck. Fall-trample through `MineFarming.creature_landed`. Tips over and goes when it dies |
+| `zombie.gd` | Chases on the shared field, falling back to its own path. Hits (a shove) only when it can actually walk to the player (field cost < 2.5 m), never through a fence. 40 hp |
+| `pig_herd.gd` (PigHerd) | One alert for the herd, from a notice score (section 5.1). Its weights are below |
+| `pig.gd` | Does its part: grazes head down (except the lookout), stops and stares when WARY, walks off on ALARM, runs on FLEE. Eats a crop it can walk to (`MineFarming.animal_eat`: back 2 stages, eaten up at the first). A path that ends short of the crop means "no way" for 30 s. Drops 2 raw pork. 30 hp |
+| `fences.gd` (MineFences) | Section 5.3's fences, as wood bricks |
+| `mob_looks.gd` | Placeholder block-outs; legs swing with speed |
+| `mobs_gate.gd` | `--gate=mobs` |
+
+The herd's notice weights:
+
+- **Sight**: two rays a think (the lookout x1.6, heads down x0.5) over 30 m.
+  Crouched x0.35, still x0.4, sprinting x2.
+- **Light**: the sky's light times the sun, or a lamp's.
+- **Scent**: downwind of the player, up to 44 m.
+- **Noise**: sprinting within 18 m.
+- Notice doubles within 6 m.
+- **Alerts**: WARY at 0.25, ALARM at 0.6, FLEE at 1. A shot, a hurt or a
+  dead pig means FLEE at once.
+- **Flee**: 34 m away from the player, onto a floor they fit. They stay
+  bunched in slots round the leader's spot, run for 14 s, and run again if
+  followed.
+- **Crops**: CALM pigs go for liked crops within 32 m. Each pig takes its
+  own plot.
+
+Fences:
+
+- An item lays one panel 1 stud thick, posts 3 studs apart on a 3-stud
+  lattice (panels side by side share posts), across the view.
+- Rails are 1 plate every 3 plates. They are see-through, and no hole in
+  them is bigger than 2 studs by 2 plates.
+- **Fence** is 6 plates (2 bricks). **Tall fence** is 9 plates (3 bricks).
+  Each costs 6 or 9 wood for 2 at a workbench.
+- They are plain wood bricks: broken, saved and seen by the nav like any
+  other brick.
+
+**Farming** (mine_farming.gd) gained `creature_landed`, `crops_near` and
+`animal_eat`, and an `eaten` count. The abstract animal trouble (section 5.3,
+MineFarming.md 18) still runs for open fields; turning it off near real herds
+is not done.
+
+**Tests.**
+
+- `tools/probes/terrain_nav_probe.gd` (headless, 39 checks):
+  - gaps of 2 and 1 studs;
+  - walls of 1 and 2 bricks;
+  - doorways 11 and 12 plates high;
+  - drops one way only;
+  - edits;
+  - the field;
+  - sight;
+  - fences of 2 and 3 bricks against zombie, pig, 1-stud and 2-brick-climbing bodies;
+  - trunks as obstacles;
+  - cost.
+- `--gate=mobs` (windowed, 24 checks, on a walled arena by the spawn):
+  - chase and hit;
+  - round through a 2-stud gap;
+  - shut out by 2 bricks, waiting at the wall;
+  - over 1 brick;
+  - fall-trample (zombie 4 bricks yes, pig 1 no, pig 3 yes);
+  - scent upwind beats downwind;
+  - a shot sends the herd off together;
+  - calm pigs eat open carrots;
+  - the fence item through the builder;
+  - a 2-brick fenced field is not eaten (the pigs find no way);
+  - a zombie never gets into the fence ring.
+  - Pictures: `user://dev/mobs_zombie.png`, `mobs_pigs.png`, `mobs_fence.png`.
+  - The arena's floor is laid 36 plates deep. Over a cave, the cleared hills
+    came down and took the floor with them. `fill_box` refuses boxes over
+    200k cells, so the arena is cleared in slabs.
+
+**Not yet.**
+
+- The far tier (2.5): creatures past the colliders sleep instead of riding
+  the nav.
+- Saving creatures. They are made again on load.
+- Water and lava in the nav (water is air to it).
+- Player health and death (stage 3).
+- Real models.
+- Deer, wolves, rabbits, boar.
+- Fence gates (a wiring door works as one).
+- Turning off the abstract animal trouble near real herds.
+

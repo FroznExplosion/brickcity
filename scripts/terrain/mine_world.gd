@@ -101,6 +101,8 @@ var buildings_far: MineBuildingsFar = null
 var drops: DroppedItems = null
 ## Farming (Docs/MineFarming.md): tilled plots, crops on the world clock.
 var farming: MineFarming = null
+## Creatures: a zombie, pigs, fences' reason to be (Docs/MineCreatures.md).
+var mobs: MineMobs = null
 ## THE WORLD CLOCK (Docs/MineFarming.md 4): seconds played in this world,
 ## saved with it (the world file's "time"). The sky's hour is its day part;
 ## crops grow by it. Runs only while the world is open.
@@ -285,6 +287,9 @@ func _ready() -> void:
 	farming.name = "Farming"
 	add_child(farming)
 	farming.setup(self)
+	mobs = MineMobs.new()
+	add_child(mobs)
+	mobs.setup(self)
 	_build_item_icons()
 	debris = Debris.new()
 	debris.name = "Debris"
@@ -324,6 +329,10 @@ func _ready() -> void:
 		elif "--gate=farm" in OS.get_cmdline_user_args():
 			# Farming (Docs/MineFarming.md): scripts/farming/farm_gate.gd.
 			_farm_gate = preload("res://scripts/farming/farm_gate.gd").new()
+			_farm_gate.run(self)
+		elif "--gate=mobs" in OS.get_cmdline_user_args():
+			# Creatures (Docs/MineCreatures.md): scripts/mobs/mobs_gate.gd.
+			_farm_gate = preload("res://scripts/mobs/mobs_gate.gd").new()
 			_farm_gate.run(self)
 		elif "--gate=wiring" in OS.get_cmdline_user_args():
 			# Wiring (Docs/MineWiring.md): scripts/wiring/wiring_gate.gd.
@@ -407,6 +416,8 @@ func generate(s: Dictionary) -> void:
 		save_edits(true)
 	settings = s.duplicate(true)
 	_teardown()
+	if mobs != null:
+		mobs.reset()
 	_pending_tiles = Rect2i()
 	_reanchors = 0
 	_last_reanchor_ms = 0.0
@@ -1045,6 +1056,8 @@ func _wait_breaks() -> void:
 func terrain_edited(res: Dictionary) -> void:
 	if farming != null:
 		farming.terrain_changed()     # fields: a wall built or broken
+	if mobs != null:
+		mobs.terrain_edited(res)      # the creatures' nav forgets that box
 	water.terrain_changed(res)
 	# A stamped building undermined on one side tips (Docs/TerrainBuildings.md 4b).
 	MineBuildings.after_edit(self, res)
@@ -1353,6 +1366,8 @@ func _process(delta: float) -> void:
 	_tend_towns(delta, eye)
 	if farming != null:
 		farming.step(delta, eye)
+	if mobs != null:
+		mobs.step(delta)
 	_autosave(delta)
 	_hud_in -= delta
 	if _hud_in <= 0.0:

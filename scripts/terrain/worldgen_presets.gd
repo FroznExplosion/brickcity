@@ -45,6 +45,10 @@ const DEFAULT_BRICKS := {
 	## laid lands near what is asked (TerrainFit calibrate, Docs/TerrainRegions.md 12.5).
 	"calibrate": true,
 	"stagger": 0.0, "cave_stagger": 0.35,
+	## The stagger scored within each layer of 3 courses, not across layers:
+	## the same seams over seams (445 a thousand joints against 448) and each
+	## region fitted from its own cells (a tile 57 ms, not 92). Docs/TerrainRegions.md 12.7.
+	"stagger_layers": false,
 	"cross": 1.0,
 	"mixed": true,
 	## The game draws, breaks and holds these bricks (off: the old 2x4

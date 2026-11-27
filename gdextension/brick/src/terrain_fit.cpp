@@ -83,6 +83,7 @@ struct CellCache {
     std::unordered_map<int64_t, Entry> blocks;
     uint64_t clock = 0;
     int64_t made = 0, hits = 0;
+    double make_ms = 0.0;   ///< generating and encoding missing blocks
 };
 CellCache *g_cells = nullptr;
 
@@ -120,6 +121,7 @@ std::vector<std::shared_ptr<const CellBlock>> cell_blocks(int tx, int tz, int cb
         }
     }
     if (miss_lo > miss_hi) return out;
+    const uint64_t mk0 = godot::Time::get_singleton()->get_ticks_usec();
     std::vector<uint8_t> vox;
     std::vector<int16_t> gtop;
     uint32_t gf = 0;
@@ -164,6 +166,7 @@ std::vector<std::shared_ptr<const CellBlock>> cell_blocks(int tx, int tz, int cb
     }
     std::lock_guard<std::mutex> lk(cc.lock);
     cc.made += (int64_t)made.size();
+    cc.make_ms += (double)(godot::Time::get_singleton()->get_ticks_usec() - mk0) / 1000.0;
     if (gf != brick::field_serial()) return out;   // the world changed meanwhile: not kept
     if (cc.blocks.size() + made.size() > CELL_BLOCKS_MAX) {
         std::vector<uint64_t> used;
@@ -303,6 +306,11 @@ struct FitParams {
     int offset = 7;             ///< odd courses' squares shifted by this
     bool merge = true;          ///< 1x1s merged into a 1-wide neighbour after a region
     bool pair_merge = true;     ///< like bricks side by side joined where their pair shape is short
+    /// The stagger scored across layers too (an odd layer against the even
+    /// ones round it: each region then needs its neighbours' fitted, ~1.5
+    /// tiles round). Off: within a layer only (2 of 3 course joints), each
+    /// region from its own cells.
+    bool stagger_layers = true;
     bool wide_first = true;     ///< the wide bricks placed to their share before the fill
     double wide_seams = 0.25;   ///< most of a wide brick's outline on seams it may have (+ stagger)
     int tries = 1;              ///< seeds tried a region, the best kept
@@ -609,7 +617,7 @@ private:
     bool known(int id, int L, int64_t reg) const {
         const Brick &b = f_.bricks[(size_t)id];
         if (b.layer == L) return b.region == reg;
-        return (L & 1) == 1;
+        return p_.stagger_layers && (L & 1) == 1;
     }
 
     /// Seams of course `cb` along the outline of footprint (x0..x1, z0..z1):
@@ -622,9 +630,10 @@ private:
         const int32_t *ids = f_.id.data() + (size_t)a_.w * a_.d * lc;
         const int W = a_.w, D = a_.d, ox = a_.ox, oz = a_.oz;
         const bool odd = (L & 1) != 0;
+        const bool across = odd && p_.stagger_layers;
         auto kn = [&](int id) {
             const Brick &b = f_.bricks[(size_t)id];
-            return b.layer == L ? b.region == reg : odd;
+            return b.layer == L ? b.region == reg : across;
         };
         auto edge = [&](int ax, int az, int bx, int bz) {
             ax -= ox; bx -= ox; az -= oz; bz -= oz;
@@ -1274,6 +1283,7 @@ FitParams parse(const Dictionary &d) {
     p.offset = (int)d.get("offset", 7);
     p.merge = (bool)d.get("merge", true);
     p.pair_merge = (bool)d.get("pair_merge", true);
+    p.stagger_layers = (bool)d.get("stagger_layers", true);
     p.wide_first = (bool)d.get("wide_first", true);
     p.tries = (int)d.get("tries", 1);
     p.try_seams = (double)d.get("try_seams", 1.0);
@@ -1361,24 +1371,30 @@ double calibrate(FitParams &p, const Dictionary &d, Dictionary *report = nullptr
         for (size_t si = 0; si < p.shapes.size(); ++si)
             if (p.shapes[si].a == e.first.first && p.shapes[si].b == e.first.second)
                 target[si] = total > 0.0 ? e.second / total : 0.0;
-    Area a;
-    bool found = false;
-    for (int k = 0; k < 6 && !found; ++k) {
-        if (!sample_area(-2 + 8 * k, -2, a)) return 0.0;
+    // Two samples of the world's ground (the first two 5 x 5 tile areas
+    // along a fixed line with enough full cells): one overfits its own.
+    std::vector<Area> samples;
+    for (int k = 0; k < 10 && samples.size() < 2; ++k) {
+        Area a;
+        if (!sample_area(-2 + 8 * k, -2 + 5 * k, a)) return 0.0;
         int64_t full = 0;
         for (int lc = 0; lc < a.nc; ++lc)
             for (int lz = MID_LO; lz < MID_HI; ++lz)
                 for (int lx = MID_LO; lx < MID_HI; ++lx)
                     full += a.kind[(size_t)a.idx(lx, lz, lc)] >= K_MEDIUM;
-        found = full > 20000;
+        if (full > 20000) samples.push_back(std::move(a));
     }
-    if (!found) return 0.0;
+    if (samples.empty()) return 0.0;
+    // Damped steps, and each shape's whole scaling kept within 0.5-3 x.
+    std::vector<double> mult(p.shapes.size(), 1.0);
     Array steps;
     for (int it = 0; it < 3; ++it) {
-        Fit f;
-        Fitter(a, p, f).run();
         Sums sm;
-        measure(a, f, sm);
+        for (const Area &a : samples) {
+            Fit f;
+            Fitter(a, p, f).run();
+            measure(a, f, sm);
+        }
         if (sm.bricks <= 0) break;
         double err = 0.0;
         for (size_t si = 0; si < p.shapes.size(); ++si) {
@@ -1386,7 +1402,10 @@ double calibrate(FitParams &p, const Dictionary &d, Dictionary *report = nullptr
             auto g = sm.share.find(fkey(p.shapes[si].a, p.shapes[si].b));
             const double got = g == sm.share.end() ? 0.0 : (double)g->second / (double)sm.bricks;
             err += std::fabs(got - target[si]);
-            const double step = std::min(2.0, std::max(0.5, std::pow(target[si] / std::max(got, 0.005), 0.8)));
+            double step = std::min(1.5, std::max(0.7, std::pow(target[si] / std::max(got, 0.005), 0.6)));
+            const double m = std::min(3.0, std::max(0.5, mult[si] * step));
+            step = m / mult[si];
+            mult[si] = m;
             for (Band &b : p.bands) b.share[si] *= step;
             p.shapes[si].share *= step;
         }
@@ -1588,8 +1607,11 @@ void ensure_group(const std::vector<RKey> &asked, const FitParams &p) {
         for (const RKey &r : asked) want(r[0], r[1], r[2]);
         if (fit.empty()) return;
         // An odd region reads the even layers' bricks along its outline,
-        // one cell out: those regions fitted with it, or laid in.
-        const std::vector<RKey> first = fit;
+        // one cell out: those regions fitted with it, or laid in -- only for
+        // the stagger's score. Without it (stagger and cave stagger off) a
+        // region reads nothing past its own cells and cave air 3 round.
+        const bool reads_layers = p.stagger_layers && (p.stagger >= 0.0 || p.cave_stagger > -1.5);
+        const std::vector<RKey> first = reads_layers ? fit : std::vector<RKey>();
         for (const RKey &r : first) {
             if ((r[2] & 1) == 0) continue;
             const int ax0 = span_lo(r[0]) - 1, ax1 = span_hi(r[0], off) + 1;
@@ -1951,6 +1973,14 @@ Dictionary TerrainFit::lookup_stats() {
         bricks += (int64_t)e.second.r->bricks.size();
         // the brick words, the vector and control block, the map's node
         bytes += (int64_t)(e.second.r->bricks.capacity() * 4) + 24 + 32 + 48;
+    }
+    {
+        CellCache &cc = cell_cache();
+        std::lock_guard<std::mutex> lk2(cc.lock);
+        d["cell_blocks_made"] = cc.made;
+        d["cell_blocks_hits"] = cc.hits;
+        d["cell_make_ms"] = cc.make_ms;
+        d["cell_blocks_kept"] = (int64_t)cc.blocks.size();
     }
     d["kept"] = (int64_t)rc.regions.size();
     d["fitted"] = rc.fitted;

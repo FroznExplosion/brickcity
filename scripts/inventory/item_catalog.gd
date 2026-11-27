@@ -13,7 +13,7 @@ extends RefCounted
 ##   fluid (1 water, 2 lava, 0 none), fluid_kind ("source" / "still").
 
 const KINDS := ["block", "fluid", "bucket", "source_bucket", "chest", "station", "tool", "backpack", "gun", "grenade",
-		"hoe", "seed", "scythe", "can", "fertiliser", "wire", "device", "wrench", "misc"]
+		"hoe", "seed", "scythe", "can", "fertiliser", "wire", "device", "wrench", "fence", "misc"]
 ## Which hand an item may be in (zylanntest's HandUse). Since 2026-11-26
 ## only "two" limits a slot: a two-handed item never goes in the off-hand
 ## (Inventory.slot_accepts); "right" and "off" say how an item is meant to
@@ -196,7 +196,9 @@ static func _complete(e: Dictionary) -> Dictionary:
 	# A seed's crop (Docs/MineFarming.md): what it grows into.
 	# A fertiliser's fertility and boost (Docs/MineFarming.md 17).
 	# A furnace smelts (`smelter`, Docs/Inventory.md 15); a station's crafting grid (`grid`, 16).
-	for k in ["break_area", "break_repeat", "model", "crop", "fertility", "boost_days", "mulch", "smelter", "grid", "counts_as"]:
+	# A fence's height in plates (MineFences, Docs/MineCreatures.md 5.3).
+	for k in ["break_area", "break_repeat", "model", "crop", "fertility", "boost_days", "mulch", "smelter", "plates",
+			"grid", "counts_as"]:
 		if e.has(k):
 			out[k] = e[k]
 	return out
