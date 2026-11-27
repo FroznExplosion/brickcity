@@ -735,3 +735,124 @@ region_fit_probe's numbers the same, lookup PASS):
 --fitted`: a cold 2 x 2 at the mountain spot 129 ms (allowed 120), 96 at the
 other. The rest of a cold tile is mostly its neighbours' noise (a region's
 fit reads ~1.5 tiles round). The switch stays off until that check passes.
+
+### 12.3 The top course from the fit (built 2026-11-26)
+
+With the fit on, the packer cuts the surface's top course from the fit too
+(`brick::fit_top`, `pack_tile`): a column's top cell takes the brick of a
+one-course region fit of its square among the columns of its GENERATED
+class (generated top plate, material, colour; `brick::generated_top`, kept
+by tile), by the material's group (sand and gravel 1x1, grass and dirt 8
+cells at most). A fitted top brick is kept while every cell of it is as
+generated and free (not smooth, a ramp's or slope's, placed); a column an
+edit changed, or the rest of a brick it cut, takes the old pattern among
+the cells no whole fitted brick holds -- so a hole re-lays only the bricks
+it touches (`mine_world_probe`: every other brick laid as before). Placed
+blocks first, as always. Studs: the old rule (a brick whose old 4 x 2 cut
+reaches under a higher column is studded), so the surface stays a mix.
+
+Checks with `--fitted`: bricks, audit, collapse PASS; `mine_world_probe`
+all but the cold bake (136 ms, 120 allowed); `--gate=bricks` PASS.
+`terrain_bricks_probe` now counts a surface piece under a laid plate apart
+(a listed brick of the same footprint on it): with the plates off there
+are none without a face, so all of them were that harmless case; the fit
+has more top pieces, so more of them (60 a tile, the old 28).
+
+Open (the user, 2026-11-26): should building materials be left out of the
+"a group of 500+ cells floats" rule (stage D) so an undermined building
+still tips? Left open; building cells reach the collapse as placed blocks.
+
+### 12.4 Stage D in the collapse (2026-11-26)
+
+- **Big groups float** (the user, section 11), with the fit on: a group the
+  survey lets go of `float_cells` cells or more (preset `bricks.float_cells`,
+  500; menu Bricks tab) stays where it is; the survey reports `floated`.
+  Groups holding a building material still fall (open question, 12.3).
+  `terrain_collapse_probe --fitted`: a ~640-cell stone arm floats, the
+  180-cell long arm falls.
+- **A tall brick as one body: built, OFF** (`TALL_BODIES` in
+  terrain_collapse.cpp). On, the survey makes a fitted tall brick one solver
+  body (archetype `h` courses tall; its groups still listed a course an
+  entry, so ground_collapse.gd is unchanged), but `terrain_collapse_probe`'s
+  "weak studs" (stud strength 0.001) then lets two ground bricks beside the
+  pillar go with the arm -- every body was placed, so the solver's stress
+  walk treats the tall body differently; not yet understood. Off, a tall
+  brick is a body a course, as before.
+
+### 12.5 Shares, the store, the top course deferred (2026-11-26)
+
+**Shares closer to what is set.** By count, rough ground leaves room for a
+1x2 where a 2x2 will not fit: the fill landed 2x2 at 13 % (20 asked), 1x2 at
+33 (25). Raising aim did not move it; raising 2x2's own share did (0.35 ->
+21 %), with floors near 25 % for 1x2 and 14 % for 1x1 that no share pushes
+lower. So:
+- a pair merge after the fill: two like bricks side by side become the
+  listed shape they make (1x2 + 1x2 a 2x2, 2x2 + 2x2 a 2x4) where that shape
+  is further under its share than the pair's (`pair_merge`, on);
+- the shares CALIBRATED once a world (`calibrate`, on): a fixed sample of
+  its ground (5 x 5 tiles near the origin, the first with enough bricks)
+  fitted three times, each share scaled by (target / got)^0.8. The same
+  bricks every session. ~0.4 s once at world set-up.
+
+region_fit_probe, the shipped settings: every shape within 5 points (2x4
+16, 2x2 21, 1x2 28, 1x1 14); not calibrated, 2 off.
+
+**The packs no longer kept.** `PackStore` kept each tile's packed top course
+(~14 KB a tile, 9.9 MB at 704). Now a tile is packed when baked (as it was
+the first time anyway) and only its `TileTops` is kept: each column's top
+plate and top brick (~6 KB). The survey (`top_columns`), rain (`rain_top`)
+and the pickaxe (`find_brick`, `find_bricks`: sample plus the kept tops)
+read that. Fit off, all probes pass; the old bake is 14-18 ms as before.
+
+**The top course from the fit deferred** (the user): behind its own switch
+`fit_top` (preset `bricks.fit_top`, off): with the fit on, the ground is
+fitted and the surface's top course is the old pattern until performance
+is good.
+
+### 12.6 Where it stands (2026-11-26, measured)
+
+Windowed, one run at a time, editor closed, nothing else running:
+
+| gate | fit off | fit on (ground; tops deferred) |
+|---|---|---|
+| `--gate=bricks` | PASS | PASS |
+| `--gate=breaklag --burst` (trigger to hole) | mean 34, worst 40 ms | mean 33, worst 36 ms (46 before the prefetch fix) |
+| `--gate=flight` | worst 38 ms, 1 over 33; 192 tiles in after 120 frames | worst 27 ms, 0 over 33; 102 tiles in |
+| `--gate=deep` (into a cave) | loaded in 200 frames, worst 24 ms | 383 frames, worst 23 ms |
+| headless probes (bricks, audit, collapse, mine_world, fluid) | all PASS | all PASS but mine_world's cold bake (134-144 ms, 120 allowed) |
+
+Frames are smooth with the fit on; what it costs is the workers' time: new
+ground fills in about half as fast (the fit reads ~1.5 tiles round each
+region). That, and the cold-bake check, keep the switch off.
+
+`--gate=gpu` (fit off; 1280x720 at render scale 0.75, flat out): on foot,
+frame 8.3 ms, GPU 7.6: water 3.0 (the sea 2.0), near tiles 1.2, near trees
+1.1, far tier 1.0, sun shadows 0.6, behind faces 0.5. Up high: GPU 5.6, water
+2.0, far tier 1.3. Standing in a deep cave the readout gave the world's
+scripts 3.9 ms of a 17.5 ms frame: the rest is drawing at the window's real
+size and the vsync. The game is GPU-bound at full resolution, the water the
+largest single part.
+
+### 12.7 The stagger within layers; the load cost halved (2026-11-26)
+
+Where a new tile's time went with the fit on (49 tiles in streaming order,
+headless): noise for the fit's cells 35 ms, the fit 31, 132 regions a tile
+-- because an odd layer's region scores its stagger against the even
+layers round it, so it needs their regions fitted, ~1.5 tiles round.
+Measured, that cross-layer score buys little:
+
+| region_fit_probe | stacked seams / 1000 joints | stacked % | a tile (streaming) |
+|---|---|---|---|
+| stagger across layers (was) | 448 | 44 | 92 ms |
+| stagger within each layer (now, `stagger_layers` false) | 445 | 47 | 57 ms |
+| no stagger | 517 | 52 | 63 ms |
+| old pattern (bond_rect) | 4 | 0.5 | 26 ms |
+
+So the stagger is scored within each layer of 3 courses only (2 of 3
+course joints): each region is fitted from its own cells (and cave air 3
+round), 84 regions a tile, no neighbours' regions. The calibration made
+robust on the way (two samples, damped steps, a shape's scaling kept within
+0.5-3 x): every shape within 5 points with any of these.
+
+`mine_world_probe --fitted` now PASSES (cold 2 x 2 bake 80 and 113 ms, 120
+allowed); bricks, audit, collapse, fluid probes pass on and off.

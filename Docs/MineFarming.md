@@ -221,7 +221,8 @@ plans). So trouble comes in two forms, both as random events (section 5):
   the plant lost).
 - **Loaded, with real animals** (later, when creatures come to the mine world):
   real animals path to crops they like and eat them; the abstract pressure
-  stops for loaded farms.
+  stops for loaded farms. Planned in Docs/MineCreatures.md 5.3: per-animal
+  open/closed (deer jump two bricks), eating and trampling by real herds.
 
 **Open or closed.** A farm is a connected group of plots (a field). It is
 **enclosed** when a walk over the ground from its plots cannot get more than

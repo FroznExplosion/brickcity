@@ -120,12 +120,20 @@ struct TopCache {
     }
 };
 
+/// Stage D's tall bodies (a fitted tall brick ONE solver body, all its
+/// courses). Off: with them terrain_collapse_probe's "weak studs" let two
+/// ground bricks beside the pillar go with the arm (2026-11-26, not yet
+/// understood; Docs/TerrainRegions.md 12.4). Off, a tall brick is a body a
+/// course, as before.
+constexpr bool TALL_BODIES = false;
+
 struct VBrick {
-    int x, y, z;     ///< region-local cell, y in bricks
+    int x, y, z;     ///< region-local cell, y in bricks (its bottom course)
     int sx, sz;
     uint8_t m;
     bool held;       ///< touches the ring (or is a pillar): the edge holds it
     bool top;        ///< in the region's top course
+    int h = 1;       ///< courses tall: a fitted tall brick is ONE body (stage D)
 };
 
 struct Attempt {
@@ -133,6 +141,8 @@ struct Attempt {
     PackedByteArray sand_mats;
     Array groups;
     bool solved = false;
+    int floated = 0;   ///< groups let go but big enough to float (stage D)
+    int unplaced = 0;  ///< bricks the solver's world refused (should be none)
     bool top_touch = false;
     bool side_touch = false;
     bool too_big = false;   ///< the region (or its bricks) past the limits
@@ -344,17 +354,19 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
     a.tops_ms = ms_since(tt0);
     a.packed = tops.packed;
     const auto tb0 = std::chrono::steady_clock::now();
-    auto add = [&](int bx, int y, int bz, int bsx, int bsz, uint8_t m) {
+    auto add = [&](int bx, int y, int bz, int bsx, int bsz, uint8_t m, int bh = 1) {
         // Ice is held (Docs/MineWaterNext.md 10): it floats on the water it
         // froze from, which the ground's survey does not see; a sheet of it
         // is bricks side by side, bonded to nothing.
-        VBrick vbk{ bx, y, bz, bsx, bsz, m, m == MAT_PILLAR || m == MAT_ICE, y == H - 1 };
+        VBrick vbk{ bx, y, bz, bsx, bsz, m, m == MAT_PILLAR || m == MAT_ICE, y + bh - 1 == H - 1, bh };
         const int32_t id = (int32_t)vb.size();
-        for (int dz = 0; dz < bsz; ++dz) {
-            for (int dx = 0; dx < bsx; ++dx) {
-                owner[idx(bx + dx, y, bz + dz)] = id;
-                if (ring(bx + dx, bz + dz)) {
-                    vbk.held = true;
+        for (int yy = y; yy < y + bh; ++yy) {
+            for (int dz = 0; dz < bsz; ++dz) {
+                for (int dx = 0; dx < bsx; ++dx) {
+                    owner[idx(bx + dx, yy, bz + dz)] = id;
+                    if (ring(bx + dx, bz + dz)) {
+                        vbk.held = true;
+                    }
                 }
             }
         }
@@ -466,6 +478,7 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
     // Under it, the bond: every other solid cell's brick, laid once. The
     // fitted bricks where the game draws them (TerrainFit.set_enabled).
     const bool fit_on = brick::fit_enabled();
+    const int64_t float_cells = brick::fit_float_cells();
     brick::FitView fit;
     std::unordered_map<int64_t, bool> whole_memo;
     // A bond cell (absolute x, z; local course y) in a fitted brick whose
@@ -504,11 +517,16 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
                 }
                 BondRect r;
                 brick::FitBrick fb;
+                int bh = 1;
                 if (fit_on && in_fitted(x0 + x, y, z0 + z, fb)) {
-                    // The fitted brick's footprint in this course (Docs/
-                    // TerrainRegions.md 12; a tall brick is a body a course
-                    // until stage D).
+                    // The fitted brick (Docs/TerrainRegions.md 12). A tall
+                    // one met at its bottom course is ONE body, all its
+                    // courses (stage D); in_fitted has every course of it
+                    // in the region.
                     r = BondRect{ fb.x, fb.z, fb.sx, fb.sz };
+                    if (TALL_BODIES && fb.h > 1 && fb.c - y0 == y) {
+                        bh = fb.h;
+                    }
                 } else if (fit_on) {
                     // Ground no fitted brick holds whole: the old pattern
                     // among those cells, as the tiles draw it.
@@ -522,11 +540,24 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
                 int bx = r.x - x0, bz = r.z - z0, bsx = r.sx, bsz = r.sz;
                 // Every cell of the rectangle names it, so none is taken yet;
                 // if one were, the cell goes alone rather than overlap.
-                bool free = bx >= 0 && bz >= 0 && bx + bsx <= W && bz + bsz <= D;
-                for (int dz = 0; dz < bsz && free; ++dz) {
-                    for (int dx = 0; dx < bsx && free; ++dx) {
-                        free = owner[idx(bx + dx, y, bz + dz)] < 0
-                                && g[idx(bx + dx, y, bz + dz)] != MAT_AIR;
+                bool free = bx >= 0 && bz >= 0 && bx + bsx <= W && bz + bsz <= D && y + bh <= H;
+                for (int yy = y; yy < y + bh && free; ++yy) {
+                    for (int dz = 0; dz < bsz && free; ++dz) {
+                        for (int dx = 0; dx < bsx && free; ++dx) {
+                            free = owner[idx(bx + dx, yy, bz + dz)] < 0
+                                    && g[idx(bx + dx, yy, bz + dz)] != MAT_AIR;
+                        }
+                    }
+                }
+                if (!free && bh > 1) {
+                    // Not all of it here as a body: its course alone, as before.
+                    bh = 1;
+                    free = true;
+                    for (int dz = 0; dz < bsz && free; ++dz) {
+                        for (int dx = 0; dx < bsx && free; ++dx) {
+                            free = owner[idx(bx + dx, y, bz + dz)] < 0
+                                    && g[idx(bx + dx, y, bz + dz)] != MAT_AIR;
+                        }
                     }
                 }
                 if (!free) {
@@ -534,8 +565,9 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
                     bz = z;
                     bsx = 1;
                     bsz = 1;
+                    bh = 1;
                 }
-                add(bx, y, bz, bsx, bsz, m);
+                add(bx, y, bz, bsx, bsz, m, bh);
             }
         }
     }
@@ -557,13 +589,13 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
     // A building material's brick weighs `building_times` its cells
     // (Docs/TerrainBuildings.md 2): at the ground's tension it holds as a
     // city brick does.
-    auto arch_for = [&](int sx, int sz, bool building) -> int {
-        const int k = (sx * 64 + sz) * 2 + (building ? 1 : 0);
+    auto arch_for = [&](int sx, int sz, int bh, bool building) -> int {
+        const int k = ((sx * 64 + sz) * 4 + bh) * 2 + (building ? 1 : 0);
         auto it = arch_of.find(k);
         if (it != arch_of.end()) {
             return it->second;
         }
-        const Vector3i size(sx, PPB, sz);
+        const Vector3i size(sx, PPB * bh, sz);
         const double times = building ? building_times : 1.0;
         const int a2 = w->bake_archetype(String("terrain_v") + String::num_int64(k), size,
                 (float)(size.x * size.y * size.z * mass_per_cell * times));
@@ -581,13 +613,16 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
         cells.set((int64_t)i * 3, b.x);
         cells.set((int64_t)i * 3 + 1, b.y * PPB);
         cells.set((int64_t)i * 3 + 2, b.z);
-        archs.set((int64_t)i, arch_for(b.sx, b.sz, is_building_material(b.m)));
+        archs.set((int64_t)i, arch_for(b.sx, b.sz, b.h, is_building_material(b.m)));
         cols.set((int64_t)i, 0);
     }
     const PackedInt32Array ids = w->place_blocks(ch, Vector3i(0, 0, 0), cells, archs, cols);
     int max_id = -1;
     for (int64_t i = 0; i < ids.size(); ++i) {
         max_id = std::max(max_id, (int)ids[i]);
+        if (ids[i] < 0) {
+            ++a.unplaced;
+        }
     }
     std::vector<int32_t> of_id((size_t)std::max(max_id + 1, 0), -1);
     for (int64_t i = 0; i < ids.size(); ++i) {
@@ -617,10 +652,32 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
             held = b.held;
             top = top || b.top;
             near = near || (b.x <= ex1 && b.x + b.sx - 1 >= ex0 && b.z <= ez1 && b.z + b.sz - 1 >= ez0
-                    && b.y >= ey0 && b.y <= ey1);
+                    && b.y <= ey1 && b.y + b.h - 1 >= ey0);
         }
         if (held || !near) {
             continue;
+        }
+        if (fit_on && float_cells > 0) {
+            // BIG GROUPS FLOAT (the user, Docs/TerrainRegions.md 11): ground
+            // this big let go stays where it is rather than fall -- with the
+            // fit's bricks only. Building materials still fall (an
+            // undermined building tips, MineBuildings); whether they should
+            // float too is open (12.3).
+            int64_t cells_n = 0;
+            bool building = false;
+            for (int64_t j = 0; j < grp.size(); ++j) {
+                const int id = grp[j];
+                if (id < 0 || id >= (int)of_id.size() || of_id[(size_t)id] < 0) {
+                    continue;
+                }
+                const VBrick &b = vb[(size_t)of_id[(size_t)id]];
+                cells_n += (int64_t)b.sx * b.sz * b.h;
+                building = building || is_building_material(b.m);
+            }
+            if (!building && cells_n >= float_cells) {
+                ++a.floated;
+                continue;
+            }
         }
         if (top && !last_up) {
             a.top_touch = true;
@@ -638,12 +695,18 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
                 continue;
             }
             const VBrick &b = vb[(size_t)of_id[(size_t)id]];
-            out.set(n++, x0 + b.x);
-            out.set(n++, (y0 + b.y) * PPB);
-            out.set(n++, z0 + b.z);
-            out.set(n++, b.sx);
-            out.set(n++, b.sz);
-            out.set(n++, b.m);
+            // A tall body falls whole; the readers take a course an entry.
+            if (n + 6 * b.h > out.size()) {
+                out.resize(n + 6 * b.h + 6 * (grp.size() - j));
+            }
+            for (int yy = 0; yy < b.h; ++yy) {
+                out.set(n++, x0 + b.x);
+                out.set(n++, (y0 + b.y + yy) * PPB);
+                out.set(n++, z0 + b.z);
+                out.set(n++, b.sx);
+                out.set(n++, b.sz);
+                out.set(n++, b.m);
+            }
         }
         out.resize(n);
         if (n > 0) {
@@ -711,6 +774,8 @@ Dictionary TerrainCollapse::survey(Vector3i lo, Vector3i hi, double tension, dou
     out["groups"] = a.groups;
     out["solved"] = a.solved;
     out["bricks"] = a.bricks;
+    out["floated"] = a.floated;
+    out["unplaced"] = a.unplaced;
     out["grown"] = grown;
     out["sample_ms"] = sample_ms;
     out["solve_ms"] = solve_ms;
