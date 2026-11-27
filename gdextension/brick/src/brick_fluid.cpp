@@ -3274,6 +3274,37 @@ bool BrickFluid::any_fluid(Vector3i lo, Vector3i hi, int fluid) {
     return false;
 }
 
+/// TerrainNav (ai/terrain_nav.cpp, Docs/MineCreatures.md 11): courses
+/// [b0, b0 + nb) of column (x, z): 0 dry, 1 water, 2 lava. One lock for the
+/// column; safe from a worker (g_state is the lock every reader takes).
+void fluid_column(int x, int z, int b0, int nb, uint8_t *out) {
+    MainLock lk;
+    for (int i = 0; i < nb; ++i) {
+        const Cell c = rcell(x, b0 + i, z);
+        out[i] = c_wet(c) ? (uint8_t)c_fluid(c) : 0;
+    }
+}
+
+/// TerrainNav (Docs/MineCreatures.md 11): the cells changed since write
+/// count `since`, as (x, course, z) triplets, and the count now. False when
+/// the log is off or does not reach back that far: everything may have changed.
+bool fluid_changes_since(int64_t since, int64_t &now, std::vector<int> &out) {
+    std::lock_guard<std::recursive_mutex> lk(g_state);
+    now = g_writes.load();
+    if (!g_log_on || since < g_log_floor) {
+        return false;
+    }
+    auto it = std::upper_bound(g_log.begin(), g_log.end(), std::make_pair(since, INT64_MAX));
+    for (; it != g_log.end(); ++it) {
+        int x, b, z;
+        unpack3(it->second, x, b, z);
+        out.push_back(x);
+        out.push_back(b);
+        out.push_back(z);
+    }
+    return true;
+}
+
 Dictionary BrickFluid::cell_info(Vector3i cell) {
     MainLock lk;
     const Cell c = rcell(cell.x, cell.y, cell.z);

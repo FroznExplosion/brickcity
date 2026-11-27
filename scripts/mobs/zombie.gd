@@ -8,8 +8,9 @@ extends Mob
 ##
 ## It cannot break bricks, steps up one brick and no more (a wall two bricks
 ## high stops it), and fits nowhere narrower than 2 studs or lower than 12
-## plates. It hits the player at arm's length -- a shove for now, the player
-## cannot be hurt yet. A fall of 3 bricks onto a crop tramples it.
+## plates. It hits the player at arm's length: a shove, and in survival
+## DAMAGE of health (MineMobs.hurt_player). A fall of 3 bricks onto a crop
+## tramples it. Saved with the world when near the player (section 11).
 
 const BODY := Vector4i(2, 12, 3, 19)
 const HIT_RANGE := 1.3
@@ -17,6 +18,7 @@ const HIT_EVERY := 1.0
 ## Walking speed x this while it chases (Pawn.WALK_SPEED 2.8 m/s -> 3.5).
 const CHASE_MULT := 1.25
 const HP := 40.0
+const DAMAGE := 5.0
 
 var hits := 0
 var on_field := false
@@ -36,7 +38,7 @@ func think(now: float) -> void:
 		state = "idle"
 		stop()
 		return
-	var f := feet()
+	var f := last_feet
 	pawn.move_mult = CHASE_MULT
 	face_point = _player if f.distance_to(_player) < 6.0 else Vector3.INF
 	on_field = mobs.field_next(f) != Vector3.INF
@@ -52,13 +54,13 @@ func think(now: float) -> void:
 	if can_reach and d.length() <= HIT_RANGE and absf(_player.y - f.y) < 1.0 and now >= _next_hit:
 		_next_hit = now + HIT_EVERY
 		hits += 1
-		mobs.hit_player(self, d.normalized() if d.length() > 0.01 else Vector3.FORWARD)
+		mobs.hurt_player(self, DAMAGE, d.normalized() if d.length() > 0.01 else Vector3.FORWARD)
 
 
 func steer_point() -> Vector3:
 	if not on_field or _player == Vector3.INF:
 		return Vector3.INF
-	var f := feet()
+	var f := last_feet
 	if Vector2(_player.x - f.x, _player.z - f.z).length() < 1.0:
 		return Vector3.INF    # close enough: it stands and hits
 	var p1: Vector3 = mobs.field_next(f)
