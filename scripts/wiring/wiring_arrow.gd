@@ -1,6 +1,6 @@
 class_name WiringArrow
 extends Node3D
-## An ARROW in flight, shot by a wired shooter (Docs/MineWiring.md 19-20).
+## An ARROW in flight, shot by a wired shooter (Docs/MineWiring.md 19).
 ##
 ## It flies straight with gravity (SPEED, a little lift so it keeps its line
 ## over a corridor), a ray each physics step against what guns hit. A body with
