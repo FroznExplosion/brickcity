@@ -149,13 +149,13 @@ func run(gate) -> void:
 	await g._picture(Vector3((xd + 6) * stud, y * plate, (zd + 3) * stud), Vector3(-2.5, 3.0, -4.5), "wiring_traps.png")
 
 	# --- release bricks under a bridge, a trip string on the way to it
-	var xb := x0 + 10
-	var zb := z0 + 14
+	var xb := x0 + 14
+	var zb := z0 + 18
 	# The trench: 8 studs across (x), 4 long (z), 4 bricks deep.
 	w.terrain_edited(BrickTerrain.fill_box(Vector3i(xb, top - 11, zb), Vector3i(xb + 7, top, zb + 3), 0, false))
 	await w._frames(20)
 	var rels: Array[Vector3i] = []
-	for z in [zb, zb + 1]:
+	for z in range(zb, zb + 4):
 		for x in [xb - 1, xb + 8]:
 			var r := Vector3i(x, y, z)
 			wr.place_device(r, &"release_brick")
@@ -164,7 +164,7 @@ func run(gate) -> void:
 	var all_held := true
 	for r in rels:
 		all_held = all_held and wr.devices.has(r) and BrickTerrain.solid_at(r.x, r.y + 1, r.z) != 0
-	g.check("4 release bricks on the trench's rims, real ground now", all_held)
+	g.check("8 release bricks on the trench's rims, real ground now", all_held)
 	# Aimed at from the side: the release brick is the target, with its face.
 	var rr: Vector3i = rels[0]
 	var raim := wr.device_box(rr).get_center()
@@ -178,10 +178,12 @@ func run(gate) -> void:
 	var tgt: Dictionary = w.builder.target
 	g.check("looking at a release brick, it is the target, with its face (%s)" % str(tgt),
 			tgt.get("device", Vector3i(0, -9999, 0)) == rr and tgt.has("cell"))
-	# The bridge: a stone slab a brick thick on the release bricks, over the trench.
-	w.terrain_edited(BrickTerrain.fill_box(Vector3i(xb - 1, y + 3, zb), Vector3i(xb + 8, y + 5, zb + 1), BrickTerrain.MAT_STONE, false))
-	await w._frames(40)
+	# The bridge: two lapped courses of stone (one course alone is a row of
+	# bricks joined to nothing beside them), 4 studs wide, on the release
+	# bricks, over the trench.
+	w.terrain_edited(BrickTerrain.fill_box(Vector3i(xb - 1, y + 3, zb), Vector3i(xb + 8, y + 8, zb + 3), BrickTerrain.MAT_STONE, false))
 	var mid := Vector3i(xb + 4, y + 4, zb)
+	await w._frames(40)
 	g.check("the bridge stands on them", BrickTerrain.solid_at(mid.x, mid.y, mid.z) != 0)
 	# Wire: the hook at the near side -> the near release bricks; round the
 	# trench's end to the far ones.
@@ -205,8 +207,8 @@ func run(gate) -> void:
 	var let_go := true
 	for r in rels:
 		let_go = let_go and bool(wr.devices[r].on)
-	g.check("the string crossed: all 4 release bricks let go (cells air)", let_go
-			and BrickTerrain.solid_at(rels[0].x, y + 1, rels[0].z) == 0 and BrickTerrain.solid_at(rels[3].x, y + 1, rels[3].z) == 0)
+	g.check("the string crossed: all 8 release bricks let go (cells air)", let_go
+			and BrickTerrain.solid_at(rels[0].x, y + 1, rels[0].z) == 0 and BrickTerrain.solid_at(rels[7].x, y + 1, rels[7].z) == 0)
 	w._fly_to(Vector3((xb - 6.0) * stud, y * plate + 2.0, (zb - 6.0) * stud), Vector3(1, 0, 1).normalized())
 	var fell := false
 	for i in 60:
@@ -226,7 +228,7 @@ func run(gate) -> void:
 	g.check("2 s later, nobody on the string: they grip again (solid)", gripped)
 
 	# --- observer -> pulse -> alarm, a zombie called
-	var ox := x0 + 22
+	var ox := x0 + 27   # clear of the trench: the zombie's way is open ground
 	var oz := z0 + 4
 	var ob := Vector3i(ox, y, oz)
 	var pl := Vector3i(ox - 1, y, oz)
@@ -262,7 +264,8 @@ func run(gate) -> void:
 		await w._frames(4)
 	var d1: float = (zombie.last_feet as Vector3).distance_to(at) if zombie != null else 0.0
 	var dp: float = (zombie.last_feet as Vector3).distance_to(w.player_feet_local()) if zombie != null else 0.0
-	g.check("it walked toward the alarm (%.1f -> %.1f m), the player %.1f m away" % [d0, d1, dp], zombie != null and d1 < d0 - 2.0)
+	g.check("it walked toward the alarm (%.1f -> %.1f m), the player %.1f m away" % [d0, d1, dp],
+			zombie != null and (d1 < d0 - 2.0 or d1 < MobZombie.CALL_THERE + 0.6))
 	await w._frames(30)
 	g.check("the pulse over: the alarm quiet", not bool(wr.devices[al].on))
 	if zombie != null and is_instance_valid(zombie) and zombie.pawn != null:
