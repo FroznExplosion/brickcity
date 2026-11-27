@@ -18,11 +18,13 @@ extends Node3D
 ## Devices (DEVICES):
 ##   lever          RMB turns it; on: 15 to every side.
 ##   button         RMB: 15 to every side for a second.
-##   pressure tile  a plate (1 plate tall): 15 while someone stands on it.
+##   pressure tile  a plate (1 plate tall): 15 while someone stands on it --
+##                  the player or a creature (section 20).
 ##   trip hook      two facing each other in a line, up to 12 studs apart,
 ##                  nothing solid between, string between them: both give 15
 ##                  while someone crosses the string.
-##   lamp           lit while anything beside it is above 0.
+##   lamp           lit while anything beside it is above 0; the lit ones
+##                  nearest the eye hang a real light, the rest glow (22).
 ##   gates          FACE a way (placed facing away from the player; the
 ##                  wrench turns them): inputs at the back, left and right,
 ##                  output only at the front. AND (every side with something
@@ -42,10 +44,11 @@ extends Node3D
 ##   gate tile      a solid brick (a collider) that turns passable while
 ##                  powered -- Terraria's actuator. Gate tiles touching (side
 ##                  by side, stacked) are one group and open together; one
-##                  stands on ground or on/beside another (stage 3b, 16).
+##                  stands on ground or on/beside another (stage 3b, 16),
+##                  and falls when nothing holds it up any more (23).
 ##   sequencer      faces a way: its back turning on runs a program of
-##                  on/off steps out of its front (RMB picks the program) --
-##                  Create's sequenced gearshift.
+##                  on/off steps out of its front (RMB opens its program
+##                  editor, SequencerPanel, 24) -- Create's sequenced gearshift.
 ##   number display a 2-stud brick showing the level beside it, 0-15.
 ##   piston         faces a way or UP: power rising pushes the placed brick in
 ##                  front (and every placed brick clutched on its top, and
@@ -65,6 +68,8 @@ extends Node3D
 ## a readout of what is looked at (the whole net's level, its cables and
 ## devices; a device's inputs and output), RMB turns a facing device, shift +
 ## RMB takes a device back. Create's goggles and wrench (Docs/MineWiring.md 12).
+##
+## Wires and devices take the sky light of their cells (dark in caves, 21).
 ##
 ## Broken by LMB, a shot, a blast, or the ground going (`check`). Saved with
 ## the world's items (`to_save` / `restore`). A child of the mine world with
@@ -1795,6 +1800,8 @@ func _piston_push(c: Vector3i) -> bool:
 	var seeds: Array = meet.seeds
 	if seeds.is_empty():
 		d.stall = ""
+		var hc := head_cells(c, f, 1)
+		shove_pieces(hc[0], hc[hc.size() - 1], piston_step(f))
 		return true          # the head goes out into the air
 	var g := piston_group(seeds, piston_step(f), true, c)
 	if g.has("stall"):
@@ -1862,6 +1869,7 @@ func _move(g: Dictionary, step: Vector3i) -> void:
 		ch.riding[key] = true
 		if is_instance_valid(ch.chests[key].node):
 			chest_base[key] = (ch.chests[key].node as Node3D).position
+	shove_pieces(lo, hi, step)
 	var m := {"bricks": bricks, "step": step, "cells": cells, "lo": lo, "hi": hi, "phase": 0, "t": 0.0,
 			"wait": 0.0, "off": Vector3.ZERO, "box": _bricks_box(bricks), "node": null, "rect": Rect2i(),
 			"cables": r_cables, "devices": r_devices, "base": base, "chests": r_chests, "chest_base": chest_base}
@@ -1878,6 +1886,54 @@ func _move(g: Dictionary, step: Vector3i) -> void:
 	m.rect = _tile_rect(res)
 	_moves.append(m)
 	_edited(res)
+
+
+## PISTONS SHOVE FALLEN PIECES (Docs/MineWiring.md 26): a collapse piece
+## (PlanetPieces, a physics body) in the cells a push moves into -- or
+## touching them, or resting on them -- is woken if it had settled and given
+## an impulse of the push's speed (a step in MOVE_TIME), sideways with a
+## little lift so it rides over studs. Not a move: it is the ram of 6.2.
+## The mine world's pieces (host.collapse.pieces); `pieces_fn` -> a
+## PlanetPieces for a gate of its own. Returns how many were shoved.
+var pieces_fn: Callable
+var pieces_shoved := 0
+const SHOVE_LIFT := 1.2
+
+
+func _pieces():
+	if pieces_fn.is_valid():
+		return pieces_fn.call()
+	var col = host.get("collapse") if host != null else null
+	if col == null or not is_instance_valid(col):
+		return null
+	return col.get("pieces")
+
+
+func shove_pieces(lo: Vector3i, hi: Vector3i, step: Vector3i) -> int:
+	var pp = _pieces()
+	if pp == null or not is_instance_valid(pp) or not is_inside_tree():
+		return 0
+	var box := AABB(Vector3(lo.x * _stud, lo.y * _plate, lo.z * _stud),
+			Vector3(hi.x - lo.x + 1, hi.y - lo.y + 1, hi.z - lo.z + 1) * Vector3(_stud, _plate, _stud))
+	var xf := global_transform
+	var gbox: AABB = (xf * box).grow(0.03)
+	var v := xf.basis * (_metres(step) / MOVE_TIME)
+	if step.y == 0:
+		v += xf.basis * Vector3(0, SHOVE_LIFT, 0)
+	var n := 0
+	for piece in pp.pieces:
+		if piece.fading_since != 0 or not is_instance_valid(piece.body):
+			continue
+		if not (pp.world_box(piece) as AABB).intersects(gbox):
+			continue
+		if piece.settled:
+			pp._wake(piece)
+		var b: RigidBody3D = piece.body
+		b.sleeping = false
+		b.apply_central_impulse(v * b.mass)
+		n += 1
+	pieces_shoved += n
+	return n
 
 
 ## Does any of the group rest on STUDS that stay (6.2)? Then a sideways move
@@ -2154,6 +2210,16 @@ func _carry(m: Dictionary, was: Vector3, now: Vector3) -> void:
 
 ## The stand-in of a moving group: its bricks as boxes with studs on their
 ## tops (one MultiMesh each), a kinematic body of the same boxes to stand on.
+## The material a piston's stand-in draws its bricks with: the mine world's
+## brick material (brick.gdshader, as the collapse pieces), its sky-lit copy
+## with sky light on; null without one (plain boxes then).
+func standin_brick_material() -> ShaderMaterial:
+	var src = host.get("_brick_mat") if host != null else null
+	if not (src is ShaderMaterial):
+		return null
+	return _sky.brick_material(src) if _sky != null else src
+
+
 func _standin(bricks: Array) -> Node3D:
 	var root := Node3D.new()
 	root.name = "PistonMove"
@@ -2181,7 +2247,7 @@ func _standin(bricks: Array) -> Node3D:
 			var hi: Vector3i = bx[1]
 			var size := Vector3((hi.x - lo.x + 1) * _stud, (hi.y - lo.y + 1) * _plate, (hi.z - lo.z + 1) * _stud)
 			var mid := Vector3(lo.x * _stud, lo.y * _plate, lo.z * _stud) + size * 0.5
-			boxes.append([Transform3D(Basis.from_scale(size - Vector3.ONE * 0.004), mid), col])
+			boxes.append([Transform3D(Basis.from_scale(size - Vector3.ONE * 0.002), mid), col])
 			var shape := CollisionShape3D.new()
 			var bs := BoxShape3D.new()
 			bs.size = size
@@ -2206,7 +2272,38 @@ func _standin(bricks: Array) -> Node3D:
 	cyl.bottom_radius = _stud * 0.3
 	cyl.height = stud_h
 	cyl.radial_segments = 12
+	# The bricks as the bevelled bricks they are (Docs/MineWiring.md 26): the
+	# collapse pieces' look, a box a brick (brick_boxed.gdshaderinc) with the
+	# mine world's brick material, its sky-lit copy when sky light is on.
+	var brick_mat: ShaderMaterial = standin_brick_material()
+	if brick_mat != null:
+		var bmm := MultiMesh.new()
+		bmm.transform_format = MultiMesh.TRANSFORM_3D
+		bmm.use_colors = true
+		bmm.use_custom_data = true
+		bmm.mesh = BrickNear.bevel_box_mesh()
+		bmm.instance_count = boxes.size()
+		for k in boxes.size():
+			var t: Transform3D = boxes[k][0]
+			var col: Color = boxes[k][1]
+			bmm.set_instance_transform(k, t)
+			# PLA (material 0, grain along x): alpha 1; the brick's middle, for
+			# its print lines.
+			bmm.set_instance_color(k, Color(col.r, col.g, col.b, 1.0))
+			bmm.set_instance_custom_data(k, Color(t.origin.x, t.origin.y, t.origin.z, 0.0))
+		var bmi := MultiMeshInstance3D.new()
+		bmi.name = "Bricks"
+		bmi.multimesh = bmm
+		bmi.material_override = brick_mat
+		bmi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+		if sky != null:
+			bmi.set_instance_shader_parameter(&"sky_level", light.r * 15.0)
+			bmi.set_instance_shader_parameter(&"block_level", light.g * 15.0)
+		root.add_child(bmi)
+		boxes = []
 	for pair in [[_box_mesh(Vector3.ONE), boxes], [cyl, tops]]:
+		if (pair[1] as Array).is_empty():
+			continue
 		var mm := MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
 		mm.use_colors = true

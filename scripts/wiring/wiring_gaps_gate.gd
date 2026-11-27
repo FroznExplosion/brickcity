@@ -20,6 +20,10 @@ extends RefCounted
 ##              after the world is generated again (24).
 ##   trapdoor   on foot, standing on a trapdoor over a pit: the lever opens
 ##              it and the player falls into the pit (25).
+##   pistons    a real push's stand-in draws the bevelled box with the mine
+##              world's (sky-lit) brick material; a collapse piece fallen in
+##              front of a piston is shoved by its head going out: woken and
+##              moved (26).
 
 var g = null   # wiring_gate.gd: check(), w (the mine world)
 var w: Node = null
@@ -46,6 +50,7 @@ func run(gate) -> void:
 	await _gatetiles()
 	await _sequencer()
 	await _trapdoor()
+	await _pistons()
 
 
 ## A flat patch of stone off the spawn, its own (the main gate's patches are
@@ -249,3 +254,61 @@ func _sequencer() -> void:
 	wr.remove_device(lev, false)
 	wr.remove_device(sq, false)
 	wr.remove_device(lamp, false)
+
+
+# --- 7. the piston's stand-in look, and fallen pieces shoved (Docs/MineWiring.md 26)
+func _pistons() -> void:
+	var px := x0 + 6
+	var pz := z0 + 14
+	w._fly_to(Vector3((px - 4) * stud, y * plate + 2.5, (pz - 5) * stud), Vector3(1, 0, 1).normalized())
+	# A plain piston facing up under a 2x2 placed brick: catch the stand-in.
+	var pu := Vector3i(px, y, pz)
+	wr.place_device(pu, &"piston", false, false, MineWiring.FACE_UP)
+	g._lay_brick(pu + Vector3i(0, 3, 0), 2, 2, BrickTerrain.MAT_STONE)
+	await w._frames(16)
+	var lev := Vector3i(px - 1, y, pz)
+	wr.place_device(lev, &"lever", true)
+	var look := ""
+	for i in 60:
+		await w._frames(1)
+		for m in wr._moves:
+			var bm := (m.node as Node).get_node_or_null("Bricks") as MultiMeshInstance3D if is_instance_valid(m.node) else null
+			if bm != null and look == "":
+				look = "bevel %s, brick material %s, %d bricks" % [bm.multimesh.mesh == BrickNear.bevel_box_mesh(),
+						bm.material_override == wr.standin_brick_material(), bm.multimesh.instance_count]
+		if look != "":
+			break
+	g.check("gaps: a push's stand-in draws bevelled bricks in the brick material (%s)" % look,
+			look.begins_with("bevel true, brick material true") and wr.standin_brick_material() != null)
+	await g._settle()
+	wr.use_device(lev)
+	await g._settle()
+	# A piston facing +x; a 2x2 brick dropped from 5 courses up lands in front.
+	var ps := Vector3i(px + 6, y, pz)
+	wr.place_device(ps, &"piston", false, false, 0)
+	var lev2 := Vector3i(px + 5, y, pz)
+	wr.place_device(lev2, &"lever")
+	await w._frames(16)
+	g._lay_brick(Vector3i(ps.x + 1, y + 15, pz), 2, 2, BrickTerrain.MAT_STONE)
+	var pp = w.collapse.pieces if w.collapse != null else null
+	var piece = null
+	var at: Vector3 = w.to_global(Vector3((ps.x + 2) * stud, (y + 1) * plate, (pz + 1) * stud))
+	for i in 360:
+		await w._frames(1)
+		if pp != null:
+			var near: Array = pp.pieces_near(at, 0.4)
+			if not near.is_empty() and near[0].settled:
+				piece = near[0]
+				break
+	g.check("gaps: a dropped brick fell as a piece and settled in front of the piston", piece != null)
+	if piece == null:
+		return
+	var p0: Vector3 = piece.body.global_position
+	var n0: int = wr.pieces_shoved
+	wr.use_device(lev2)
+	await w._frames(60)
+	var moved: float = (piece.body.global_position - p0).length() if is_instance_valid(piece.body) else -1.0
+	g.check("gaps: the piston's head shoved the piece (%d shoved, moved %.2f m)" % [wr.pieces_shoved - n0, moved],
+			wr.pieces_shoved > n0 and moved > 0.1)
+	wr.use_device(lev2)
+	await g._settle()
