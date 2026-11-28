@@ -920,3 +920,44 @@ Checks (headless, fit off and `--fitted`): terrain_bricks, terrain_audit,
 terrain_collapse, mine_world (cold bake ~19 ms a tile with patterns),
 fluid (79) all PASS; region_fit_probe `--lookup`: every cell of ~17,000
 pattern bricks names the same brick (surface and 200 courses down).
+
+### 13.1 Shares within +-5; the caves' stagger by depth (2026-11-27)
+
+The extra 1x1s and the short 2x2s were in the PATTERNS, not the cuts: the
+library on solid ground alone had 2x2 15 %, 1x1 14 % (the region fit's
+real-ground fill the same). The library is made once, so each of its regions
+now tries 4 seeds (`library_tries`) and keeps the one closest to the asked
+shares (scored against the TARGETS, `Band::target`, not the aimed and
+calibrated shares) with the fewest seams over seams:
+
+| region_fit_probe, patterns | 2x2 | 1x1 | 1x2 | shapes off by >5 | stacked / 1000 joints |
+|---|---|---|---|---|---|
+| 1 try (was) | 15 | 15 | 28 | 2 | 448 |
+| 4 tries (shipped) | 16 | 14 | 27 | 0 | 434 |
+| 8 tries | 17 | 14 | 28 | 0 | 429 |
+
+A library build is ~270 ms with 4 tries (60 with 1); the calibration builds
+it three times (~1.5 s), kept with the world (13.2).
+
+**The caves' stagger** (`cave_stagger`): the patterns are fitted in solid
+ground, so "near cave air" means nothing to them. The knob is now per depth,
+the user's other form of it (section 11): the bands under the surface's
+(default: from 12 m down) are fitted with `cave_stagger` (0.35) instead of
+`stagger` (0). Measured with the deep band from 3 m: 515 stacked a thousand
+joints against 512 with the strong stagger -- as in the region fit (445
+against 444), the knob is weak: the deeper mix (bigger, taller bricks)
+stacks nearly as much as no stagger at all (517).
+
+### 13.2 The calibration kept with the world (2026-11-27)
+
+The calibration depends only on the world (seed, generator) and the fill
+settings, so it is made once: `TerrainFit.get_calibration()` gives its
+`scales` (each shape's share scaling) and `version`; mine_world.gd keeps them
+beside the world's edits (`<seed>_<hash>.bricks`, the hash over generator,
+seed and fill settings) and passes them back as the settings' `calibrated`,
+which `configure` applies instead of calibrating. A world's first load:
+calibration ~1.5 s + library ~0.27 s; every load after: the library only.
+`CALIBRATION_VERSION` (terrain_fit.cpp) is bumped when the fill or the
+library changes what a calibration gives: a kept one of another version is
+made again. region_fit_probe `--lookup` checks a kept calibration gives the
+same bricks (4000 of 4000) with no calibration time.
