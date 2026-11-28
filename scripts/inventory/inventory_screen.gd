@@ -11,7 +11,8 @@ extends MenuScreen
 ##     red cannot. Click one to pick it. The Creative tab (creative only)
 ##     shows every item instead; the Spawn tab (creative only) one spawn
 ##     item per creature (Docs/MineCreatures.md 12); the Farming tab the
-##     farming guide.
+##     farming guide; the Wiring tab the wiring guide (WiringGuide,
+##     Docs/MineWiring.md 29).
 ##   right
 ##     tabs: the recipe book on/off, this screen, close (X)
 ##     "Crafting" (the inventory), "Crafting Table", "Furnace" or another
@@ -65,11 +66,12 @@ const TAB_ICONS := {
 	"items": [&"chest", &"workbench"],
 	"nature": [&"wheat", &"wheat_seeds", &"leaves"],
 	"farming": [&"hoe", &"wheat_seeds"],
+	"wiring": [&"lever", &"cable"],
 	"spawn": [&"spawn_pig", &"spawn_zombie"],
 }
 const TAB_NAMES := {
 	"construction": "Construction", "equipment": "Equipment", "items": "Items", "nature": "Nature",
-	"all": "All recipes (search)", "creative": "Creative: every item", "spawn": "Creative: spawn creatures", "farming": "Farming guide",
+	"all": "All recipes (search)", "creative": "Creative: every item", "spawn": "Creative: spawn creatures", "farming": "Farming guide", "wiring": "Wiring guide",
 	"editor": "Recipe editor (creative): make and change recipes",
 }
 
@@ -113,6 +115,7 @@ var _creative_grid: GridContainer
 var _spawn_scroll: ScrollContainer
 var _spawn_grid: GridContainer
 var _farm_scroll: ScrollContainer
+var _wire_scroll: ScrollContainer
 
 var _right_col: VBoxContainer
 var _right: McStyle.Box
@@ -208,7 +211,7 @@ func _build_left() -> void:
 	_row.add_child(_left_col)
 	_left_tabs = HBoxContainer.new()
 	_left_col.add_child(_left_tabs)
-	for key in RecipeBook.CATEGORIES + ["creative", "spawn", "farming", "editor", "", "all"]:
+	for key in RecipeBook.CATEGORIES + ["creative", "spawn", "farming", "wiring", "editor", "", "all"]:
 		if key == "":
 			var gap := Control.new()
 			gap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -274,6 +277,10 @@ func _build_left() -> void:
 	guide.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_farm_scroll = _scroll(guide)
 	v.add_child(_farm_scroll)
+	var wguide := WiringGuide.build(_show_slot)
+	wguide.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_wire_scroll = _scroll(wguide)
+	v.add_child(_wire_scroll)
 
 
 func _build_right() -> void:
@@ -554,6 +561,8 @@ func show_page(p: String) -> void:
 			page = "spawn" if inv.creative else "recipes"
 		"farming":
 			page = "farming"
+		"wiring":
+			page = "wiring"
 		"editor":
 			page = "editor" if inv.creative else "recipes"
 		_:
@@ -567,7 +576,7 @@ func show_page(p: String) -> void:
 
 
 func _on_left_tab(key: String) -> void:
-	if key == "creative" or key == "spawn" or key == "farming" or key == "editor":
+	if key == "creative" or key == "spawn" or key == "farming" or key == "wiring" or key == "editor":
 		show_page(key)
 		return
 	book_tab = key
@@ -590,7 +599,8 @@ func _rebuild_left(force := false) -> void:
 	_creative_scroll.visible = page == "creative" or page == "editor"
 	_spawn_scroll.visible = page == "spawn"
 	_farm_scroll.visible = page == "farming"
-	_search_row.visible = page != "farming"
+	_wire_scroll.visible = page == "wiring"
+	_search_row.visible = page != "farming" and page != "wiring"
 	_toggle.visible = page == "recipes"
 	match page:
 		"creative", "editor":
@@ -609,6 +619,9 @@ func _rebuild_left(force := false) -> void:
 			return
 		"farming":
 			_book_title.text = "Farming guide"
+			return
+		"wiring":
+			_book_title.text = "Wiring guide"
 			return
 	if _furnace_mode():
 		_book_title.text = "Smeltable" if craftable_only else "Smelting recipes"
@@ -1271,7 +1284,7 @@ func _on_relayout(vp_size: Vector2) -> void:
 		bar_w = maxf(vb.get_combined_minimum_size().x, 10.0)
 	var book_w := BOOK_COLS * _slot_px + bar_w + 2.0
 	# At least three rows; it stretches to the inventory panel's height.
-	for sc in [_book_scroll, _creative_scroll, _spawn_scroll, _farm_scroll]:
+	for sc in [_book_scroll, _creative_scroll, _spawn_scroll, _farm_scroll, _wire_scroll]:
 		(sc as ScrollContainer).custom_minimum_size = Vector2(book_w, _slot_px * 3.0)
 	_mid.custom_minimum_size = Vector2(roundf(_slot_px * (1.9 if station == &"furnace" else 1.4)), _slot_px)
 	_result.custom_minimum_size = Vector2(roundf(_slot_px * 1.35), roundf(_slot_px * 1.35))
@@ -1316,8 +1329,10 @@ func _set_slot_size() -> void:
 		for c in _book_grid.get_children() + _ingredients.get_children():
 			(c as InvSlot).custom_minimum_size = sz
 			(c as InvSlot).unit = _unit
-	if _farm_scroll != null:
-		for c in _farm_scroll.find_children("*", "InvSlot", true, false):
+	for gs in [_farm_scroll, _wire_scroll]:
+		if gs == null:
+			continue
+		for c in (gs as ScrollContainer).find_children("*", "InvSlot", true, false):
 			(c as InvSlot).custom_minimum_size = sz
 			(c as InvSlot).unit = _unit
 

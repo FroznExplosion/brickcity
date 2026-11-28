@@ -2,7 +2,7 @@ extends SceneTree
 ## The inventory screen keeps ONE size (Docs/Inventory.md 14.1, the user
 ## 2026-11-27): the panels and the slots are sized from the window and the
 ## menu scale only, Minecraft's way -- never from what a tab shows. Changing
-## tab (recipes, creative, spawn, farming, editor, search), opening the
+## tab (recipes, creative, spawn, farming, wiring, editor, search), opening the
 ## crafting table or the furnace, the book on or off, a bigger backpack:
 ## the slot size and both panels' sizes stay as they were (the panels'
 ## contents scroll or sit in the room they have).
@@ -77,7 +77,7 @@ func _run() -> void:
 		var base := _measure(scr)
 		_ok("%s: a slot size (%.0f px), both panels laid out" % [size, base.slot],
 				base.slot > 0.0 and (base.right as Vector2).x > 0.0 and (base.left as Vector2).x > 0.0)
-		for p in ["creative", "spawn", "farming", "editor", "recipes"]:
+		for p in ["creative", "spawn", "farming", "wiring", "editor", "recipes"]:
 			scr.show_page(p)
 			await _frames(4)
 			var m := _measure(scr)
