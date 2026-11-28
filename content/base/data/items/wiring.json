@@ -60,6 +60,14 @@
 			"description": "Gives out of every side the highest level of the wire transmitters on its channel (its two antenna colours: right-click, shift + right-click)." },
 		"wire_brick": { "name": "Wire brick",
 			"description": "A brick with a copper stripe that carries the wire's signal through itself: build wire inside a wall and up it. A shot or a pickaxe that breaks it cuts the circuit." },
+		"motion_sensor": { "name": "Motion sensor", "kind": "device", "model": "motion", "max_stack": 64, "hand": "any", "colour": "#555a63", "glyph": "M",
+			"description": "Watches the ground in front of it (its lens): powers what touches it while anyone -- you or a creature -- is there, 6 studs out and 3 wide. Walls block its view. Right-click: 6, 10 or 3 studs. Placed facing away from you." },
+		"light_sensor": { "name": "Light sensor", "kind": "device", "model": "lightsense", "max_stack": 64, "hand": "any", "colour": "#bfa040", "glyph": "L",
+			"description": "A plate that gives the daylight on it as a level, 0 to 15: full under an open sky at noon, 0 at night or under a roof. Right-click to make it a night sensor (the other way round)." },
+		"fluid_sensor": { "name": "Fluid sensor", "kind": "device", "model": "fluidsense", "max_stack": 64, "hand": "any", "colour": "#4d6b8c", "glyph": "F",
+			"description": "Gives the water or lava in the stud in front of it as a level (5 a tile). Right-click: any, water only, lava only. Placed facing away from you." },
+		"counter": { "name": "Counter", "kind": "device", "model": "gate", "max_stack": 64, "hand": "any", "colour": "#8cd147", "glyph": "#",
+			"description": "Counts its back turning on; at the count (right-click: 2 to 10) its front gives a short pulse and it starts again. Its right side sets it back to 0." },
 		"redstone_ore": { "name": "Wire ore",
 			"description": "Ore with copper-red veins: what wire is made from." }
 	}

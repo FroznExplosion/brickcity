@@ -24,6 +24,16 @@ extends SceneTree
 ##              ticks while on, quiet when the power goes.
 ##   save       a dispenser's slots and a let-go release brick come back.
 ##   items      the four are device items with models.
+## Sensors and the counter (Docs/MineWiring.md 28):
+##   motion     a body in front within its reach: 15 (and lights a lamp beside
+##              it); behind it, beside the box, past its reach or past a wall:
+##              nothing; RMB's longer reach sees farther; it holds 5 ticks.
+##   light      sky x daylight (15 open at noon, 0 at night, 8 half-roofed);
+##              RMB makes it a night sensor (15 minus).
+##   fluid      water 2 tiles in front: 10; watching lava only: 0; lava 3: 15.
+##   counter    N = 3 by default: the third turn-on at its back pulses 15 out
+##              of its front for 5 ticks; its right side resets the count;
+##              RMB steps N; count and N saved.
 
 var _pass := 0
 var _fail := 0
@@ -32,6 +42,9 @@ var _holes := {}
 var _bodies: Array = []
 var _edits: Array = []
 var _w: MineWiring = null
+var _sky := 15
+var _day := 1.0
+var _fluid := {}
 
 
 func _ok(what: String, cond: bool, detail: String = "") -> void:
@@ -80,9 +93,13 @@ func _init() -> void:
 	_dropper(_w)
 	_release(_w)
 	_alarm(_w)
+	_sensors(_w)
 	_save(_w)
 	_items()
 	WiringTraps.edit_fn = Callable()
+	WiringTraps.light_fn = Callable()
+	WiringTraps.day_fn = Callable()
+	WiringTraps.fluid_fn = Callable()
 	_w.queue_free()
 	print("WIRING-TRAPS-PROBE %s (%d ok, %d fail)" % ["PASS" if _fail == 0 else "FAIL", _pass, _fail])
 	quit(0 if _fail == 0 else 1)
@@ -285,6 +302,138 @@ func _alarm(w: MineWiring) -> void:
 	_ok("and calls no more", int(d.calls) == 2)
 
 
+func _feet(x: float, z: float) -> Vector3:
+	return Vector3((x + 0.5) * 0.35, 0.0, (z + 0.5) * 0.35)
+
+
+func _sensors(w: MineWiring) -> void:
+	print("sensors")
+	w.clear()
+	_extra.clear()
+	_holes.clear()
+	_bodies = []
+	# Motion sensor at the origin facing +x, a lamp beside it.
+	var m := Vector3i(0, 0, 0)
+	_ok("a motion sensor is placed facing +x", w.place_device(m, &"motion_sensor", false, false, 0))
+	var lamp := Vector3i(0, 0, 1)
+	w.place_device(lamp, &"lamp")
+	_ticks(w, 3)
+	_ok("nobody there: 0", w.output_of(m) == 0)
+	_bodies = [_feet(3, 0)]
+	_ticks(w, 2)
+	_ok("someone 3 studs in front: 15", w.output_of(m) == 15)
+	_ticks(w, 1)
+	_ok("and the lamp beside it lights", w.is_lit(lamp))
+	_bodies = [_feet(-3, 0)]
+	_ticks(w, 4)
+	_ok("still on for its hold after they leave", w.output_of(m) == 15)
+	_ticks(w, 4)
+	_ok("someone BEHIND it: nothing (after the hold)", w.output_of(m) == 0)
+	_bodies = [_feet(3, 3)]
+	_ticks(w, 3)
+	_ok("someone 3 studs to the side of the box: nothing", w.output_of(m) == 0)
+	_bodies = [_feet(8, 0)]
+	_ticks(w, 3)
+	_ok("someone 8 studs out, past its reach of 6: nothing", w.output_of(m) == 0)
+	w.use_device(m)
+	_ticks(w, 2)
+	_ok("RMB: reach 10 -- now it sees them", w.output_of(m) == 15 and w.readout({"device": m}).contains("reach 10"))
+	_extra[Vector3i(4, 1, 0)] = true
+	_extra[Vector3i(4, 2, 0)] = true
+	_ticks(w, 8)
+	_ok("a wall at 4 studs: they are hidden", w.output_of(m) == 0)
+	_bodies = [_feet(2, 0)]
+	_ticks(w, 2)
+	_ok("this side of the wall: seen", w.output_of(m) == 15)
+	_extra.clear()
+	_bodies = []
+	# Light sensor.
+	WiringTraps.light_fn = func(_p: Vector3) -> int: return _sky
+	WiringTraps.day_fn = func() -> float: return _day
+	var l := Vector3i(6, 0, 0)
+	_ok("a light sensor is placed (a plate)", w.place_device(l, &"light_sensor"))
+	_ticks(w, 2)
+	_ok("open sky at noon: 15", w.output_of(l) == 15)
+	_day = 0.0
+	_ticks(w, 11)
+	_ok("night: 0", w.output_of(l) == 0)
+	_day = 1.0
+	_sky = 8
+	_ticks(w, 11)
+	_ok("half roofed by day: 8", w.output_of(l) == 8)
+	w.use_device(l)
+	_ticks(w, 2)
+	_ok("RMB: a night sensor -- 7", w.output_of(l) == 7 and w.readout({"device": l}).contains("night"))
+	# Fluid sensor.
+	WiringTraps.fluid_fn = func(cell: Vector3i) -> Dictionary: return _fluid.get(cell, {})
+	var fs := Vector3i(10, 0, 0)
+	_ok("a fluid sensor is placed facing +x", w.place_device(fs, &"fluid_sensor", false, false, 0))
+	_ticks(w, 2)
+	_ok("dry: 0", w.output_of(fs) == 0)
+	_fluid[Vector3i(11, 0, 0)] = {"fluid": 1, "amount": 2}
+	_ticks(w, 6)
+	_ok("water 2 tiles deep in front: 10", w.output_of(fs) == 10)
+	w.use_device(fs)
+	_ticks(w, 2)
+	_ok("RMB: water only -- still 10", w.output_of(fs) == 10)
+	w.use_device(fs)
+	_ticks(w, 2)
+	_ok("RMB: lava only -- 0", w.output_of(fs) == 0)
+	_fluid[Vector3i(11, 0, 0)] = {"fluid": 2, "amount": 3}
+	_ticks(w, 6)
+	_ok("lava 3 tiles: 15", w.output_of(fs) == 15)
+	# Counter: a lever at its back, a reset lever at its right (+z for +x).
+	var ct := Vector3i(20, 0, 0)
+	_ok("a counter is placed facing +x, N = 3", w.place_device(ct, &"counter", false, false, 0)
+			and int(w.devices[ct].setting) == 3)
+	var back := Vector3i(19, 0, 0)
+	var rst := Vector3i(20, 0, 1)
+	w.place_device(back, &"lever")
+	w.place_device(rst, &"lever")
+	_ticks(w, 2)
+	var outs := ""
+	for k in 3:
+		_lever(w, back, true)
+		_ticks(w, 2)
+		outs += str(w.output_of(ct) / 15)
+		_lever(w, back, false)
+		_ticks(w, 2)
+	_ok("turn-ons 1, 2 nothing; the third pulses 15 (%s)" % outs, outs == "001")
+	var held := 0
+	for k in 8:
+		if w.output_of(ct) == 15:
+			held += 1
+		_ticks(w, 1)
+	_ok("the pulse is short (%d ticks seen after) and over" % held, held <= WiringTraps.COUNTER_PULSE and w.output_of(ct) == 0)
+	_lever(w, back, true)
+	_ticks(w, 2)
+	_lever(w, back, false)
+	_ticks(w, 2)
+	_ok("one more: count 1", int(w.devices[ct].count) == 1)
+	_lever(w, rst, true)
+	_ticks(w, 2)
+	_lever(w, rst, false)
+	_ticks(w, 2)
+	_ok("its right side sets it back to 0", int(w.devices[ct].count) == 0)
+	w.use_device(ct)
+	_ok("RMB: N = 4, the readout says so", int(w.devices[ct].setting) == 4
+			and w.readout({"device": ct}).contains("count 0 of 4"))
+	_lever(w, back, true)
+	_ticks(w, 2)
+	_lever(w, back, false)
+	_ticks(w, 2)
+	var saved: Variant = JSON.parse_string(JSON.stringify(w.to_save()))
+	var w2 := MineWiring.new()
+	w2.solid_fn = _solid
+	root.add_child(w2)
+	w2.restore(saved)
+	var d2: Dictionary = w2.devices.get(ct, {})
+	_ok("the counter's count (1) and N (4) come back; the sensors' settings too", not d2.is_empty()
+			and int(d2.get("count", -1)) == 1 and int(d2.setting) == 4
+			and int(w2.devices[m].setting) == 1 and int(w2.devices[l].setting) == 1 and int(w2.devices[fs].setting) == 2)
+	w2.queue_free()
+
+
 func _save(w: MineWiring) -> void:
 	print("save")
 	w.clear()
@@ -319,7 +468,7 @@ func _items() -> void:
 	_ok("arrows are items of kind arrow, with a model", ItemCatalog.kind(&"arrow") == "arrow"
 			and am != null and am.get_child(0).get_child_count() >= 3)
 	am.free()
-	for id in [&"dispenser", &"dropper", &"release_brick", &"alarm"]:
+	for id in [&"dispenser", &"dropper", &"release_brick", &"alarm", &"motion_sensor", &"light_sensor", &"fluid_sensor", &"counter"]:
 		_ok("%s is a device item" % id, ItemCatalog.has(id) and ItemCatalog.kind(id) == "device")
 		var m := ItemIcons._model(ItemCatalog.get_def(id))
 		_ok("%s has a model of its own" % id, m != null and m.get_child(0).get_child_count() >= 2)

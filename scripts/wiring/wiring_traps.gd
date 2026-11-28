@@ -35,12 +35,37 @@ extends RefCounted
 ##                  bridge, a floor, a cave roof. RELEASE_HOLD ticks after the
 ##                  power goes it grips again (solid), if its cells are still
 ##                  air and nobody stands in them.
+##   motion sensor  faces a way: 15 while a body (the player, a creature) is
+##                  in the box in front of it -- MOTION_RANGES studs out (RMB
+##                  steps them), 3 wide, its line stopped by the first solid
+##                  stud. Out of every side (Docs/MineWiring.md 28).
+##   light sensor   a plate: the sky light over it times the daylight, 0-15
+##                  (a level: a number display shows it); RMB turns it into a
+##                  night sensor (15 minus that).
+##   fluid sensor   faces a way: the water or lava in the stud in front, 5 a
+##                  tile (0-15); RMB picks any / water / lava.
+##   counter        a gate: its back turning on counts; at N (RMB: 2-10) it
+##                  gives COUNTER_PULSE ticks of 15 out of its front and starts
+##                  again. Its right side turning on sets it back to 0.
 ##   alarm          powered: a siren, a turning red light, and every hostile
 ##                  creature within ALARM_REACH is called to it (MineMobs.alarm),
 ##                  again every ALARM_AGAIN ticks while it stays on.
 
 const SIDES: Array[Vector3i] = [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
-const KIND_OF := {&"dispenser": "dispenser", &"dropper": "dropper", &"release_brick": "release", &"alarm": "alarm"}
+const KIND_OF := {&"dispenser": "dispenser", &"dropper": "dropper", &"release_brick": "release", &"alarm": "alarm",
+		&"motion_sensor": "motion", &"light_sensor": "light", &"fluid_sensor": "fluidsense"}
+## The sensors (section 28).
+const SENSORS := ["motion", "light", "fluidsense"]
+## A motion sensor's reach, studs, by its setting (RMB steps it).
+const MOTION_RANGES := [6, 10, 3]
+## Ticks a motion sensor stays on after the last body left its box.
+const MOTION_HOLD := 5
+## How often a light sensor and a fluid sensor look again (ticks).
+const LIGHT_EVERY := 10
+const FLUID_EVERY := 5
+## A counter's pulse at its count (ticks).
+const COUNTER_PULSE := 5
+const FLUID_NAMES := ["any", "water", "lava"]
 const SLOTS := 9
 const LEVEL := 15
 ## How far a dispenser throws a grenade (studs), at most.
@@ -58,6 +83,11 @@ const LAUNCH_SPEED := 9.0
 
 ## (lo, hi, material) -> void: a probe's ground edit instead of BrickTerrain's.
 static var edit_fn := Callable()
+## A probe's world for the sensors: (point) -> sky light 0-15; () -> daylight
+## 0-1; (cell) -> {"fluid", "amount"} (BrickFluid.cell_info's shape).
+static var light_fn := Callable()
+static var day_fn := Callable()
+static var fluid_fn := Callable()
 static var _release_mat := -1
 static var _siren: AudioStreamWAV = null
 
@@ -147,6 +177,12 @@ static func broken(w, c: Vector3i, d: Dictionary) -> bool:
 static func on_place(w, c: Vector3i, d: Dictionary, force: bool) -> void:
 	if has_slots(d.item):
 		d["slots"] = Inventory._empty(SLOTS)
+	if SENSORS.has(kind(d.item)):
+		d.timer = 1      # a sensor is always live: it looks again on its own
+	if d.item == &"counter":
+		d["count"] = 0
+		if int(d.setting) < 2:
+			d.setting = 3
 	if is_terrain(d.item) and not force:
 		d["pending"] = true
 		w.trap_edits.append([c, c + Vector3i(0, 2, 0), release_material(), c])
@@ -180,6 +216,20 @@ static func slot_key(c: Vector3i) -> String:
 
 ## RMB on a dispenser or dropper: its slots in the chest screen.
 static func use(w, c: Vector3i, d: Dictionary) -> bool:
+	if SENSORS.has(kind(d.item)):
+		match kind(d.item):
+			"motion":
+				d.setting = (int(d.setting) + 1) % MOTION_RANGES.size()
+			"light":
+				d.setting = 1 - clampi(int(d.setting), 0, 1)
+				d.timer = 1      # looks again at once
+			"fluidsense":
+				d.setting = (int(d.setting) + 1) % FLUID_NAMES.size()
+				d.timer = 1
+		w._show_device(c)
+		w._logic_dirty = true
+		w._changed()
+		return true
 	if not has_slots(d.item):
 		return false
 	if w.host != null and w.host.has_method("open_wire_slots"):
@@ -220,10 +270,36 @@ static func _edit(w, lo: Vector3i, hi: Vector3i, mat: int) -> void:
 ## After the nets, lamps, doors and gate tiles of MineWiring._evaluate: each
 ## kit device reacts to the power at it.
 static func evaluate(w) -> void:
+	var bodies = null    # asked once, the first time a motion sensor wants them
 	for c in w.devices.keys():
 		if not w.devices.has(c):
 			continue
 		var d: Dictionary = w.devices[c]
+		if SENSORS.has(kind(d.item)):
+			var was := int(d.out)
+			match kind(d.item):
+				"motion":
+					if bodies == null:
+						bodies = w.bodies_fn.call() if w.bodies_fn.is_valid() else []
+					if sees(w, c, d, bodies):
+						d["hold"] = MOTION_HOLD
+					d.out = LEVEL if int(d.get("hold", 0)) > 0 else 0
+					d["hold"] = maxi(int(d.get("hold", 0)) - 1, 0)
+					d.timer = 1
+				"light":
+					d.timer = int(d.timer) - 1
+					if int(d.timer) <= 0:
+						d.timer = LIGHT_EVERY
+						var lvl := light_level(w, c)
+						d.out = LEVEL - lvl if int(d.setting) == 1 else lvl
+				"fluidsense":
+					d.timer = int(d.timer) - 1
+					if int(d.timer) <= 0:
+						d.timer = FLUID_EVERY
+						d.out = fluid_level(w, c, d)
+			if int(d.out) != was:
+				w._show_device(c)
+			continue
 		match kind(d.item):
 			"dispenser", "dropper":
 				var p := _power_not_front(w, c, d) > 0
@@ -504,6 +580,102 @@ static func _pour(w, c: Vector3i, d: Dictionary, fluid: int, n: int) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Sensors (section 28)
+
+## The box a motion sensor watches (terrain frame, metres), or an empty AABB
+## when the stud in front is solid: 1..reach studs out of its front, a stud to
+## each side, from a little under its feet to a body's height over them.
+static func motion_box(w, c: Vector3i, d: Dictionary) -> AABB:
+	var f := SIDES[clampi(int(d.facing), 0, 3)]
+	var reach := 0
+	var r := int(MOTION_RANGES[clampi(int(d.setting), 0, MOTION_RANGES.size() - 1)])
+	for k in range(1, r + 1):
+		var n: Vector3i = c + f * k
+		if w._solid(n + Vector3i(0, 1, 0)) or w._solid(n + Vector3i(0, 2, 0)):
+			break
+		reach = k
+	if reach == 0:
+		return AABB()
+	var side := Vector3i(-f.z, 0, f.x)
+	var a: Vector3i = c + f - side
+	var b: Vector3i = c + f * reach + side
+	var lo := Vector3(mini(a.x, b.x) * w._stud, c.y * w._plate - 0.45, mini(a.z, b.z) * w._stud)
+	var hi := Vector3((maxi(a.x, b.x) + 1) * w._stud, c.y * w._plate + 1.2, (maxi(a.z, b.z) + 1) * w._stud)
+	return AABB(lo, hi - lo)
+
+
+## Is a body's feet in the box a motion sensor watches?
+static func sees(w, c: Vector3i, d: Dictionary, bodies: Array) -> bool:
+	var box := motion_box(w, c, d)
+	if box.size == Vector3.ZERO:
+		return false
+	for p in bodies:
+		if box.has_point(p):
+			return true
+	return false
+
+
+## A light sensor's level: the sky light over it (0-15, how open it is to the
+## sky) times the daylight (0 at night, 1 by day), rounded.
+static func light_level(w, c: Vector3i) -> int:
+	var box: AABB = w.device_box(c)
+	var top := Vector3(box.get_center().x, box.end.y + 0.05, box.get_center().z)
+	var sky := 15.0
+	if light_fn.is_valid():
+		sky = float(light_fn.call(top))
+	elif w.host != null:
+		sky = BrickTerrain.sky_light_at(top)
+	var day := 1.0
+	if day_fn.is_valid():
+		day = float(day_fn.call())
+	elif w.host != null and "_time" in w.host:
+		var height := sin((float(w.host._time) - 0.25) * TAU)
+		day = clampf(height * 2.5 + 0.4, 0.0, 1.0)
+	return clampi(roundi(sky * day), 0, LEVEL)
+
+
+## A fluid sensor's level: the water or lava in the stud in front, its course,
+## 5 a tile; 0 for the other fluid when it watches one.
+static func fluid_level(w, c: Vector3i, d: Dictionary) -> int:
+	var fc: Vector3i = c + SIDES[clampi(int(d.facing), 0, 3)]
+	var cell := Vector3i(fc.x, floori(fc.y / 3.0), fc.z)
+	var info: Dictionary = {}
+	if fluid_fn.is_valid():
+		info = fluid_fn.call(cell)
+	elif w.host != null:
+		info = BrickFluid.cell_info(cell)
+	var fl := int(info.get("fluid", 0))
+	var want := clampi(int(d.setting), 0, 2)
+	if fl == 0 or (want != 0 and fl != want):
+		return 0
+	return clampi(int(info.get("amount", 0)) * 5, 5, LEVEL)
+
+
+## A counter's next output (MineWiring._gate_next): `back` and `right` are
+## those sides on now.
+static func counter_next(d: Dictionary, back: bool, right: bool) -> int:
+	if right and int(d.get("rprev", 0)) == 0:
+		d["count"] = 0
+	d["rprev"] = 1 if right else 0
+	if back and int(d.prev) == 0 and not right:
+		d["count"] = int(d.get("count", 0)) + 1
+		if int(d.count) >= maxi(int(d.setting), 2):
+			d["count"] = 0
+			d.timer = COUNTER_PULSE
+	d.prev = 1 if back else 0
+	var out := 0
+	if int(d.timer) > 0:
+		out = LEVEL
+		d.timer = int(d.timer) - 1
+	return out
+
+
+## The counter's next N on RMB: 2..10, round again.
+static func next_count(n: int) -> int:
+	return 2 if n >= 10 or n < 2 else n + 1
+
+
+# ---------------------------------------------------------------------------
 # The look
 
 static func build(w, root: Node3D, k: String, box: AABB, facing: int) -> void:
@@ -580,6 +752,44 @@ static func build(w, root: Node3D, k: String, box: AABB, facing: int) -> void:
 			var gh := _box(root, box.size * 0.98, Vector3(0, box.size.y * 0.5, 0), ghost)
 			gh.name = "Ghost"
 			gh.visible = false
+		"motion", "fluidsense":
+			var turn := Node3D.new()
+			turn.name = "Turn"
+			turn.rotation.y = _yaw(facing)
+			root.add_child(turn)
+			var shell_col := Color(0.32, 0.34, 0.38) if k == "motion" else Color(0.3, 0.36, 0.42)
+			_box(turn, Vector3(stud * 0.96, plate * 2.9, stud * 0.96), Vector3(0, plate * 1.45, 0), _mat(shell_col, 0.6))
+			var eye_col := Color(0.9, 0.12, 0.08) if k == "motion" else Color(0.15, 0.45, 1.0)
+			var eye := _mat(eye_col.darkened(0.5), 0.2)
+			eye.emission_enabled = true
+			eye.emission = eye_col
+			eye.emission_energy_multiplier = 0.0
+			if k == "motion":
+				# A round dark lens with a red light in it.
+				var lens := MeshInstance3D.new()
+				var cyl := CylinderMesh.new()
+				cyl.top_radius = stud * 0.26
+				cyl.bottom_radius = stud * 0.26
+				cyl.height = stud * 0.05
+				lens.mesh = cyl
+				lens.material_override = _mat(Color(0.05, 0.05, 0.06), 0.15)
+				lens.rotation.z = PI * 0.5
+				lens.position = Vector3(stud * 0.49, plate * 1.6, 0)
+				turn.add_child(lens)
+				var dot := _box(turn, Vector3(stud * 0.04, stud * 0.12, stud * 0.12), Vector3(stud * 0.52, plate * 1.6, 0), eye)
+				dot.name = "Eye"
+			else:
+				# A window low on its front, blue while fluid is there.
+				var win := _box(turn, Vector3(stud * 0.05, plate * 1.2, stud * 0.6), Vector3(stud * 0.49, plate * 1.0, 0), eye)
+				win.name = "Eye"
+		"light":
+			_box(root, Vector3(stud * 0.96, plate * 0.75, stud * 0.96), Vector3(0, plate * 0.375, 0), _mat(Color(0.22, 0.2, 0.18), 0.6))
+			var panel := _mat(Color(0.75, 0.62, 0.25), 0.2)
+			panel.emission_enabled = true
+			panel.emission = Color(1.0, 0.8, 0.3)
+			panel.emission_energy_multiplier = 0.0
+			var pn := _box(root, Vector3(stud * 0.8, plate * 0.12, stud * 0.8), Vector3(0, plate * 0.8, 0), panel)
+			pn.name = "Panel"
 		"alarm":
 			var base := _mat(Color(0.2, 0.2, 0.22), 0.6)
 			_box(root, Vector3(stud * 0.95, plate * 1.6, stud * 0.95), Vector3(0, plate * 0.8, 0), base)
@@ -649,6 +859,18 @@ static func show(w, _c: Vector3i, d: Dictionary, node: Node3D) -> void:
 			var st := node.get_node_or_null("Stripe") as MeshInstance3D
 			if st != null:
 				w.set_glow(st, 2.5 if bool(d.on) else 0.0)
+		"motion", "fluidsense":
+			var turn := node.get_node_or_null("Turn") as Node3D
+			if turn != null:
+				turn.rotation.y = _yaw(int(d.facing))
+			var e := node.get_node_or_null("Turn/Eye") as MeshInstance3D
+			if e != null:
+				w.set_glow(e, 3.0 * int(d.out) / float(LEVEL))
+		"light":
+			var pn := node.get_node_or_null("Panel") as MeshInstance3D
+			if pn != null:
+				w.set_colour(pn, Color(0.75, 0.62, 0.25) if int(d.setting) == 0 else Color(0.25, 0.35, 0.75))
+				w.set_glow(pn, 2.5 * int(d.out) / float(LEVEL))
 		"alarm":
 			var on := bool(d.on)
 			var dome := node.get_node_or_null("Dome") as MeshInstance3D
@@ -696,6 +918,15 @@ static func readout(w, c: Vector3i, d: Dictionary) -> Array[String]:
 			out.append("sounding" if bool(d.on) else "quiet")
 			if d.has("called"):
 				out.append("called %d" % int(d.called))
+		"motion":
+			out.append("sees something" if int(d.out) > 0 else "sees nothing")
+			out.append("reach %d studs (RMB)" % int(MOTION_RANGES[clampi(int(d.setting), 0, MOTION_RANGES.size() - 1)]))
+		"light":
+			out.append("night sensor (RMB)" if int(d.setting) == 1 else "day sensor (RMB)")
+		"fluidsense":
+			out.append("watches %s (RMB)" % FLUID_NAMES[clampi(int(d.setting), 0, 2)])
+	if d.item == &"counter":
+		out.append("count %d of %d (RMB)" % [int(d.get("count", 0)), int(d.setting)])
 	return out
 
 
@@ -705,6 +936,8 @@ static func readout(w, c: Vector3i, d: Dictionary) -> Array[String]:
 static func save_extra(d: Dictionary, e: Dictionary) -> void:
 	if has_slots(d.item):
 		e["slots"] = Inventory._save_array(d.get("slots", []))
+	if d.item == &"counter":
+		e["count"] = int(d.get("count", 0))
 
 
 static func restore_extra(d: Dictionary, e: Dictionary) -> void:
@@ -714,6 +947,8 @@ static func restore_extra(d: Dictionary, e: Dictionary) -> void:
 		d["slots"] = slots
 	if is_terrain(d.item) and bool(d.on):
 		d.timer = RELEASE_HOLD
+	if d.item == &"counter":
+		d["count"] = int(e.get("count", 0))
 
 
 # ---------------------------------------------------------------------------

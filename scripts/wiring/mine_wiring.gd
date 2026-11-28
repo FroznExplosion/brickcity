@@ -128,6 +128,11 @@ const DEVICES := {
 	&"dropper": {"kind": "dropper", "plates": 3, "facing": true},
 	&"release_brick": {"kind": "release", "plates": 3},
 	&"alarm": {"kind": "alarm", "plates": 3},
+	# Sensors and the counter (section 28): wiring_traps.gd. omni: out of every side.
+	&"motion_sensor": {"kind": "motion", "plates": 3, "facing": true, "omni": true},
+	&"light_sensor": {"kind": "light", "plates": 1, "omni": true},
+	&"fluid_sensor": {"kind": "fluidsense", "plates": 3, "facing": true, "omni": true},
+	&"counter": {"kind": "gate", "op": "counter", "plates": 3, "facing": true, "colour": Color(0.55, 0.82, 0.28)},
 	# Stage 7 (section 20): scripts/wiring/wiring_links.gd. A receiver drives
 	# every side (omni); a transmitter drives nothing.
 	&"wire_transmitter": {"kind": "transmitter", "plates": 3},
@@ -719,7 +724,7 @@ func use_device(c: Vector3i, how := "use") -> bool:
 				d.timer = BUTTON_TICKS
 			"door", "trapdoor":
 				d.on = not bool(d.on)
-			"dispenser", "dropper":
+			"dispenser", "dropper", "motion", "light", "fluidsense":
 				return WiringTraps.use(self, c, d)
 			"gate":
 				match str(def.get("op", "")):
@@ -729,6 +734,8 @@ func use_device(c: Vector3i, how := "use") -> bool:
 					"pulse":
 						var i := PULSE_LENGTHS.find(int(d.setting))
 						d.setting = PULSE_LENGTHS[(i + 1) % PULSE_LENGTHS.size()]
+					"counter":
+						d.setting = WiringTraps.next_count(int(d.setting))
 					"sequence":
 						d.setting = (int(d.setting) + 1) % PROGRAMS.size()
 						d.erase("program")
@@ -1338,6 +1345,8 @@ func _gate_next(c: Vector3i, d: Dictionary) -> int:
 					if int(d.step) < prog.size():
 						d.timer = int(prog[d.step])
 			return out
+		"counter":
+			return WiringTraps.counter_next(d, int(b[0]) > 0, int(r[0]) > 0)
 	return 0
 
 
@@ -2584,7 +2593,7 @@ func _device_node(c: Vector3i, item: StringName, facing := 0) -> Node3D:
 	var stone := _mat(Color(0.5, 0.5, 0.52), 0.6)
 	var def: Dictionary = DEVICES[item]
 	match str(def.kind):
-		"dispenser", "dropper", "release", "alarm":
+		"dispenser", "dropper", "release", "alarm", "motion", "light", "fluidsense":
 			WiringTraps.build(self, root, str(def.kind), box, facing)
 		"transmitter", "receiver":
 			WiringLinks.build(self, root, str(def.kind), box)
@@ -2959,7 +2968,7 @@ func _show_device(c: Vector3i) -> void:
 	if not is_instance_valid(node):
 		return
 	match str(DEVICES[d.item].kind):
-		"dispenser", "dropper", "release", "alarm":
+		"dispenser", "dropper", "release", "alarm", "motion", "light", "fluidsense":
 			WiringTraps.show(self, c, d, node)
 		"transmitter", "receiver":
 			WiringLinks.show(self, d, node)
