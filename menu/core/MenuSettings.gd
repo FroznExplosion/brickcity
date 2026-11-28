@@ -88,6 +88,9 @@ const DEFS := [
 	{"id": &"render_scale", "tab": "video", "type": T_SLIDER, "label": "Render Scale", "default": 0.75,
 		"min": 0.5, "max": 2.0, "step": 0.05, "suffix": "x", "needs_rd": true,
 		"hint": "Renders the 3D world above or below screen resolution. The UI stays sharp."},
+	{"id": &"max_3d_lines", "tab": "video", "type": T_ENUM, "label": "3D Resolution Cap", "default": 3,
+		"choices": ["Off", "720p", "900p", "1080p", "1440p"], "needs_rd": true,
+		"hint": "The 3D world is never drawn taller than this, whatever the window: a big screen upscales instead (Upscaler). The UI stays sharp."},
 	{"id": &"scaling_mode", "tab": "video", "type": T_ENUM, "label": "Upscaler", "default": 1,
 		"choices": ["Bilinear", "FSR 1.0", "FSR 2.2"], "needs_rd": true,
 		"hint": "Only does anything below 1.0x render scale."},
@@ -205,6 +208,24 @@ func _watch_window() -> void:
 	var win := get_window()
 	if win != null and not win.size_changed.is_connected(_apply_ui_scale):
 		win.size_changed.connect(_apply_ui_scale)
+	if win != null and not win.size_changed.is_connected(_apply_render_scale):
+		win.size_changed.connect(_apply_render_scale)
+
+
+## Render Scale, held under the 3D Resolution Cap: at 2560x1600 and 1.0x the
+## world drew 4 MP a frame and the GPU took 22 ms (the mine world's --gate=gpu,
+## 2026-11-27); capped at 1080 lines it draws what a 1080p screen does.
+func _apply_render_scale() -> void:
+	var root := _root()
+	if root == null:
+		return
+	var sc := float(get_value(&"render_scale"))
+	var caps := [0, 720, 900, 1080, 1440]
+	var cap := int(caps[clampi(int(get_value(&"max_3d_lines")), 0, caps.size() - 1)])
+	var h := root.get_visible_rect().size.y
+	if cap > 0 and h > 0.0:
+		sc = minf(sc, float(cap) / h)
+	root.scaling_3d_scale = clampf(sc, 0.25, 2.0)
 
 
 # =====================================================================
@@ -402,10 +423,8 @@ func _apply_one(id: StringName, value: Variant) -> void:
 			DisplayServer.window_set_vsync_mode(modes[clampi(int(value), 0, 3)])
 		&"max_fps":
 			Engine.max_fps = maxi(int(value), 0)
-		&"render_scale":
-			var root := _root()
-			if root != null:
-				root.scaling_3d_scale = float(value)
+		&"render_scale", &"max_3d_lines":
+			_apply_render_scale()
 		&"scaling_mode":
 			var root2 := _root()
 			if root2 != null:

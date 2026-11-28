@@ -101,6 +101,12 @@ var _ring_nodes := {}
 var _relod_at := Vector2i(1 << 30, 0)
 ## Tile -> the sample step of the block covering it AS BUILT, for `height_at`.
 var _tile_step := {}
+## Where _tile_step's origin is (its keys are round it: the layout is shared).
+var _tile_step_at := Vector2i.ZERO
+## Layouts made, by reach and detail (build_begin): shared by every tier.
+static var _layouts := {}
+## What the last build_poll spent its time on (a gate's line).
+var last_poll_note := ""
 
 ## FOLLOWING NEVER WAITS (Terrain.md 22.19). `relod` and `_refine_for` used to
 ## start their bakes on the worker threads and then WAIT for them, on the main
@@ -160,100 +166,118 @@ func build_begin(reach_tiles: int, material: Material, hole := Rect2i(), split_t
 	# both left bands a whole block wide -- a tile exactly on a ring boundary
 	# belongs to neither sweep -- and 2,500 one-tile fills with it. A fill
 	# that always terminates at span 1 cannot leave a hole.
+	# THE LAYOUT IS THE SAME at every re-anchor of an endless world (no hole:
+	# the same reach and detail, laid out round the origin): made once and
+	# kept. Made each time it was 14-18 ms of GDScript on the main thread at
+	# every re-anchor, the flight's worst frame (--gate=stop, 2026-11-27).
+	var cache_key := "%d|%d" % [reach_tiles, detail]
+	var cached: Dictionary = {} if has_hole else _layouts.get(cache_key, {})
 	var blocks: Array[Vector2i] = []
 	var spans: Array[int] = []
 	var steps: Array[int] = []
 	var covered := {}
 
-	# Only as many doublings as the reach actually needs: rounding a 560 m
-	# field up to the six-level lattice drew 1.4 km of ground nobody asked for.
-	var levels := 1
-	while (FIRST << (levels - 1)) < reach_tiles and levels < LEVELS:
-		levels += 1
-	var coarsest: int = SPAN << (levels - 1)
-	# The edge of the field, rounded UP to the coarsest lattice. A block has
-	# to fit entirely inside the reach or it is refused and the fill falls
-	# back a level, so a reach that is not a multiple of the biggest span
-	# frays the whole rim down to one-tile blocks: at 9 km that was 3,212 of
-	# them. Rounding up draws a little more ground than asked for, which costs
-	# one row of blocks and nothing else.
-	var reach: int = int(ceil(float(reach_tiles) / float(coarsest))) * coarsest
+	if cached.is_empty():
+		# Only as many doublings as the reach actually needs: rounding a 560 m
+		# field up to the six-level lattice drew 1.4 km of ground nobody asked for.
+		var levels := 1
+		while (FIRST << (levels - 1)) < reach_tiles and levels < LEVELS:
+			levels += 1
+		var coarsest: int = SPAN << (levels - 1)
+		# The edge of the field, rounded UP to the coarsest lattice. A block has
+		# to fit entirely inside the reach or it is refused and the fill falls
+		# back a level, so a reach that is not a multiple of the biggest span
+		# frays the whole rim down to one-tile blocks: at 9 km that was 3,212 of
+		# them. Rounding up draws a little more ground than asked for, which costs
+		# one row of blocks and nothing else.
+		var reach: int = int(ceil(float(reach_tiles) / float(coarsest))) * coarsest
 
-	var free_at := func(bx: int, bz: int, span: int) -> bool:
-		if absi(bx) > reach or absi(bz) > reach:
-			return false
-		if absi(bx + span - 1) > reach or absi(bz + span - 1) > reach:
-			return false
-		# NOT over a fixed detail square. Where the two tiers overlap the
-		# ground is drawn twice, and coarse samples poke through detail ground.
-		if has_hole and hole.intersects(Rect2i(bx + a.x, bz + a.y, span, span)):
-			return false
-		for dz in span:
-			for dx in span:
-				if covered.has(Vector2i(bx + dx, bz + dz)):
-					return false
-		return true
+		var free_at := func(bx: int, bz: int, span: int) -> bool:
+			if absi(bx) > reach or absi(bz) > reach:
+				return false
+			if absi(bx + span - 1) > reach or absi(bz + span - 1) > reach:
+				return false
+			# NOT over a fixed detail square. Where the two tiers overlap the
+			# ground is drawn twice, and coarse samples poke through detail ground.
+			if has_hole and hole.intersects(Rect2i(bx + a.x, bz + a.y, span, span)):
+				return false
+			for dz in span:
+				for dx in span:
+					if covered.has(Vector2i(bx + dx, bz + dz)):
+						return false
+			return true
 
-	# COARSEST FIRST, then fill in.
-	#
-	# Placing a block per uncovered tile, at that tile's own level, fragments
-	# badly: a big block is refused whenever any of its cells was already
-	# taken by a smaller one, so the scan produced 471 blocks where the ring
-	# arithmetic says about 140. Laying the big ones first and letting the
-	# small ones fill around them is the same greedy idea with the order that
-	# actually works.
-	#
-	# Ring 0 starts at the origin, not at some fixed near square: with no hole
-	# the detail moves, so the tier has to be able to draw anywhere the detail
-	# is not. Excluding the origin square left 21 tiles drawn by nothing the
-	# moment the camera walked away from it.
-	for level in range(levels - 1, -1, -1):
-		var span: int = SPAN << level
-		var step: int = detail_step(STEP << level, SPAN << level)
-		var inner: int = 0 if level == 0 else (FIRST << (level - 1))
-		for bz in range(-reach, reach, span):
-			for bx in range(-reach, reach, span):
-				# The block's NEAREST corner, in Chebyshev radius: a block may
-				# sit in its own ring or further out, never closer, or its
-				# samples would be visible.
-				var nx: int = 0 if bx <= 0 and bx + span - 1 >= 0 else mini(absi(bx), absi(bx + span - 1))
-				var nz: int = 0 if bz <= 0 and bz + span - 1 >= 0 else mini(absi(bz), absi(bz + span - 1))
-				if maxi(nx, nz) < inner:
-					continue        # too close for this level of detail
-				if not free_at.call(bx, bz, span):
+		# COARSEST FIRST, then fill in.
+		#
+		# Placing a block per uncovered tile, at that tile's own level, fragments
+		# badly: a big block is refused whenever any of its cells was already
+		# taken by a smaller one, so the scan produced 471 blocks where the ring
+		# arithmetic says about 140. Laying the big ones first and letting the
+		# small ones fill around them is the same greedy idea with the order that
+		# actually works.
+		#
+		# Ring 0 starts at the origin, not at some fixed near square: with no hole
+		# the detail moves, so the tier has to be able to draw anywhere the detail
+		# is not. Excluding the origin square left 21 tiles drawn by nothing the
+		# moment the camera walked away from it.
+		for level in range(levels - 1, -1, -1):
+			var span: int = SPAN << level
+			var step: int = detail_step(STEP << level, SPAN << level)
+			var inner: int = 0 if level == 0 else (FIRST << (level - 1))
+			for bz in range(-reach, reach, span):
+				for bx in range(-reach, reach, span):
+					# The block's NEAREST corner, in Chebyshev radius: a block may
+					# sit in its own ring or further out, never closer, or its
+					# samples would be visible.
+					var nx: int = 0 if bx <= 0 and bx + span - 1 >= 0 else mini(absi(bx), absi(bx + span - 1))
+					var nz: int = 0 if bz <= 0 and bz + span - 1 >= 0 else mini(absi(bz), absi(bz + span - 1))
+					if maxi(nx, nz) < inner:
+						continue        # too close for this level of detail
+					if not free_at.call(bx, bz, span):
+						continue
+					blocks.append(Vector2i(bx, bz))
+					spans.append(span)
+					steps.append(step)
+					for dz in span:
+						for dx in span:
+							covered[Vector2i(bx + dx, bz + dz)] = true
+
+		# Whatever is left, one tile at a time: round a hole, which is not on the
+		# block lattice. Inside the blocks' own square [-reach, reach): one more
+		# row and column (to reach, inclusive) was 257 one-tile blocks along the
+		# far rim, a node and a draw each at the finest sample step, ground at the
+		# horizon nobody asked for (--gate=gpu: the far tier 335 meshes, 257 of
+		# them these; Docs/MineWorld.md 21, item 6).
+		for tz in range(-reach, reach):
+			for tx in range(-reach, reach):
+				var c := Vector2i(tx, tz)
+				if covered.has(c) or (has_hole and hole.has_point(c + a)):
 					continue
-				blocks.append(Vector2i(bx, bz))
-				spans.append(span)
-				steps.append(step)
-				for dz in span:
-					for dx in span:
-						covered[Vector2i(bx + dx, bz + dz)] = true
+				if absi(tx) > reach_tiles or absi(tz) > reach_tiles:
+					continue
+				blocks.append(c)
+				spans.append(1)
+				steps.append(detail_step(STEP, 1))
+				covered[c] = true
 
-	# Whatever is left, one tile at a time: round a hole, which is not on the
-	# block lattice. Inside the blocks' own square [-reach, reach): one more
-	# row and column (to reach, inclusive) was 257 one-tile blocks along the
-	# far rim, a node and a draw each at the finest sample step, ground at the
-	# horizon nobody asked for (--gate=gpu: the far tier 335 meshes, 257 of
-	# them these; Docs/MineWorld.md 21, item 6).
-	for tz in range(-reach, reach):
-		for tx in range(-reach, reach):
-			var c := Vector2i(tx, tz)
-			if covered.has(c) or (has_hole and hole.has_point(c + a)):
-				continue
-			if absi(tx) > reach_tiles or absi(tz) > reach_tiles:
-				continue
-			blocks.append(c)
-			spans.append(1)
-			steps.append(detail_step(STEP, 1))
-			covered[c] = true
+		# Each tile's sample step, round the origin (height_at reads it from the anchor).
+		var ts := {}
+		for i in blocks.size():
+			for dz in spans[i]:
+				for dx in spans[i]:
+					ts[blocks[i] + Vector2i(dx, dz)] = steps[i]
+		cached = {"blocks": blocks, "spans": spans, "steps": steps, "tile_step": ts}
+		if not has_hole:
+			_layouts[cache_key] = cached
+	blocks = (cached.blocks as Array[Vector2i]).duplicate()
+	spans = (cached.spans as Array[int]).duplicate()
+	steps = (cached.steps as Array[int]).duplicate()
+	_tile_step = cached.tile_step
+	_tile_step_at = a
 
 	# Laid out round the origin; placed round the anchor.
 	for i in blocks.size():
 		blocks[i] += a
-	for i in blocks.size():
-		for dz in spans[i]:
-			for dx in spans[i]:
-				_tile_step[blocks[i] + Vector2i(dx, dz)] = steps[i]
 
 	if verbose:
 		var by_span := {}
@@ -299,17 +323,27 @@ func build_begin(reach_tiles: int, material: Material, hole := Rect2i(), split_t
 func build_poll(budget_ms := -1.0) -> bool:
 	if _build_job.is_empty():
 		return true
+	var w0 := Time.get_ticks_usec()
 	if not _job_done(_build_job):
 		return false
+	var w1 := Time.get_ticks_usec()
 	var job := _build_job
 	if not job.has("next"):
 		job["next"] = 0
 		job["merged"] = {}
 		job["rings"] = []
 	var t0 := Time.get_ticks_usec()
+	last_poll_note = " wait %.1f" % ((w1 - w0) / 1000.0)
 	if not _assemble(job, budget_ms, t0):
+		last_poll_note += " assemble %.1f (%d of %d)" % [(Time.get_ticks_usec() - t0) / 1000.0, int(job.next), (job.blocks as Array).size()]
 		return false
+	# The bakes' arrays (every block's mesh, ~360k triangles) let go on a
+	# worker: dropped here they were ~9 ms of freeing in the swap's frame.
 	_build_job = {}
+	if budget_ms > 0.0:
+		var dead := [job]
+		job = {}
+		WorkerThreadPool.add_task(func() -> void: dead.clear(), false, "coarse build freed")
 	return true
 
 
@@ -359,7 +393,9 @@ func _assemble(job: Dictionary, budget_ms: float, t0: int) -> bool:
 			_ring_members[spans[i]].append(_all_rects.size() - 1)
 			continue
 		_all_owner.append(_far_nodes.size())
+		var bt0 := Time.get_ticks_usec()
 		var mi := _block_node(arrays, steps[i], "Coarse_%d_%d" % [blocks[i].x, blocks[i].y])
+		last_poll_note += " b%.1f" % ((Time.get_ticks_usec() - bt0) / 1000.0) if Time.get_ticks_usec() - bt0 > 1000 else ""
 		_all_node[_all_rects.size() - 1] = mi
 		mi.position = origin
 		_far_nodes.append(mi)
@@ -378,11 +414,13 @@ func _assemble(job: Dictionary, budget_ms: float, t0: int) -> bool:
 		_job_wait(rj)
 	elif not _job_done(rj):
 		return false
+	var rt0 := Time.get_ticks_usec()
 	for j in (rj.spans as Array).size():
 		var span: int = rj.spans[j]
 		_rebuild_ring(span, merged[span], rj.meshes[j])
 		_far_rings += 1
 		_far_blocks += merged[span].size()
+	last_poll_note += " rings %.1f ms" % ((Time.get_ticks_usec() - rt0) / 1000.0)
 	merged.clear()
 	return true
 
@@ -481,7 +519,7 @@ func rebuild() -> void:
 	_all_node.clear()
 	_ring_members.clear()
 	_ring_nodes.clear()
-	_tile_step.clear()
+	_tile_step = {}
 	_far_hidden = 0
 	_far_tris = 0
 	_far_blocks = 0
@@ -1061,6 +1099,7 @@ func block_rect(i: int) -> Rect2i:
 func height_at(x: int, z: int) -> float:
 	var tile := BrickTerrain.get_tile_studs()
 	var t := Vector2i(floori(float(x) / tile), floori(float(z) / tile))
+	t -= _tile_step_at
 	if not _tile_step.has(t):
 		return NAN
 	var step: int = _tile_step[t]
