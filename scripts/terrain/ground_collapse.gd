@@ -657,20 +657,43 @@ static func _part(sx: int, sz: int) -> String:
 ## it, once its own mesh is made -- it holds them till then, they hold it till
 ## they are built (Docs/MineWorld.md 20) -- so the old tile and the falling
 ## thing never draw together, and never neither.
+##
+## TOGETHER: what is ready (its mesh made) is let go with the others ready in
+## the same frame, their holds on each other's tiles aside -- several groups
+## loosed by one break (a Mega Pickaxe face, a grenade) hold the same tiles,
+## and checked one by one each waited for the others' holds: all of them,
+## and the break's own hole, waited out WAIT_MAX_MS (2 s, --gate=multibreak).
 func _release() -> void:
 	var now := Time.get_ticks_msec()
+	# The ready set: mesh made; then, to a fixed point, those whose ground is
+	# ready with the set's holds aside (one that is not keeps its hold, which
+	# may stop another).
+	var ready := {}
+	for w: Dictionary in _waiting:
+		if w.kind != "piece" or _mesh_ready(w):
+			ready[w.owner] = w
+	var changed := true
+	while changed and not ready.is_empty():
+		changed = false
+		for o in ready.keys():
+			var w: Dictionary = ready[o]
+			if not world.ground_ready(w.rect, w.lo, w.hi, ready) and now - int(w.born) < WAIT_MAX_MS:
+				ready.erase(o)
+				changed = true
+	if ready.is_empty():
+		return
+	for o in ready:
+		var w: Dictionary = ready[o]
+		world.unhold_ground(w.rect, w.owner)
+	for o in ready:
+		var w: Dictionary = ready[o]
+		world.swap_ground(w.rect, w.lo, w.hi)
 	var i := 0
 	while i < _waiting.size():
 		var w: Dictionary = _waiting[i]
-		if w.kind == "piece" and not _mesh_ready(w):
+		if not ready.has(w.owner):
 			i += 1
 			continue
-		var done: bool = world.ground_ready(w.rect, w.lo, w.hi, w.owner)
-		if not done and now - int(w.born) < WAIT_MAX_MS:
-			i += 1
-			continue
-		world.unhold_ground(w.rect, w.owner)
-		world.swap_ground(w.rect, w.lo, w.hi)
 		_waiting.remove_at(i)
 		if w.kind == "sand":
 			_sand.append_array(w.cols)

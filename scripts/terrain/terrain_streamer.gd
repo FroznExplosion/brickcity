@@ -385,9 +385,30 @@ func _held(c: Vector2i, who = null) -> bool:
 	if h == null:
 		return false
 	for o in h:
-		if o != who:
+		if not _owns(o, who):
 			return true
 	return false
+
+
+## `who`: one owner, or a Dictionary of owners (several falling things let go
+## together, GroundCollapse._release: each held tiles the others needed, and
+## all of them waited out WAIT_MAX_MS, the hole with them).
+static func _owns(o, who) -> bool:
+	return who.has(o) if who is Dictionary else o == who
+
+
+## The newest generation `who`'s holds on it wait for (-1: none of its own).
+static func _own_need(h, who) -> int:
+	if h == null or who == null:
+		return -1
+	var need := -1
+	if who is Dictionary:
+		for o in h:
+			if who.has(o):
+				need = maxi(need, int(h[o]))
+	elif (h as Dictionary).has(who):
+		need = int(h[who])
+	return need
 
 
 ## Ready to swap: not held by others, and its waiting refresh built and
@@ -402,8 +423,8 @@ func _tile_ready(c: Vector2i, who = null) -> bool:
 		return true
 	if _held(c, who):
 		return false
-	if who != null and _holds.has(c) and (_holds[c] as Dictionary).has(who):
-		var need := int(_holds[c][who])
+	var need := _own_need(_holds.get(c), who)
+	if need >= 0:
 		if int(drawn_gen.get(c, -1)) >= need:
 			return true
 		return _swaps.has(c) and int(_swaps[c].step) == SWAP_READY and int(_swaps[c].get("gen", -1)) >= need
