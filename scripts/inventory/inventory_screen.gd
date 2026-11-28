@@ -126,6 +126,7 @@ var _chest_grid: GridContainer
 var _craft_box: VBoxContainer
 ## The recipe editor (Docs/Inventory.md 16.3), on the Editor tab (creative).
 var _editor: RecipeEditorPanel
+var _editor_scroll: ScrollContainer
 var _furnace_box: VBoxContainer
 var _fire: FireView
 var _farrow: ArrowView
@@ -328,7 +329,16 @@ func _build_right() -> void:
 	_editor.saved.connect(func(_n: String) -> void:
 		_book_names = []
 		_rebuild_left(true))
-	v.add_child(_editor)
+	# In a scroll the height of the crafting area: the editor is taller than
+	# that, and the screen keeps one size (_on_relayout).
+	_editor_scroll = ScrollContainer.new()
+	_editor_scroll.name = "EditorScroll"
+	_editor_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_editor_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_editor_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_editor.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_editor_scroll.add_child(_editor)
+	v.add_child(_editor_scroll)
 
 	# A furnace, Minecraft's: input over the flame over the fuel; the arrow; the output.
 	_furnace_box = VBoxContainer.new()
@@ -880,6 +890,7 @@ func _refresh() -> void:
 	_chest_box.visible = chest
 	_furnace_box.visible = furnace
 	_editor.visible = editing
+	_editor_scroll.visible = editing
 	_craft_box.visible = not chest and not furnace and not editing
 	_left_col.visible = book_open and not chest
 	_book_btn.visible = not chest
@@ -1206,34 +1217,29 @@ func _on_back() -> bool:
 func _on_relayout(vp_size: Vector2) -> void:
 	if _right == null or inv == null:
 		return
-	var furnace := _furnace_mode()
-	var chest := not inv.chest_key.is_empty() and not furnace
-	var book := book_open and not chest
+	# ONE size for the screen, Minecraft's way (the user, 2026-11-27): the
+	# slots and both panels come from the window alone -- its size after the
+	# Interface Scale setting (MenuSettings sets the window's content scale)
+	# -- measured against the biggest layout there is: the book shown with
+	# every tab, a 4x4 crafting grid, a full 27-slot backpack. What a page
+	# shows never changes it (a tab, a station, the book on or off, a chest,
+	# a smaller backpack); the contents sit in the room the panels have, and
+	# the recipe editor, taller than that, shrinks its own cells to fit.
+	# inventory_layout_probe checks it.
 	var pad_f := 0.36
-	# Widths in slots: the right panel 9 + padding; the book 7 + its scroll bar.
-	var w_slots := 9.0 + pad_f * 2.0 + 0.2 + 2.0 * HAND_COL
-	if book:
-		# The book is as wide as its recipe columns, or its row of tabs if that
-		# is wider (each tab TAB_W slots and a gap): a new tab (the creatures'
-		# Spawn) must shrink the slots, not push the panels off the screen.
-		var tabs := 0
-		for t in _left_tabs.get_children():
-			if t is McStyle.Tab and (t as Control).visible:
-				tabs += 1
-		w_slots += maxf(BOOK_COLS + 0.5 + pad_f * 2.0 + 0.3, tabs * (TAB_W + 0.08))
-	# Heights in slots: tabs, padding, the top section, titles and notes,
-	# the storage rows, the gap, two hotbars.
-	var store_rows := ceilf(maxf(_storage_n, 0) / 9.0) if _storage_n > 0 else 0.8
-	var top := float(_grid_n())
-	if page == "editor":
-		top = RecipeBook.MAX_GRID + 3.5
+	var tabs := 0
+	for t in _left_tabs.get_children():
+		if t is McStyle.Tab:
+			tabs += 1
+	var right_w := 9.0 + pad_f * 2.0 + 0.2 + 2.0 * HAND_COL
+	var left_w := maxf(BOOK_COLS + 0.5 + pad_f * 2.0 + 0.3, tabs * (TAB_W + 0.08))
+	var w_slots := right_w + left_w
+	# Heights in slots: tabs, padding, the top section (the biggest grid),
+	# titles and notes, the storage rows (a full backpack), the gap, two
+	# hotbars, and a little room.
+	var top := float(RecipeBook.MAX_GRID)
 	var text_rows := 4.0
-	if chest:
-		top = ceilf(inv.area_size(&"chest") / 9.0)
-		text_rows = 2.0
-	elif furnace:
-		top = 3.0
-		text_rows = 2.0
+	var store_rows := ceilf(float(Inventory.MAIN_SIZE) / 9.0)
 	var h_slots := 0.95 + pad_f * 2.0 + top + text_rows * 0.62 + store_rows + 0.3 + 2.1 + 0.25
 	var avail_h := vp_size.y - 2.0 * MenuFit.page_padding(vp_size) - 8.0
 	var by_w := (available_width(vp_size) - 4.0) / w_slots
@@ -1274,7 +1280,13 @@ func _on_relayout(vp_size: Vector2) -> void:
 	_farrow.custom_minimum_size = Vector2(roundf(_slot_px * 1.6), _slot_px)
 	(_right.find_child("Balance", true, false) as Control).custom_minimum_size.x = _slot_px
 	_hotbar_gap.custom_minimum_size.y = roundf(_slot_px * 0.2)
-	_editor.resize_slots(_slot_px, _unit)
+	# The recipe editor (its grid, the result, the palette's buttons) is
+	# taller than the crafting area it stands in: its cells shrink to fit.
+	var ed_k := (top + text_rows * 0.62) / (RecipeBook.MAX_GRID + 3.5 + text_rows * 0.62)
+	_editor.resize_slots(floorf(_slot_px * ed_k), _unit)
+	# Its room: what the fixed panel has left over the inventory (it fills
+	# that and scrolls; at least two rows).
+	_editor_scroll.custom_minimum_size = Vector2(9.0 * _slot_px, roundf(2.0 * _slot_px))
 	for g in _hand_gaps:
 		g.custom_minimum_size.x = roundf(_slot_px * (HAND_COL - 1.0))
 	for g in _hand_pads:
@@ -1284,6 +1296,13 @@ func _on_relayout(vp_size: Vector2) -> void:
 	_set_slot_size()
 	if _cursor != null:
 		_cursor.size = Vector2(_slot_px, _slot_px)
+	# The panels' columns at their fixed size (the tabs over them included);
+	# the contents never push them bigger on a normal page.
+	var col_h := roundf((h_slots - 0.25) * _slot_px)
+	_right_col.custom_minimum_size = Vector2(roundf(right_w * _slot_px), col_h)
+	_left_col.custom_minimum_size = Vector2(roundf(left_w * _slot_px), col_h)
+	_right.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_left.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
 
 func _set_slot_size() -> void:
