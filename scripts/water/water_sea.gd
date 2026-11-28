@@ -86,6 +86,11 @@ var use_pools := true
 var use_fluid_mask := false
 ## Water you see the ground through (WaterShaders, Docs/MineWater.md 7.4).
 var see_through := false
+## The smooth sheet past the pieces see-through too. Off: past near_radius
+## the ground under the water is too far to read, and its depth pre-pass and
+## blended pass cost ~1.5 ms at 1440p (the mine world's --gate=gpu,
+## 2026-11-27). -- --sheet-see-through puts it back.
+static var sheet_see_through := false
 ## The near tier's collision patch (water_collider.gd: boxes for barrels and
 ## boats to rest on). A swimming pawn meets it from below as a ceiling, so a
 ## world with swimmers and nothing afloat turns it off.
@@ -146,7 +151,7 @@ func build(half_studs: int, outer_metres: float, step := 8) -> void:
 	sheet = WaterSheetFx.new()
 	sheet.name = "WaterSheet"
 	sheet.outer_radius = outer_metres
-	sheet.see_through = see_through
+	sheet.see_through = see_through and (sheet_see_through or "--sheet-see-through" in OS.get_cmdline_user_args())
 	add_child(sheet)
 	sheet.build(seabed, origin, extent)
 
@@ -274,7 +279,7 @@ func _cull_for(camera: Vector3) -> void:
 	_culled = above
 	for tier in [near, mid, sheet]:
 		if tier != null:
-			WaterShaders.set_cull_back(tier._mat, "res://shaders/water.gdshader", see_through, above)
+			WaterShaders.set_cull_back(tier._mat, "res://shaders/water.gdshader", tier.see_through, above)
 
 
 func follow(camera: Vector3, delta: float) -> void:

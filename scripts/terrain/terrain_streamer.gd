@@ -296,6 +296,11 @@ func settle(camera_xz: Vector2, rounds := 4000) -> void:
 ## tile stays on screen, a new one bakes behind it, and it is swapped in
 ## when ready. A bake already in flight over the rectangle read the field
 ## BEFORE the edit, so its result is thrown away and it bakes again.
+## Bumped whenever a tile joins or leaves the resident set (the far tier's
+## cover skips its walk while it is unchanged).
+var tiles_version := 0
+
+
 func refresh(rect: Rect2i) -> void:
 	var batch := {"tiles": {}, "since": 0}
 	for c in _tiles:
@@ -497,6 +502,7 @@ func _swap_now(c: Vector2i) -> void:
 	tile.visible = old.visible
 	old.queue_free()
 	_tiles[c] = tile
+	tiles_version += 1
 	drawn_gen[c] = int(job.get("gen", 0))
 	_built += 1
 	if log_latency and _stamps.has(c):
@@ -523,6 +529,7 @@ func invalidate(rect: Rect2i) -> void:
 	for c in gone:
 		var tile: TerrainTile = _tiles[c]
 		_tiles.erase(c)
+		tiles_version += 1
 		_drop_swap(c)
 		_dirty.erase(c)
 		_batch_of.erase(c)
@@ -819,6 +826,7 @@ func _land_slots(slots: Array[int], t0: int) -> bool:
 		if pinned.has_area():
 			tile.visible = _shown(c, _keep_rect(_centre.x, _centre.y))
 		_tiles[c] = tile
+		tiles_version += 1
 		drawn_gen[c] = gen
 		_built += 1
 		_finish_pending = true
@@ -960,6 +968,7 @@ func _drop(cx: int, cz: int) -> void:
 	for c in gone:
 		var tile: TerrainTile = _tiles[c]
 		_tiles.erase(c)
+		tiles_version += 1
 		_drop_swap(c)
 		_dirty.erase(c)
 		_batch_of.erase(c)

@@ -371,6 +371,8 @@ func _ready() -> void:
 			_run_mega_gate()
 		elif "--gate=multibreak" in OS.get_cmdline_user_args():
 			_run_multibreak_gate()
+		elif "--gate=cpu" in OS.get_cmdline_user_args():
+			_run_cpu_gate()
 		elif "--gate=shift" in OS.get_cmdline_user_args():
 			_run_shift_gate()
 		elif "--gate=deep" in OS.get_cmdline_user_args():
@@ -401,6 +403,11 @@ func _ready() -> void:
 
 func _exit_tree() -> void:
 	save_edits(true)
+	for old in _far_dying:
+		if is_instance_valid(old):
+			old.free()
+	_far_dying.clear()
+	TerrainCoarse._graveyard.clear()
 	# Every other scene expects the classic field.
 	_teardown()
 	BrickTerrain.set_generator(0)
@@ -977,6 +984,11 @@ func _land_breaks() -> void:
 			if hole >= 0:
 				bricks.drop_hole(hole)
 			continue
+		# Several bricks (a blast): every cleared cell goes now, as one shot's
+		# brick does (TerrainBricks.hide_cells).
+		var many: Array[int] = []
+		if hole < 0 and bricks != null and _overlay_on:
+			many = bricks.hide_cells(runs)
 		var logged := {}
 		if _streamer != null and _streamer.log_latency:
 			logged = {"shot": job[3], "found": Time.get_ticks_usec()}
@@ -988,6 +1000,8 @@ func _land_breaks() -> void:
 		# What a shot destroys is gone (the user, 2026-11-20): no brick thrown.
 		# What it leaves hanging falls -- the collapse, from terrain_edited.
 		terrain_edited(res)
+		for id in many:
+			_hole_wait(id, res)
 		if hole >= 0:
 			_hole_wait(hole, res)
 			if not logged.is_empty():
@@ -1039,6 +1053,15 @@ func _break_from_box(hole: int, box: AABB) -> void:
 
 ## A hidden brick's hole stays till the tiles and sections the edit rebuilt
 ## are drawn at the generations it set (TerrainBricks.hole_wait).
+## A break that cleared `runs` itself (a pickaxe, a block by hand): its cells
+## hidden at once and kept so till the rebuilt tiles are drawn.
+func hide_cleared(runs: PackedInt32Array, res: Dictionary) -> void:
+	if bricks == null or not _overlay_on:
+		return
+	for id in bricks.hide_cells(runs):
+		_hole_wait(id, res)
+
+
 func _hole_wait(hole: int, res: Dictionary) -> void:
 	var want := {}
 	var tl: PackedInt32Array = res["tiles"]
@@ -1441,23 +1464,58 @@ func _process(delta: float) -> void:
 ## An endless world: when the player is REANCHOR_TILES from where the far
 ## rings were laid out, bake a new set round them on the workers, swap it in
 ## when it is done, and drop the old.
+## A gate's notes on the far tier's re-anchors (printed by the gate, not here:
+## a console print is milliseconds on Windows).
+var far_hitch_log: Array[String] = []
+
+
+## Old far tiers, out of the tree, freed FAR_FREE_PER_FRAME nodes a frame.
+var _far_dying: Array[Node] = []
+const FAR_FREE_PER_FRAME := 12
+
+
+func _free_old_far() -> void:
+	TerrainCoarse.free_some()
+	var n := FAR_FREE_PER_FRAME
+	while n > 0 and not _far_dying.is_empty():
+		var old: Node = _far_dying[0]
+		if not is_instance_valid(old):
+			_far_dying.pop_front()
+			continue
+		if old.get_child_count() == 0:
+			old.free()
+			_far_dying.pop_front()
+			continue
+		old.get_child(old.get_child_count() - 1).free()
+		n -= 1
+
+
 func _follow_far(eye: Vector3) -> void:
+	_free_old_far()
 	var t := _tile_of(eye)
 	if _far_next == null:
 		var d := t - _far.anchor
 		# Re-laid as well when Distant Ground Detail changed (TerrainCoarse.detail).
 		if maxi(absi(d.x), absi(d.y)) >= REANCHOR_TILES or _far.built_detail != TerrainCoarse.detail \
 				or _far._reach_tiles != _far_tiles():
+			var bb := Time.get_ticks_usec()
 			_far_next = _new_far(t)
+			var bn := Time.get_ticks_usec()
 			_far_next.hold = fast_hold
 			_far_next.visible = false
 			if not _far_next.build_begin(_far_tiles(), _mat, Rect2i(), _streamer.align):
 				_far_next.queue_free()
 				_far_next = null
+			if _gate and (Time.get_ticks_usec() - bb) > 4000:
+				far_hitch_log.append("[far-hitch] begin %.1f ms (new tier %.1f, build_begin %.1f)" % [
+						(Time.get_ticks_usec() - bb) / 1000.0, (bn - bb) / 1000.0, (Time.get_ticks_usec() - bn) / 1000.0])
 		return
 	# A slice a frame: the new tier is hidden until it is all in.
 	var b0 := Time.get_ticks_usec()
-	if not _far_next.build_poll(2.0):
+	var polled := _far_next.build_poll(2.0)
+	if _gate and (Time.get_ticks_usec() - b0) > 4000:
+		far_hitch_log.append("[far-hitch] poll %.1f ms:%s" % [(Time.get_ticks_usec() - b0) / 1000.0, _far_next.last_poll_note])
+	if not polled:
 		return
 	# Its splits round the detail land while it is still hidden, one call a
 	# frame that never waits. The swap's `cover(_streamer)` waited for them:
@@ -1472,7 +1530,11 @@ func _follow_far(eye: Vector3) -> void:
 	var t2 := Time.get_ticks_usec()
 	remove_child(_far)
 	var t3 := Time.get_ticks_usec()
-	_far.queue_free()
+	var fr0 := Time.get_ticks_usec()
+	# Freed a few blocks a frame (_free_old_far): all at once it was 2-3 ms,
+	# and queue_free put it, and more, at the end of the swap's frame.
+	_far_dying.append(_far)
+	var fr1 := Time.get_ticks_usec()
 	_far = _far_next
 	_far.hold = fast_hold
 	_far_next = null
@@ -1480,6 +1542,9 @@ func _follow_far(eye: Vector3) -> void:
 	_last_reanchor_ms = float(Time.get_ticks_usec() - t0) / 1000.0
 	_reanchor_parts = "last poll %.1f, cover %.1f, show %.1f, remove %.1f ms" % [(t0 - b0) / 1000.0,
 			(t1 - t0) / 1000.0, (t2 - t1) / 1000.0, (t3 - t2) / 1000.0]
+	if _gate:
+		far_hitch_log.append("[far-hitch] swap frame: %s, free %.1f, all %.1f ms" % [_reanchor_parts,
+				(fr1 - fr0) / 1000.0, (Time.get_ticks_usec() - b0) / 1000.0])
 
 
 ## The sun goes round once a DAY_SECONDS; the sky, the ambient and the eye's
@@ -4973,6 +5038,8 @@ func _run_stop_gate() -> void:
 	print("[mine-stop] moving: %d frames over 33 ms; the worst (ms, process, draw, near, far, deep, scripts, step, trees, water, collapse, reanchor, pre, post, all of the mine's _process): %s" % [
 			mv_slow, mv_worst.slice(0, 6).map(func(r: Array) -> String: return "%.0f/%.0f/%.0f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f" % r)])
 	print("[mine-stop] moving: near tier %s" % _streamer.report())
+	for l in far_hitch_log:
+		print(l)
 	if _reanchors > 0:
 		print("[mine-stop] moving: far rings re-anchored %d times, the last %.1f ms (%s)" % [_reanchors,
 				_last_reanchor_ms, _reanchor_parts])
@@ -7204,6 +7271,9 @@ func _run_multibreak_gate() -> void:
 			if f > 60 and _streamer._tasks.is_empty() and _streamer._swaps.is_empty() and _streamer._dirty.is_empty():
 				break
 		await _frames(20)
+		if "--multibreak-shots" in OS.get_cmdline_user_args():
+			await RenderingServer.frame_post_draw
+			get_viewport().get_texture().get_image().save_png(UserPaths.DEV + "multibreak_%d_%s_before.png" % [k, way])
 		edit_log.clear()
 		var edits0 := BrickTerrain.get_edit_count()
 		var t0 := Time.get_ticks_usec()
@@ -7242,6 +7312,7 @@ func _run_multibreak_gate() -> void:
 		var frames := 0
 		var last := Time.get_ticks_usec()
 		var held := 0
+		var hid_boxes := 0
 		for f in 300:
 			if way.ends_with("_hold") and (Time.get_ticks_usec() - t0) < 1000000 					and (Time.get_ticks_usec() - t0) / 1000000.0 >= held * builder._break_repeat():
 				builder.update_target()
@@ -7257,6 +7328,11 @@ func _run_multibreak_gate() -> void:
 				slow += 1
 			if landed < 0.0 and not edit_log.is_empty():
 				landed = (int(edit_log[0].t) - t0) / 1000.0
+				hid_boxes = bricks.holes.size() if bricks != null else 0
+				if "--multibreak-shots" in OS.get_cmdline_user_args():
+					# The frame it landed (the tile not yet rebuilt): what is seen.
+					await RenderingServer.frame_post_draw
+					get_viewport().get_texture().get_image().save_png(UserPaths.DEV + "multibreak_%d_%s_landed.png" % [k, way])
 			if landed >= 0.0 and seen < 0.0 and (not way.ends_with("_hold") or now - t0 > 1000000):
 				var all := true
 				for ed: Dictionary in edit_log:
@@ -7268,6 +7344,10 @@ func _run_multibreak_gate() -> void:
 							all = false
 				if all:
 					seen = (now - t0) / 1000.0
+					if "--multibreak-shots" in OS.get_cmdline_user_args():
+						await _frames(3)
+						await RenderingServer.frame_post_draw
+						get_viewport().get_texture().get_image().save_png(UserPaths.DEV + "multibreak_%d_%s_drawn.png" % [k, way])
 			if seen >= 0.0 and f > int(seen / 16.0) + 30:
 				break
 		builder.set_active(false)
@@ -7290,6 +7370,7 @@ func _run_multibreak_gate() -> void:
 				way, ok, edit_log.size(), cells, tiles_n, deep_n, landed, seen, frames, worst, slow,
 				", ".join(pp) if not pp.is_empty() else "-"]
 		print("[multibreak] " + line)
+		print("[multibreak]    hidden at once (overlay holes when it landed): %d" % hid_boxes)
 		if slow > 0:
 			print("[multibreak]    slowest: %s" % _slow_last)
 		for ed: Dictionary in edit_log:
@@ -7304,6 +7385,96 @@ func _run_multibreak_gate() -> void:
 				await get_tree().process_frame
 	edit_log_on = false
 	print("[multibreak] done")
+	get_tree().quit()
+
+
+## -- --gate=cpu: WHERE THE MAIN THREAD'S IDLE TIME GOES (the user,
+## 2026-11-27: ~3 ms of "process" a frame standing still, left even with every
+## drawn thing hidden). Flat out (vsync off, in memory), on foot, still: each
+## node under the root and under the mine world is paused in turn
+## (PROCESS_MODE_DISABLED: its _process, _physics_process and its children's)
+## and the frame's parts read against a baseline just before. A report.
+func _run_cpu_gate() -> void:
+	await _frames(60)
+	var menu_settings := get_node_or_null(^"/root/MenuSettings")
+	if menu_settings != null:
+		menu_settings.set_value(&"vsync", 0, false)      # in memory: never saved
+		menu_settings.set_value(&"max_fps", 0, false)
+	set_on_foot(true)
+	await _frames(240)
+	var measure := func() -> Dictionary:
+		await _frames(15)
+		var clock := FrameClock.new()
+		add_child(clock)
+		await _frames(240)
+		var n := maxf(float(clock.frames), 1.0)
+		var out := {"frame": clock.all_ms / n}
+		for k in ["scripts", "step", "process", "draw", "gpu"]:
+			out[k] = float(clock.all.get(k, 0.0)) / n
+		clock.queue_free()
+		return out
+	var line := func(label: String, m: Dictionary, b: Dictionary) -> String:
+		var d := ""
+		if not b.is_empty():
+			d = "  d: process %+5.2f scripts %+5.2f step %+5.2f frame %+5.2f" % [
+				float(m.process) - float(b.process), float(m.scripts) - float(b.scripts),
+				float(m.step) - float(b.step), float(m.frame) - float(b.frame)]
+		return "[cpu] %-40s frame %6.2f process %5.2f scripts %5.2f step %5.2f draw %5.2f gpu %5.2f%s" % [
+				label, m.frame, m.process, m.scripts, m.step, m.draw, m.gpu, d]
+	var base: Dictionary = await measure.call()
+	print(line.call("baseline (on foot, still)", base, {}))
+	var cands: Array[Node] = []
+	for c in get_tree().root.get_children():
+		if c != self and not self.is_ancestor_of(c) and not c.is_ancestor_of(self):
+			cands.append(c)
+	for c in get_children():
+		if c is FrameClock:
+			continue
+		cands.append(c)
+	var rows: Array = []
+	if "--cpu-ladder" in OS.get_cmdline_user_args():
+		# Cumulative: each stays paused; the last row is the engine alone
+		# (the mine world's own _process too, then).
+		var prev := base
+		cands.append(self)
+		for c in cands:
+			if not is_instance_valid(c) or c.process_mode == Node.PROCESS_MODE_DISABLED:
+				continue
+			if c == self:
+				# Its children are paused already; its own _process off.
+				set_process(false)
+				set_physics_process(false)
+			else:
+				c.process_mode = Node.PROCESS_MODE_DISABLED
+			var m: Dictionary = await measure.call()
+			print(line.call("+ paused " + str(c.name), m, prev))
+			prev = m
+		print("[cpu] ladder: process+scripts+step %.2f -> %.2f ms with every script paused" % [
+				float(base.process) + float(base.scripts) + float(base.step),
+				float(prev.process) + float(prev.scripts) + float(prev.step)])
+		get_tree().quit()
+		return
+	for c in cands:
+		if not is_instance_valid(c) or c.process_mode == Node.PROCESS_MODE_DISABLED:
+			continue
+		var b: Dictionary = await measure.call()
+		var pm := c.process_mode
+		c.process_mode = Node.PROCESS_MODE_DISABLED
+		var m: Dictionary = await measure.call()
+		if is_instance_valid(c):
+			c.process_mode = pm
+		var dp := float(m.process) + float(m.scripts) + float(m.step) - float(b.process) - float(b.scripts) - float(b.step)
+		rows.append([dp, "%s (%s, %d nodes)" % [c.name, c.get_class() if c.get_script() == null else str(c.get_script().resource_path).get_file(), c.get_child_count()]])
+		print(line.call("paused " + str(c.name), m, b))
+	rows.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
+	print("[cpu] biggest (main-thread ms saved when paused):")
+	for r in rows.slice(0, 15):
+		print("[cpu]   %+6.2f  %s" % [r[0], r[1]])
+	# The mine world's own _process parts, as the F3 readout times them.
+	print("[cpu] mine world parts last frame: %s" % str(_ptimes))
+	print("[cpu] nodes in the tree: %d, physics bodies: %d" % [get_tree().get_node_count(),
+			int(Performance.get_monitor(Performance.PHYSICS_3D_ACTIVE_OBJECTS))])
+	print("[cpu] done")
 	get_tree().quit()
 
 
