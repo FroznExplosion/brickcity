@@ -584,6 +584,15 @@ to stay over the hotbars. C / B over a slot remain shortcuts
 (`Inventory.swap_slots`). Crafting and pickups still never put anything there
 by themselves. Still no armour and no player figure.
 
+**One size** (the user, 2026-11-27: Minecraft's menus are fixed to the
+screen). The slot size and both panels come from the window alone -- its
+size after the Interface Scale setting -- measured against the biggest
+layout (the book with every tab, a 4x4 grid, a full 27-slot backpack). No
+page changes them: a tab, a station, the book on or off, a chest, a smaller
+backpack. The recipe editor, taller than its room, scrolls inside it.
+`tools/probes/inventory_layout_probe.gd` (headless) checks every page and
+station at 1280x720, 800x450 and 640x400.
+
 **Not done (Minecraft has it):** 3x3 shapes, the result onto the cursor.
 Furnaces smelt over time since section 15.
 
