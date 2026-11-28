@@ -548,6 +548,16 @@ func run(host: Node) -> void:
 	await w._frames(30)
 	check("a shot breaks the lower wire brick: out of the net, the lamp dark (solid %d)" % BrickTerrain.solid_at(x0 + 4, y, zw),
 			not wr.wires.has(Vector3i(x0 + 4, y, zw)) and not wr.is_lit(wlamp))
+	# A lever standing on a wire brick drives it: a lamp beside the brick.
+	_lay_brick(Vector3i(x0 + 3, y, zw + 4), 2, 1, wire)
+	var onlev := Vector3i(x0 + 3, y + 3, zw + 4)
+	var onlamp := Vector3i(x0 + 5, y, zw + 4)
+	check("a lever on a wire brick, a lamp beside the brick", wr.place_device(onlev, &"lever")
+			and wr.place_device(onlamp, &"lamp"))
+	await w._frames(16)
+	wr.use_device(onlev)
+	await w._frames(16)
+	check("the lever on: it drives the brick it stands on, the lamp lit", wr.is_lit(onlamp))
 	# Wireless: a transmitter beside a lever, a receiver 14 studs off with a lamp.
 	# Clear of the builder's wire brick (a 2x2 block at x0+8..9).
 	var tx := Vector3i(x0 + 12, y, zw)
