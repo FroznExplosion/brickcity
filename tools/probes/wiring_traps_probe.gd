@@ -23,7 +23,8 @@ extends SceneTree
 ##   alarm      powered it sounds and calls once, again every ALARM_AGAIN
 ##              ticks while on, quiet when the power goes.
 ##   save       a dispenser's slots and a let-go release brick come back.
-##   items      the four are device items with models.
+##   items      the four are device items with models; the wiring guide lists
+##              every device and every part in it is an item.
 ## Sensors and the counter (Docs/MineWiring.md 28):
 ##   motion     a body in front within its reach: 15 (and lights a lamp beside
 ##              it); behind it, beside the box, past its reach or past a wall:
@@ -474,3 +475,21 @@ func _items() -> void:
 		_ok("%s has a model of its own" % id, m != null and m.get_child(0).get_child_count() >= 2)
 		m.free()
 	_ok("named Release brick in game", str(ItemCatalog.get_def(&"release_brick").name) == "Release brick")
+	# The wiring guide (Docs/MineWiring.md 29): every device in it, every part an item.
+	var listed := WiringGuide.part_ids()
+	var missing: Array = []
+	for id in MineWiring.DEVICES:
+		if not listed.has(id):
+			missing.append(id)
+	_ok("the wiring guide lists every wiring device (missing: %s)" % [missing], missing.is_empty())
+	var not_items: Array = []
+	for id in listed:
+		if not ItemCatalog.has(id):
+			not_items.append(id)
+	_ok("every part the guide lists is an item (%s)" % [not_items], not_items.is_empty())
+	var page := WiringGuide.build(func(id: StringName, _n: int) -> Control:
+		var c := Control.new()
+		c.set_meta(&"item", id)
+		return c)
+	_ok("the guide page builds: a row per part (%d rows)" % page.get_child_count(), page.get_child_count() > listed.size())
+	page.free()

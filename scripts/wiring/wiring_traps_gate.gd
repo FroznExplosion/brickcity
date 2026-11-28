@@ -38,7 +38,8 @@ extends RefCounted
 ##   save      generated again: the gun still in the dispenser, the release
 ##             bricks holding, the alarm there.
 ##   pictures  user://dev/wiring_traps.png, wiring_bridge.png,
-##             wiring_bridge_fell.png, wiring_sensors.png.
+##             wiring_bridge_fell.png, wiring_sensors.png, wiring_guide.png,
+##             wiring_guide_2.png (the guide scrolled down).
 
 var g = null   # the wiring gate: check, _hold, _picture, w
 var w: Node = null
@@ -457,6 +458,23 @@ func run(gate) -> void:
 	for r in rels:
 		gripped = gripped and not bool(wr.devices[r].on) and BrickTerrain.solid_at(r.x, r.y + 1, r.z) != 0
 	g.check("2 s later, nobody on the string: they grip again (solid)", gripped)
+
+	# --- the wiring guide (section 29): E, the Wiring tab, its picture
+	w.toggle_inventory()
+	await w._frames(10)
+	var scr = w._inv_screen
+	if scr != null:
+		scr.show_page("wiring")
+	await w._frames(20)
+	g.check("E > the Wiring tab shows the wiring guide", scr != null and scr.page == "wiring"
+			and scr._wire_scroll.visible and scr._book_title.text == "Wiring guide")
+	await w._shot(UserPaths.DEV + "wiring_guide.png")
+	if scr != null:
+		scr._wire_scroll.scroll_vertical = 2200
+	await w._frames(10)
+	await w._shot(UserPaths.DEV + "wiring_guide_2.png")
+	w.toggle_inventory()
+	await w._frames(10)
 
 	# --- save: generated again
 	w.generate(w.settings)

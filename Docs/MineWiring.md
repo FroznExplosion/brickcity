@@ -1189,6 +1189,34 @@ noon on a number display, less under a roof, 0 at midnight; water poured in
 front of a fluid sensor lights its lamp; a button pressed three times through
 a counter flashes its lamp on the third only. Picture `user://dev/wiring_sensors.png`.
 
+## 29. The wiring guide in the game (2026-11-27)
+
+The user: instructions for the wiring like the farming guide. Built as the
+inventory screen's **Wiring tab** (a lever icon, beside Farming; E opens the
+screen): `scripts/wiring/wiring_guide.gd` (`WiringGuide`, the same shape as
+`FarmGuide`).
+
+- **How it works**, eight lines: getting the parts (creative catalog: there
+  are no recipes yet), laying wire and what one circuit is, what gives and
+  what uses power, levels 0-15, facing (placed facing away from you; gates'
+  inputs and output), the wrench, ticks, breaking and disarming.
+- **Every part by what it does**, each with its icon: wire and tools,
+  switches, sensors, logic, shows and opens, moves bricks, traps, wireless.
+  A part's lines are its item's own description (wiring.json) plus a tip
+  where one helps (`TIPS`), so the guide never says something the item does not.
+- **Traps to build**: arrow wall, collapsing bridge, cave-in, grenade nest,
+  vault alarm, flood room, lamp lure, the third step -- each with how to
+  disarm it where that is not obvious.
+- A new wiring device must be added to `WiringGuide.GROUPS`:
+  `wiring_traps_probe` fails when one in `MineWiring.DEVICES` is missing.
+- Fixed with it: the sequencer's item text (RMB opens its program, section 25)
+  and the wire's (no doc name in a player's text).
+
+Tests: `wiring_traps_probe` 93 ok (the guide lists every device, every part
+is an item, the page builds); `inventory_layout_probe` 33 ok (the Wiring tab
+keeps the screen's size at 1280x720, 800x450, 640x400); `--gate=wiring`
+opens E > Wiring: pictures `user://dev/wiring_guide.png`, `wiring_guide_2.png`.
+
 ## Sources
 
 - Minecraft quasi-connectivity: <https://techmcdocs.github.io/pages/GameMechanics/QuasiConnectivity>,
