@@ -95,6 +95,9 @@ uniform vec3 overlay_hole_lo[8];
 uniform vec3 overlay_hole_hi[8];
 const float OVERLAY_RECESS = 0.013;
 const float OVERLAY_PULL = 0.002;
+/// Where a brick face's middle can lie, in a tile's or section's own frame:
+/// half a stud across, half a plate up (brick_grid.h STUD_M 0.35, PLATE_M 0.14).
+const vec3 FACE_MID_GRID = vec3(0.175, 0.07, 0.175);
 
 group_uniforms studs;
 // Docs/Terrain.md section 7.2 tier 1: the cheapest stud there is. A dome
@@ -418,7 +421,17 @@ void vertex() {
         } else {
             foff = vec3(fd.x, 0.0, fd.y);
         }
-        face_mid = (MODEL_MATRIX * vec4(VERTEX + foff, 1.0)).xyz;
+        // SNAPPED to the grid a brick face's middle lies on (FACE_MID_GRID).
+        // The mesher grows a face's corners out by up to 2 cm (the overlap,
+        // the recess) and leaves their UV as it was, so unsnapped each corner
+        // found a middle up to 4 cm from the next: a face whose middle lay
+        // within 4 cm of the reach still had some corners folded to the
+        // tile's origin and the rest not -- thin stretched slivers to the
+        // origin, floor-to-ceiling slabs in caves that moved with the eye
+        // (the user, 2026-11-27). Snapped, every corner of a face lands on
+        // the same point (checked over the ~490k boxed and behind triangles
+        // of a cave's tiles and sections: none split, none moved over 2 cm).
+        face_mid = (MODEL_MATRIX * vec4(round((VERTEX + foff) / FACE_MID_GRID) * FACE_MID_GRID, 1.0)).xyz;
     }
     if (glass) {
         // Never under a brick: as it lies.
