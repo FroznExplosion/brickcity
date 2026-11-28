@@ -1113,6 +1113,52 @@ func _stage7(w: MineWiring) -> void:
 	_ok("a receiver's channel comes back", int(w3.devices[rnear].setting) == 1)
 	w3.queue_free()
 	_reset(w)
+	# Standing on a wire brick: a lever drives it, a lamp is lit by it; a
+	# gate does not take it (its inputs have sides).
+	_reset(w)
+	_wire(200, 0, 200)
+	_wire(201, 0, 200)
+	_wire(210, 0, 200)
+	_wire(220, 0, 200)
+	for y in 3:
+		_extra[Vector3i(221, y, 200)] = true
+	w.check(Vector3i(199, -1, 199), Vector3i(222, 3, 201))
+	var onlev := Vector3i(200, 3, 200)
+	var besidelamp := Vector3i(202, 0, 200)
+	w.place_device(onlev, &"lever")
+	w.place_device(besidelamp, &"lamp")
+	w.place_device(Vector3i(209, 0, 200), &"lever", true)
+	var onlamp := Vector3i(210, 3, 200)
+	w.place_device(onlamp, &"lamp")
+	w.place_device(Vector3i(219, 0, 200), &"lever", true)
+	var notg := Vector3i(220, 3, 200)
+	var notlamp := Vector3i(221, 3, 200)
+	w.place_device(notg, &"not_gate", false, false, 0)
+	w.place_device(notlamp, &"lamp")
+	_ticks(w, 3)
+	_ok("a lamp standing on a powered wire brick is lit", w.is_lit(onlamp))
+	_ok("a NOT gate on a powered wire brick does not read it: its lamp lit", w.is_lit(notlamp))
+	_ok("a lever on a wire brick, off: the lamp beside the wire dark", not w.is_lit(besidelamp))
+	w.use_device(onlev)
+	_ticks(w, 2)
+	_ok("on: it drives the brick it stands on, the lamp beside lit", w.is_lit(besidelamp))
+	# A receiver wired back to its own transmitter does not latch.
+	_reset(w)
+	var lt := Vector3i(229, 0, 230)
+	var t2 := Vector3i(230, 0, 230)
+	var r2 := Vector3i(240, 0, 230)
+	w.place_device(lt, &"lever")
+	w.place_device(t2, &"wire_transmitter")
+	w.place_device(r2, &"wire_receiver")
+	for x in range(231, 240):
+		w.place_cable(Vector3i(x, 0, 230))
+	w.use_device(lt)
+	_ticks(w, 4)
+	var was_on := w.output_of(r2) == 15 and w.level_at(Vector3i(235, 0, 230)) == 15
+	w.use_device(lt)
+	_ticks(w, 5)
+	_ok("a receiver wired back to its transmitter: on with the lever, off again", was_on and w.output_of(r2) == 0)
+	_reset(w)
 
 
 ## A creature as MineWiring.creature_feet reads one (Mob's fields).
