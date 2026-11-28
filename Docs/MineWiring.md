@@ -924,10 +924,19 @@ traps kit's), hooked into `MineWiring` at links, side nets, the rebuild,
   channel is the device's `setting`.
 - Items and icons: `wire_transmitter`, `wire_receiver` (model `link`: a
   brick, two antennas).
-- **Not yet:** a device does not read the wire brick it stands on; a
-  receiver feeding its own transmitter through a cable does hold itself on
-  (as any loop of drivers would); the band glows per node, not per face;
-  links do not reach past the loaded world (a far circuit is frozen, 4).
+- **Standing on a wire brick** (built the same day, from the user's "not
+  built yet"): a device reads and drives the wire brick right under it --
+  a lever on a wire wall powers it, a lamp, door, piston or link on one
+  follows it. Gates and observers do not: their inputs and output have
+  sides (`WiringLinks.side_nets`, `under`).
+- **No latch through a wire:** a transmitter reading a net its own
+  channel's receivers also drive leaves their part out
+  (`net_level_without`), so a receiver wired back to its transmitter goes
+  off with the lever. A loop through a gate is still a loop (a clock or a
+  latch, as any gate loop is).
+- **Left as they are, on purpose:** the band glows per node, not per face
+  (the look only); links do not reach past the loaded world (a far circuit
+  is frozen, section 4).
 
 Tests: `wiring_probe` 170 ok (stage 7: the material; a check over an
 edit finds three wire bricks as one net; a lever lights a lamp up and along
@@ -936,7 +945,11 @@ a cable on a wire brick's top joins it; saved; a receiver 40 studs away
 follows its channel, another channel stays dark, RMB / shift+RMB step the
 colours, the readout names the channel, no latch beside its own
 transmitter, the channel saved; the wire brick is a block item named Wire
-brick; the link models). `--gate=wiring` stage 7: a wire brick laid with
+brick; the link models; a lamp on a powered wire brick lit, a NOT gate on
+one not reading it, a lever on one driving it; a receiver wired back to its
+transmitter goes off -- wiring_probe 201 ok with the gaps' checks).
+`--gate=wiring` stage 7 (148 ok in all on 2026-11-28, a lever standing on
+a wire brick lighting a lamp beside it included): a wire brick laid with
 the builder (a 2x2 block: four nodes) is known to the wiring; a wall of wire
 bricks, one up a course, carries a lever's power to a lamp; a real shot
 breaking its lower brick cuts it; a receiver 14 studs off lights its lamp
