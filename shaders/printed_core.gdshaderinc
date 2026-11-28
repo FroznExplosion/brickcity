@@ -81,8 +81,8 @@ uniform float sky_light_curve : hint_range(0.5, 0.95) = 0.8;
 // A brick the overlay hid the frame it was shot (TerrainBricks.hide_at,
 // Docs/BrickOverlay.md stage 6): its studs go with it till its tile is rebuilt.
 uniform int overlay_holes = 0;
-uniform vec3 overlay_hole_lo[8];
-uniform vec3 overlay_hole_hi[8];
+uniform vec3 overlay_hole_lo[32];
+uniform vec3 overlay_hole_hi[32];
 uniform float sky_sun_power : hint_range(1.0, 4.0) = 2.0;
 uniform vec3 block_light_colour : source_color = vec3(1.0, 0.52, 0.22);
 uniform float block_light_energy : hint_range(0.0, 4.0) = 1.0;
@@ -131,7 +131,7 @@ void vertex() {
     if (overlay_holes > 0) {
         // The stud's foot, a centimetre down into the brick it stands on.
         vec3 foot = MODEL_MATRIX[3].xyz - vec3(0.0, 0.01, 0.0);
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < 32; i++) {
             if (i >= overlay_holes) {
                 break;
             }

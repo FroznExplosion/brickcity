@@ -407,6 +407,7 @@ func _exit_tree() -> void:
 		if is_instance_valid(old):
 			old.free()
 	_far_dying.clear()
+	TerrainCoarse._graveyard.clear()
 	# Every other scene expects the classic field.
 	_teardown()
 	BrickTerrain.set_generator(0)
@@ -983,6 +984,11 @@ func _land_breaks() -> void:
 			if hole >= 0:
 				bricks.drop_hole(hole)
 			continue
+		# Several bricks (a blast): every cleared cell goes now, as one shot's
+		# brick does (TerrainBricks.hide_cells).
+		var many: Array[int] = []
+		if hole < 0 and bricks != null and _overlay_on:
+			many = bricks.hide_cells(runs)
 		var logged := {}
 		if _streamer != null and _streamer.log_latency:
 			logged = {"shot": job[3], "found": Time.get_ticks_usec()}
@@ -994,6 +1000,8 @@ func _land_breaks() -> void:
 		# What a shot destroys is gone (the user, 2026-11-20): no brick thrown.
 		# What it leaves hanging falls -- the collapse, from terrain_edited.
 		terrain_edited(res)
+		for id in many:
+			_hole_wait(id, res)
 		if hole >= 0:
 			_hole_wait(hole, res)
 			if not logged.is_empty():
@@ -1045,6 +1053,15 @@ func _break_from_box(hole: int, box: AABB) -> void:
 
 ## A hidden brick's hole stays till the tiles and sections the edit rebuilt
 ## are drawn at the generations it set (TerrainBricks.hole_wait).
+## A break that cleared `runs` itself (a pickaxe, a block by hand): its cells
+## hidden at once and kept so till the rebuilt tiles are drawn.
+func hide_cleared(runs: PackedInt32Array, res: Dictionary) -> void:
+	if bricks == null or not _overlay_on:
+		return
+	for id in bricks.hide_cells(runs):
+		_hole_wait(id, res)
+
+
 func _hole_wait(hole: int, res: Dictionary) -> void:
 	var want := {}
 	var tl: PackedInt32Array = res["tiles"]
@@ -1458,6 +1475,7 @@ const FAR_FREE_PER_FRAME := 12
 
 
 func _free_old_far() -> void:
+	TerrainCoarse.free_some()
 	var n := FAR_FREE_PER_FRAME
 	while n > 0 and not _far_dying.is_empty():
 		var old: Node = _far_dying[0]
@@ -7253,6 +7271,9 @@ func _run_multibreak_gate() -> void:
 			if f > 60 and _streamer._tasks.is_empty() and _streamer._swaps.is_empty() and _streamer._dirty.is_empty():
 				break
 		await _frames(20)
+		if "--multibreak-shots" in OS.get_cmdline_user_args():
+			await RenderingServer.frame_post_draw
+			get_viewport().get_texture().get_image().save_png(UserPaths.DEV + "multibreak_%d_%s_before.png" % [k, way])
 		edit_log.clear()
 		var edits0 := BrickTerrain.get_edit_count()
 		var t0 := Time.get_ticks_usec()
@@ -7291,6 +7312,7 @@ func _run_multibreak_gate() -> void:
 		var frames := 0
 		var last := Time.get_ticks_usec()
 		var held := 0
+		var hid_boxes := 0
 		for f in 300:
 			if way.ends_with("_hold") and (Time.get_ticks_usec() - t0) < 1000000 					and (Time.get_ticks_usec() - t0) / 1000000.0 >= held * builder._break_repeat():
 				builder.update_target()
@@ -7306,6 +7328,11 @@ func _run_multibreak_gate() -> void:
 				slow += 1
 			if landed < 0.0 and not edit_log.is_empty():
 				landed = (int(edit_log[0].t) - t0) / 1000.0
+				hid_boxes = bricks.holes.size() if bricks != null else 0
+				if "--multibreak-shots" in OS.get_cmdline_user_args():
+					# The frame it landed (the tile not yet rebuilt): what is seen.
+					await RenderingServer.frame_post_draw
+					get_viewport().get_texture().get_image().save_png(UserPaths.DEV + "multibreak_%d_%s_landed.png" % [k, way])
 			if landed >= 0.0 and seen < 0.0 and (not way.ends_with("_hold") or now - t0 > 1000000):
 				var all := true
 				for ed: Dictionary in edit_log:
@@ -7317,6 +7344,10 @@ func _run_multibreak_gate() -> void:
 							all = false
 				if all:
 					seen = (now - t0) / 1000.0
+					if "--multibreak-shots" in OS.get_cmdline_user_args():
+						await _frames(3)
+						await RenderingServer.frame_post_draw
+						get_viewport().get_texture().get_image().save_png(UserPaths.DEV + "multibreak_%d_%s_drawn.png" % [k, way])
 			if seen >= 0.0 and f > int(seen / 16.0) + 30:
 				break
 		builder.set_active(false)
@@ -7339,6 +7370,7 @@ func _run_multibreak_gate() -> void:
 				way, ok, edit_log.size(), cells, tiles_n, deep_n, landed, seen, frames, worst, slow,
 				", ".join(pp) if not pp.is_empty() else "-"]
 		print("[multibreak] " + line)
+		print("[multibreak]    hidden at once (overlay holes when it landed): %d" % hid_boxes)
 		if slow > 0:
 			print("[multibreak]    slowest: %s" % _slow_last)
 		for ed: Dictionary in edit_log:

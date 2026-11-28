@@ -91,8 +91,8 @@ uniform float overlay_fade = 1.5;
 // frame (TerrainBricks.hide_at); the flat faces of that brick fold to a point
 // here till the rebuilt tile is drawn. World space; `overlay_holes` of them.
 uniform int overlay_holes = 0;
-uniform vec3 overlay_hole_lo[8];
-uniform vec3 overlay_hole_hi[8];
+uniform vec3 overlay_hole_lo[32];
+uniform vec3 overlay_hole_hi[32];
 const float OVERLAY_RECESS = 0.013;
 const float OVERLAY_PULL = 0.002;
 /// Where a brick face's middle can lie, in a tile's or section's own frame:
@@ -465,7 +465,7 @@ void vertex() {
                 off = vec3(d.x, 0.0, d.y);
             }
             vec3 mid = (MODEL_MATRIX * vec4(sunk + off - n * 0.01, 1.0)).xyz;
-            for (int i = 0; i < 8; i++) {
+            for (int i = 0; i < 32; i++) {
                 if (i >= overlay_holes) {
                     break;
                 }

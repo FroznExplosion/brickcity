@@ -76,7 +76,7 @@ const CAP_STEP := 512
 ## Holes shown at once, each {id, lo, hi, want (tile -> gen), deep (key ->
 ## gen), rect, at (msec), waiting (no field edit yet)}. The shader takes
 ## MAX_HOLES; past it the oldest still waits for its tile.
-const MAX_HOLES := 8
+const MAX_HOLES := 32
 ## A hole whose shot found nothing (no edit) goes after this; any after this.
 const HOLE_NO_EDIT_MS := 600
 const HOLE_MAX_MS := 3000
@@ -371,6 +371,95 @@ func _hide_far(q: Vector3) -> int:
 	far_hidden += 1
 	_push_holes()
 	return _hole_id
+
+
+## MANY BRICKS AT ONCE (a grenade, a pickaxe's face, a block by hand): the
+## cleared cells (`runs`: x, z, first plate, last plate a column, as
+## clear_runs takes them) go the frame they are cleared, as a shot's brick
+## does -- as boxes covering exactly those cells (columns joined, then same-
+## height columns into rectangles), so a face folds only if its brick's middle
+## was cleared. The overlay re-picks without them (overlay_pick skips holes).
+## Their ids, for hole_wait; none when they would not all fit (MAX_HOLES), or
+## without behind faces (a hole's walls would be the stand-ins'). The user,
+## 2026-11-27: one brick goes at once, several lagged to the tile's rebuild.
+func hide_cells(runs: PackedInt32Array) -> Array[int]:
+	var ids: Array[int] = []
+	if not enabled or runs.is_empty() or not BrickTerrain.get_behind_faces():
+		return ids
+	# Each column's runs, joined where they touch.
+	var cols := {}
+	for i in range(0, runs.size() - 3, 4):
+		var k := Vector2i(runs[i], runs[i + 1])
+		if not cols.has(k):
+			cols[k] = []
+		(cols[k] as Array).append(Vector2i(runs[i + 2], runs[i + 3]))
+	var by_span := {}   # Vector2i(p0, p1) -> {Vector2i(x, z): true}
+	for k in cols:
+		var rs: Array = cols[k]
+		rs.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return a.x < b.x)
+		var cur: Vector2i = rs[0]
+		for j in range(1, rs.size() + 1):
+			var nx: Vector2i = rs[j] if j < rs.size() else Vector2i(1 << 30, 1 << 30)
+			if j < rs.size() and nx.x <= cur.y + 1:
+				cur.y = maxi(cur.y, nx.y)
+				continue
+			if not by_span.has(cur):
+				by_span[cur] = {}
+			by_span[cur][k] = true
+			cur = nx
+	# Same-height columns into rectangles (greedy: along x, then down z).
+	var boxes: Array = []
+	for sp in by_span:
+		var cells: Dictionary = by_span[sp]
+		var keys: Array = cells.keys()
+		keys.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return a.y < b.y or (a.y == b.y and a.x < b.x))
+		var used := {}
+		for c: Vector2i in keys:
+			if used.has(c):
+				continue
+			var x1 := c.x
+			while cells.has(Vector2i(x1 + 1, c.y)) and not used.has(Vector2i(x1 + 1, c.y)):
+				x1 += 1
+			var z1 := c.y
+			var grow := true
+			while grow:
+				for x in range(c.x, x1 + 1):
+					var q := Vector2i(x, z1 + 1)
+					if not cells.has(q) or used.has(q):
+						grow = false
+						break
+				if grow:
+					z1 += 1
+			for z in range(c.y, z1 + 1):
+				for x in range(c.x, x1 + 1):
+					used[Vector2i(x, z)] = true
+			boxes.append([Vector3i(c.x, sp.x, c.y), Vector3i(x1, sp.y, z1)])
+			if holes.size() + boxes.size() > MAX_HOLES:
+				return ids
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var empty := PackedFloat32Array()
+	empty.resize(STRIDE)
+	var now := Time.get_ticks_msec()
+	for b in boxes:
+		var lo: Vector3i = b[0]
+		var hi: Vector3i = b[1]
+		_hole_id += 1
+		holes.append({"id": _hole_id, "lo": Vector3(lo.x * stud, lo.y * plate, lo.z * stud),
+				"hi": Vector3((hi.x + 1) * stud, (hi.y + 1) * plate, (hi.z + 1) * stud),
+				"want": {}, "deep": {}, "rect": Rect2i(), "at": now, "waiting": true,
+				"slot": empty, "sky": 15.0})
+		ids.append(_hole_id)
+	hidden_total += 1
+	_push_holes()
+	# Picked again now, without them: in this frame's picture.
+	var cam := get_viewport().get_camera_3d() if get_viewport() != null else null
+	if cam != null and world != null:
+		fill(world.to_local(cam.global_position),
+				world.global_transform.basis.inverse() * -cam.global_transform.basis.z, cam)
+	else:
+		refresh()
+	return ids
 
 
 ## The shot's edit landed: the hole shows till these tiles (Vector2i ->

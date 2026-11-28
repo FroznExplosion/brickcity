@@ -105,6 +105,17 @@ var _tile_step := {}
 var _tile_step_at := Vector2i.ZERO
 ## Layouts made, by reach and detail (build_begin): shared by every tier.
 static var _layouts := {}
+## Finished builds' bakes waiting to be let go, FREE_PER_FRAME a call.
+static var _graveyard: Array = []
+const FREE_PER_FRAME := 24
+
+
+static func free_some() -> void:
+	var n := mini(FREE_PER_FRAME, _graveyard.size())
+	if n > 0:
+		_graveyard.resize(_graveyard.size() - n)
+var _cover_key: Array = []
+var _refine_seen: Array = []
 ## What the last build_poll spent its time on (a gate's line).
 var last_poll_note := ""
 
@@ -337,13 +348,13 @@ func build_poll(budget_ms := -1.0) -> bool:
 	if not _assemble(job, budget_ms, t0):
 		last_poll_note += " assemble %.1f (%d of %d)" % [(Time.get_ticks_usec() - t0) / 1000.0, int(job.next), (job.blocks as Array).size()]
 		return false
-	# The bakes' arrays (every block's mesh, ~360k triangles) let go on a
-	# worker: dropped here they were ~9 ms of freeing in the swap's frame.
+	# The bakes' arrays (every block's mesh, ~360k triangles) let go a slice
+	# a frame (free_some): dropped here they were ~9 ms of freeing in the
+	# swap's frame. (Dropped on a worker, the engine crashed at exit.)
 	_build_job = {}
 	if budget_ms > 0.0:
-		var dead := [job]
-		job = {}
-		WorkerThreadPool.add_task(func() -> void: dead.clear(), false, "coarse build freed")
+		_graveyard.append_array(job.get("baked", []))
+		(job.get("merged", {}) as Dictionary).clear()
 	return true
 
 
@@ -656,6 +667,13 @@ func cover(streamer: TerrainStreamer, wait := true) -> void:
 		_job_wait_all(_refine_job)
 		_refine_for(streamer.current_region())    # lands it
 		_refine_for(streamer.current_region())    # and starts any further split
+	# Nothing changed since the last walk (the same resident tiles, the same
+	# blocks): standing still it walked every small block's tiles each frame,
+	# ~0.5 ms (--gate=cpu, 2026-11-27).
+	var key := [streamer.tiles_version, _far_nodes.size(), anchor, streamer]
+	if key == _cover_key and not wait:
+		return
+	_cover_key = key
 	_far_hidden = 0
 	for i in _far_nodes.size():
 		if _far_nodes[i] == null:
@@ -719,6 +737,10 @@ func _refine_for(detail: Rect2i) -> void:
 		return           # one split at a time; the next call sees the rest
 	if hold:
 		return
+	# The same detail square over the same blocks found nothing to split.
+	var seen := [detail, _all_rects.size()]
+	if seen == _refine_seen:
+		return
 	var todo: Array[int] = []
 	for i in _all_rects.size():
 		if _all_rects[i].size.x <= _split_to:
@@ -728,7 +750,9 @@ func _refine_for(detail: Rect2i) -> void:
 		if _all_rects[i].intersects(detail):
 			todo.append(i)
 	if todo.is_empty():
+		_refine_seen = seen
 		return
+	_refine_seen = []
 
 	var new_rects: Array[Rect2i] = []
 	var spans := {}

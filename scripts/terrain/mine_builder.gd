@@ -399,7 +399,7 @@ func _process(delta: float) -> void:
 	var captured0 := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED or PlayerCamera.hands_off
 	if offhand_builds():
 		if not active:
-			update_target()
+			_frame_target()
 		if captured0 and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) and not host.inventory_open():
 			_hold_off -= delta
 			if _hold_off <= 0.0:
@@ -411,7 +411,7 @@ func _process(delta: float) -> void:
 		if host.wiring != null:
 			host.wiring.show_wrench(false, {})
 		return
-	update_target()
+	_frame_target()
 	var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
 	if captured and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 		_hold_break -= delta
@@ -434,6 +434,26 @@ func _process(delta: float) -> void:
 
 # ---------------------------------------------------------------------------
 # The block looked at
+
+## The frame's look: update_target only when the eye moved or turned, the
+## field was edited, or TARGET_REFRESH_FRAMES went by (a piece falling into
+## view, a device switched). Its five rays every frame were ~0.6 ms standing
+## still (--gate=cpu, 2026-11-27). Breaking and placing call update_target.
+const TARGET_REFRESH_FRAMES := 6
+var _look_key: Array = []
+var _look_age := 0
+
+
+func _frame_target() -> void:
+	var c: Camera3D = host._eye_camera()
+	var key := [c.global_transform, BrickTerrain.get_edit_count(), farm_from.is_empty()]
+	_look_age += 1
+	if key == _look_key and _look_age < TARGET_REFRESH_FRAMES:
+		return
+	_look_key = key
+	_look_age = 0
+	update_target()
+
 
 func update_target() -> void:
 	var c: Camera3D = host._eye_camera()
@@ -716,6 +736,12 @@ func break_target() -> bool:
 	log_blocks.append("break %s" % _block_of(target.cell))
 	var at := _cell_lo(_block_of(target.cell)) + _block_size_m() * 0.5
 	host.terrain_edited(res)
+	# Its cells go now (as a pickaxe's bricks do): the box, a column each.
+	var box_runs := PackedInt32Array()
+	for z in range(c[0].z, c[1].z + 1):
+		for x in range(c[0].x, c[1].x + 1):
+			box_runs.append_array([x, z, c[0].y, c[1].y])
+	host.hide_cleared(box_runs, res)
 	MineRain.melt(material, c[0], c[1])
 	if host.farming != null:
 		host.farming.cells_changed(c[0], c[1])
@@ -845,6 +871,7 @@ func _land_picks() -> void:
 		broken += 1
 		log_blocks.append("pick %d plates" % removed)
 		host.terrain_edited(res)
+		host.hide_cleared(runs, res)
 		if res.has("box_lo"):
 			MineRain.melt(int(job[2]), res.box_lo, res.box_hi)
 		var id := ItemCatalog.block_item(int(job[2]))
