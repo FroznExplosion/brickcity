@@ -1072,7 +1072,9 @@ func side_nets(c: Vector3i, s: Vector3i) -> Array:
 		if net_of.has(n) and not out.has(net_of[n]):
 			out.append(net_of[n])
 	if not wires.is_empty():
-		WiringLinks.side_nets(self, c, s, plates_of(devices[c].item) if devices.has(c) else COURSE, out)
+		var dk := str(DEVICES[devices[c].item].kind) if devices.has(c) else ""
+		WiringLinks.side_nets(self, c, s, plates_of(devices[c].item) if devices.has(c) else COURSE, out,
+				dk != "gate" and dk != "observer")
 	return out
 
 

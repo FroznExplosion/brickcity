@@ -369,6 +369,8 @@ func _ready() -> void:
 			_run_breaklag_gate()
 		elif "--gate=mega" in OS.get_cmdline_user_args():
 			_run_mega_gate()
+		elif "--gate=multibreak" in OS.get_cmdline_user_args():
+			_run_multibreak_gate()
 		elif "--gate=shift" in OS.get_cmdline_user_args():
 			_run_shift_gate()
 		elif "--gate=deep" in OS.get_cmdline_user_args():
@@ -1064,14 +1066,30 @@ func _wait_breaks() -> void:
 
 ## The field changed (a shot, a block broken or placed): rebake the tiles it
 ## names behind the old ones, and the far blocks over them.
+## --gate=multibreak: each edit's time and its parts' ms (only while on).
+var edit_log_on := false
+var edit_log: Array = []
+
+
 func terrain_edited(res: Dictionary) -> void:
+	var t0 := Time.get_ticks_usec()
+	var parts := {}
+	var tick := func(k: String) -> void:
+		if edit_log_on:
+			var now := Time.get_ticks_usec()
+			parts[k] = (now - t0) / 1000.0 - float(parts.get("_sum", 0.0))
+			parts["_sum"] = (now - t0) / 1000.0
 	if farming != null:
 		farming.terrain_changed()     # fields: a wall built or broken
+	tick.call("farming")
 	if mobs != null:
 		mobs.terrain_edited(res)      # the creatures' nav forgets that box
+	tick.call("mobs")
 	water.terrain_changed(res)
+	tick.call("water")
 	# A stamped building undermined on one side tips (Docs/TerrainBuildings.md 4b).
 	MineBuildings.after_edit(self, res)
+	tick.call("buildings")
 	if chests != null:
 		chests.check()
 	if wiring != null:
@@ -1081,13 +1099,23 @@ func terrain_edited(res: Dictionary) -> void:
 			wiring.check()
 	if drops != null:
 		drops.wake()
+	tick.call("chests_wiring_drops")
 	if sky_lit != null and res.has("box_lo"):
 		sky_lit.dirty_box(res.box_lo, res.box_hi)
+	tick.call("sky_lit")
 	if _deep != null and res.has("box_lo"):
 		_deep.refresh_box(res.box_lo, res.box_hi)
+	tick.call("deep")
 	if collapse != null and not bool(res.get("anchored", false)):
 		collapse.queue(res)
+	tick.call("collapse")
 	var tiles: PackedInt32Array = res["tiles"]
+	if edit_log_on:
+		var st := get_stack()
+		var who := ""
+		for fr in range(1, mini(4, st.size())):
+			who += "%s:%d<" % [str(st[fr].source).get_file().get_basename(), int(st[fr].line)]
+		edit_log.append({"t": t0, "res": res, "parts": parts, "who": who})
 	if tiles.is_empty():
 		return
 	var lo := Vector2i(1 << 30, 1 << 30)
@@ -1100,6 +1128,22 @@ func terrain_edited(res: Dictionary) -> void:
 	_pending_tiles = rect if not _pending_tiles.has_area() else _pending_tiles.merge(rect)
 	if not _coalesce or _refresh_in <= 0.0:
 		_flush_edits()
+	if edit_log_on:
+		var e: Dictionary = edit_log[-1]
+		e.parts["flush"] = (Time.get_ticks_usec() - t0) / 1000.0 - float(e.parts.get("_sum", 0.0))
+		e.parts.erase("_sum")
+		var want := {}
+		for i in range(0, tiles.size(), 2):
+			var c := Vector2i(tiles[i], tiles[i + 1])
+			if _streamer.has_tile(c):
+				want[c] = int(_streamer._gen.get(c, 0))
+		e["want"] = want
+		var deep := {}
+		if _deep != null and res.has("box_lo"):
+			for k in _deep._box_keys(res.box_lo, res.box_hi):
+				if _deep._secs.has(k) and _deep._secs[k] != null:
+					deep[k] = int(_deep._gen.get(k, 0))
+		e["deep"] = deep
 
 
 ## No tile over `rect` (tiles) waits to be rebuilt: what fell from it is drawn
@@ -4343,7 +4387,8 @@ func _gpu_line(label: String, m: Dictionary, base: Dictionary) -> String:
 func _gpu_hide(nodes: Array) -> void:
 	for n in nodes:
 		if n != null and is_instance_valid(n):
-			_gpu_saved[n] = (n as Node3D).visible
+			if not _gpu_saved.has(n):
+				_gpu_saved[n] = (n as Node3D).visible
 			(n as Node3D).visible = false
 
 
@@ -4355,7 +4400,8 @@ func _gpu_shadows_off(roots: Array) -> void:
 		if r is GeometryInstance3D:
 			list.append(r)
 		for g in list:
-			_gpu_saved[g] = (g as GeometryInstance3D).cast_shadow
+			if not _gpu_saved_sh.has(g):
+				_gpu_saved_sh[g] = (g as GeometryInstance3D).cast_shadow
 			(g as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 
@@ -4389,14 +4435,117 @@ func _gpu_sea_cull(on: bool) -> void:
 
 func _gpu_back() -> void:
 	for n in _gpu_saved:
-		if not is_instance_valid(n):
-			continue
-		var v = _gpu_saved[n]
-		if v is bool:
-			(n as Node3D).visible = v
-		else:
-			(n as GeometryInstance3D).cast_shadow = v
+		if is_instance_valid(n):
+			(n as Node3D).visible = _gpu_saved[n]
 	_gpu_saved.clear()
+	for g in _gpu_saved_sh:
+		if is_instance_valid(g):
+			(g as GeometryInstance3D).cast_shadow = _gpu_saved_sh[g]
+	_gpu_saved_sh.clear()
+
+
+var _gpu_saved_sh := {}
+
+
+## -- --gate=gpu --gpu-ladder: STRIPPED STEP BY STEP (the user, 2026-11-27:
+## "disable a lot of things ... to see what really is the cost"). Each step
+## is switched off ON TOP of the ones before, measured, and kept off: the
+## last row is the sky alone. Each row: the frame left, and what that step
+## took (against the row before). Then all back, and the render scale rows
+## (FSR upscaling) with everything on.
+func _gpu_ladder(view_name: String) -> void:
+	print("[gpu] --- ladder: %s ---" % view_name)
+	var vp := get_viewport()
+	var env := _rig.env
+	var sun := _rig.sun
+	var undo: Array[Callable] = []
+	var env0 := {}
+	for k in ["glow_enabled", "ssao_enabled", "ssil_enabled", "ssr_enabled", "sdfgi_enabled",
+			"fog_enabled", "volumetric_fog_enabled"]:
+		env0[k] = env.get(k)
+	var aa0 := [vp.msaa_3d, vp.screen_space_aa, vp.use_taa]
+	var steps: Array = [
+		["post off (glow SSAO SSIL SSR SDFGI fog)", func():
+			for k in env0:
+				env.set(k, false)],
+		["anti-aliasing off (MSAA FXAA TAA)", func():
+			vp.msaa_3d = Viewport.MSAA_DISABLED
+			vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
+			vp.use_taa = false],
+		["day/night not written (held)", func(): sky_hold = true],
+		["sun shadows off", func(): sun.shadow_enabled = false],
+		["other lights off (lamps, lava, torch)", func():
+			var ls: Array = []
+			for l in get_tree().root.find_children("*", "Light3D", true, false):
+				if l != sun:
+					ls.append(l)
+			_gpu_hide(ls)],
+		["water hidden", func(): _gpu_hide([water])],
+		["trees hidden", func(): _gpu_hide([_trees])],
+		["far tier (LOD 1+) hidden", func(): _gpu_hide([_far])],
+		["deep tier hidden", func(): _gpu_hide([_deep])],
+		["behind faces hidden", func(): _gpu_hide(_gpu_behind())],
+		["brick overlay off", func():
+			if bricks != null:
+				bricks.set_enabled(false)],
+		["studs/tufts/pebbles hidden", func(): _gpu_hide(_gpu_instances())],
+		["near tiles hidden (sky only)", func(): _gpu_hide([_streamer])],
+	]
+	var prev := await _gpu_measure()
+	print(_gpu_line("everything on", prev, {}))
+	var first: Dictionary = prev
+	for st in steps:
+		(st[1] as Callable).call()
+		var m := await _gpu_measure()
+		print(_gpu_line("- " + str(st[0]), m, prev))
+		prev = m
+	print("[gpu] ladder: everything on %.2f ms GPU, sky only %.2f (frame %.2f -> %.2f)" % [
+			float(first.gpu), float(prev.gpu), float(first.frame), float(prev.frame)])
+	# All back.
+	for k in env0:
+		env.set(k, env0[k])
+	vp.msaa_3d = aa0[0]
+	vp.screen_space_aa = aa0[1]
+	vp.use_taa = aa0[2]
+	sky_hold = false
+	sun.shadow_enabled = true
+	if bricks != null:
+		bricks.set_enabled(true)
+	_gpu_back()
+	await _frames(30)
+	var scale0 := vp.scaling_3d_scale
+	var mode0 := vp.scaling_3d_mode
+	var base := await _gpu_measure()
+	print(_gpu_line("all back (scale %.2f)" % scale0, base, {}))
+	for sc in [0.85, 0.75, 0.67, 0.5]:
+		vp.scaling_3d_mode = Viewport.SCALING_3D_MODE_FSR
+		vp.scaling_3d_scale = sc
+		var m := await _gpu_measure()
+		print(_gpu_line("render scale %.2f (FSR 1)" % sc, m, base))
+	vp.scaling_3d_mode = mode0
+	vp.scaling_3d_scale = scale0
+	await _frames(10)
+	# The shadow filter (Shadow Quality) and the sky's own shader, all else on.
+	var ms_node := get_node_or_null(^"/root/MenuSettings")
+	if ms_node != null:
+		var q0: int = int(ms_node.get_value(&"shadow_quality"))
+		base = await _gpu_measure()
+		print(_gpu_line("all on, shadow quality %d" % q0, base, {}))
+		for q in [1, 3]:
+			if q == q0:
+				continue
+			ms_node.set_value(&"shadow_quality", q, false)     # in memory: never saved
+			await _frames(10)
+			var m := await _gpu_measure()
+			print(_gpu_line("shadow quality %d" % q, m, base))
+		ms_node.set_value(&"shadow_quality", q0, false)
+		await _frames(10)
+	var bg0 := env.background_mode
+	base = await _gpu_measure()
+	env.background_mode = Environment.BG_COLOR
+	var msky := await _gpu_measure()
+	env.background_mode = bg0
+	print(_gpu_line("sky shader -> plain colour", msky, base))
 
 
 ## Every instance node (studs, tufts, pebbles, bricks) of the near tiles.
@@ -4596,13 +4745,19 @@ func _run_gpu_gate() -> void:
 	await _frames(180)
 	var tag := "near%d" % roundi(_trees.near_m)
 	await _shot(UserPaths.DEV + "mine_gpu_ground_%s.png" % tag)
-	await _gpu_view("on foot, along the ground")
+	if "--gpu-ladder" in OS.get_cmdline_user_args():
+		await _gpu_ladder("on foot, along the ground")
+	else:
+		await _gpu_view("on foot, along the ground")
 	# 2: over the land to the horizon.
 	_fly_to(e + Vector3(0, 25.0, 0), Vector3(1, 0, 0.3).normalized())
 	walker.pitch = -0.12
 	await _frames(240)
 	await _shot(UserPaths.DEV + "mine_gpu_up_%s.png" % tag)
-	await _gpu_view("25 m up, to the horizon")
+	if "--gpu-ladder" in OS.get_cmdline_user_args():
+		await _gpu_ladder("25 m up, to the horizon")
+	else:
+		await _gpu_view("25 m up, to the horizon")
 	print("[gpu] sky writes %d over the pass (LightRig.sky_writes)" % _rig.sky_writes)
 	if menu_settings != null:
 		menu_settings.set_value(&"vsync", menu_settings.default_of(&"vsync"), false)
@@ -7013,6 +7168,145 @@ func _pond_units(o: Vector2i, w: int) -> int:
 ## at it, place a pillar, break a block out of it, picture it.
 ## -- --gate=mega: the Mega Pickaxe against the pickaxe, looking down at flat
 ## ground: the plate cells one break clears, and the hold repeat of each.
+## -- --gate=multibreak: MANY BRICKS BROKEN AT ONCE against one (the user,
+## 2026-11-27: one brick at a time is near instant, several at once lag from
+## when they should go to when they do). Each way of breaking, on fresh ground
+## a tile apart, timed from the trigger to: the edit landing in the field
+## (terrain_edited; its parts' ms), every tile and deep section it changed
+## DRAWN at the generation it set (the hole seen), and the frames meanwhile
+## (worst, and over 25 ms). A report, not checks.
+func _run_multibreak_gate() -> void:
+	await _frames(60)
+	set_on_foot(false)
+	await _frames(30)
+	var stud := BrickWorld.get_stud_metres()
+	var e0 := _eye()
+	var c0 := Vector2i(floori(e0.x / stud), floori(e0.z / stud))
+	var tile := BrickTerrain.get_tile_studs()
+	edit_log_on = true
+	var ways := ["shot", "pickaxe", "hand_block", "mega_pickaxe", "grenade", "grenade", "mega_pickaxe"]
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--ways="):
+			ways = Array(arg.get_slice("=", 1).split(","))
+	var k := 0
+	var summary: Array[String] = []
+	for way in ways:
+		k += 1
+		# Fresh ground, a tile and a half on each time (mid tile: one tile's edit).
+		var c := c0 + Vector2i(k * tile + tile / 2, tile / 2)
+		var g := _ground_m(c.x, c.y)
+		_fly_to(Vector3((c.x + 0.5) * stud, g + 2.0, (c.y + 0.5) * stud), Vector3(0, 0, -1))
+		walker.pitch = -1.45
+		# Let streaming round the new spot settle: the edit must not wait
+		# behind first bakes (that is a different lag, the flight gate's).
+		for f in 600:
+			await get_tree().process_frame
+			if f > 60 and _streamer._tasks.is_empty() and _streamer._swaps.is_empty() and _streamer._dirty.is_empty():
+				break
+		await _frames(20)
+		edit_log.clear()
+		var edits0 := BrickTerrain.get_edit_count()
+		var t0 := Time.get_ticks_usec()
+		var ok := false
+		match way:
+			"shot":
+				_mine(Vector3((c.x + 0.5) * stud, g - 0.05, (c.y + 0.5) * stud), Vector3.DOWN, null)
+				ok = true
+			"grenade":
+				blast(to_global(Vector3((c.x + 0.5) * stud, g, (c.y + 0.5) * stud)), 1.2)
+				ok = true
+			"mega_hold", "pick_hold":
+				# Held down: a break every _break_repeat for a second (below).
+				builder.set_active(true)
+				builder.select(&"mega_pickaxe" if way == "mega_hold" else &"pickaxe")
+				ok = true
+			"hand_block":
+				builder.set_active(true)
+				builder.update_target()
+				var id := ItemCatalog.block_item(int(builder.target.get("material", 0)))
+				builder.select(id if id != &"" else &"dirt")
+				builder.update_target()
+				ok = builder.break_target()
+			_:
+				builder.set_active(true)
+				builder.select(StringName(way))
+				builder.update_target()
+				var tk := str(builder.target.keys())
+				ok = builder.break_target()
+				print("[multibreak]    %s: hand %s, target %s, log %s" % [way, builder.hand_kind(), tk,
+						builder.log_blocks.slice(-1)])
+		var landed := -1.0
+		var seen := -1.0
+		var worst := 0.0
+		var slow := 0
+		var frames := 0
+		var last := Time.get_ticks_usec()
+		var held := 0
+		for f in 300:
+			if way.ends_with("_hold") and (Time.get_ticks_usec() - t0) < 1000000 					and (Time.get_ticks_usec() - t0) / 1000000.0 >= held * builder._break_repeat():
+				builder.update_target()
+				if builder.break_target():
+					held += 1
+			await get_tree().process_frame
+			var now := Time.get_ticks_usec()
+			var ms := (now - last) / 1000.0
+			last = now
+			frames += 1
+			worst = maxf(worst, ms)
+			if ms > 25.0:
+				slow += 1
+			if landed < 0.0 and not edit_log.is_empty():
+				landed = (int(edit_log[0].t) - t0) / 1000.0
+			if landed >= 0.0 and seen < 0.0 and (not way.ends_with("_hold") or now - t0 > 1000000):
+				var all := true
+				for ed: Dictionary in edit_log:
+					for cc in ed.get("want", {}):
+						if int(_streamer.drawn_gen.get(cc, -1)) < int(ed.want[cc]):
+							all = false
+					for dk in ed.get("deep", {}):
+						if int(_deep.drawn_gen.get(dk, -1)) < int(ed.deep[dk]):
+							all = false
+				if all:
+					seen = (now - t0) / 1000.0
+			if seen >= 0.0 and f > int(seen / 16.0) + 30:
+				break
+		builder.set_active(false)
+		if held > 0:
+			print("[multibreak]    %s: %d breaks in the second held (hole drawn = the LAST one's, from the first)" % [way, held])
+		var cells := BrickTerrain.get_edit_count() - edits0
+		var tiles_n := 0
+		var deep_n := 0
+		var parts := {}
+		for ed: Dictionary in edit_log:
+			tiles_n += (ed.get("want", {}) as Dictionary).size()
+			deep_n += (ed.get("deep", {}) as Dictionary).size()
+			for p in ed.parts:
+				parts[p] = float(parts.get(p, 0.0)) + float(ed.parts[p])
+		var pp: Array[String] = []
+		for p in parts:
+			if float(parts[p]) >= 0.05:
+				pp.append("%s %.1f" % [p, parts[p]])
+		var line := "%-13s ok %s, %d edit(s), %d field edits, %d tile(s) %d deep: landed %.0f ms, hole drawn %.0f ms; frames %d, worst %.1f ms, %d over 25 | terrain_edited: %s" % [
+				way, ok, edit_log.size(), cells, tiles_n, deep_n, landed, seen, frames, worst, slow,
+				", ".join(pp) if not pp.is_empty() else "-"]
+		print("[multibreak] " + line)
+		if slow > 0:
+			print("[multibreak]    slowest: %s" % _slow_last)
+		for ed: Dictionary in edit_log:
+			var dr := -1.0
+			print("[multibreak]    edit +%.0f ms, %d tiles, by %s" % [(int(ed.t) - t0) / 1000.0,
+					(ed.get("want", {}) as Dictionary).size(), ed.who])
+		summary.append(line)
+		if collapse != null:
+			for f in 120:
+				if not collapse.busy():
+					break
+				await get_tree().process_frame
+	edit_log_on = false
+	print("[multibreak] done")
+	get_tree().quit()
+
+
 func _run_mega_gate() -> void:
 	await _frames(30)
 	set_on_foot(false)

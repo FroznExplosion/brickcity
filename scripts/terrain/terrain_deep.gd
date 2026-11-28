@@ -370,7 +370,7 @@ func _held(k: Vector3i, who = null) -> bool:
 	if h == null:
 		return false
 	for o in h:
-		if o != who:
+		if not TerrainStreamer._owns(o, who):
 			return true
 	return false
 
@@ -383,8 +383,8 @@ func _sec_ready(k: Vector3i, who = null) -> bool:
 		return true
 	if _held(k, who):
 		return false
-	if who != null and _holds.has(k) and (_holds[k] as Dictionary).has(who):
-		var need := int(_holds[k][who])
+	var need := TerrainStreamer._own_need(_holds.get(k), who)
+	if need >= 0:
 		if int(drawn_gen.get(k, -1)) >= need:
 			return true
 		return _swaps.has(k) and int(_swap_gen.get(k, -1)) >= need

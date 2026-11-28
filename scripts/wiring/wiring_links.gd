@@ -76,14 +76,43 @@ static func use(w, c: Vector3i, d: Dictionary, how: String) -> bool:
 ## itself on for ever.
 static func read(w, c: Vector3i, d: Dictionary) -> int:
 	var lvl := 0
+	var own := _own_receivers(w, int(d.setting))
 	for s in SIDES:
 		for id in w.side_nets(c, s):
-			lvl = maxi(lvl, int(w.nets[id].level))
+			lvl = maxi(lvl, int(w.nets[id].level) if own.is_empty() else net_level_without(w, id, own))
 		for n in w.side_devices(c, s):
 			var nd: Dictionary = w.devices[n]
 			if kind(nd.item) == "receiver" and int(nd.setting) == int(d.setting):
 				continue
 			lvl = maxi(lvl, int(w.output_toward(n, -s)))
+	return lvl
+
+
+## The receivers on a channel.
+static func _own_receivers(w, setting: int) -> Dictionary:
+	var out := {}
+	for n in w.devices:
+		var nd: Dictionary = w.devices[n]
+		if kind(nd.item) == "receiver" and int(nd.setting) == setting:
+			out[n] = true
+	return out
+
+
+## A net's level with the devices in `skip` left out: what a transmitter
+## reads from a wire its own channel's receivers also drive -- or a receiver
+## wired back to its transmitter would hold itself on for ever.
+static func net_level_without(w, id: int, skip: Dictionary) -> int:
+	var lvl := 0
+	for n in w.devices:
+		if skip.has(n):
+			continue
+		var o := int(w.devices[n].out)
+		if o <= lvl:
+			continue
+		for s in w._drive_sides(n):
+			if w.side_nets(n, s).has(id):
+				lvl = o
+				break
 	return lvl
 
 
@@ -199,11 +228,18 @@ static func links(w, c: Vector3i, out: Array[Vector3i]) -> void:
 
 
 ## The nets of the wire bricks at side `s` of a device `h` plates tall at `c`.
-static func side_nets(w, c: Vector3i, s: Vector3i, h: int, out: Array) -> void:
+## With `under`, also the wire brick it stands on (its top plate right under
+## `c`): a lever on a wire wall drives it, a lamp on one is lit by it. Gates
+## and observers never take it -- their inputs and output have sides.
+static func side_nets(w, c: Vector3i, s: Vector3i, h: int, out: Array, under := false) -> void:
 	for dy in h:
 		var k := key(c + s + Vector3i(0, dy, 0))
 		if w.wires.has(k) and w.net_of.has(k) and not out.has(w.net_of[k]):
 			out.append(w.net_of[k])
+	if under:
+		var u := key(c + Vector3i.DOWN)
+		if u.y + COURSE == c.y and w.wires.has(u) and w.net_of.has(u) and not out.has(w.net_of[u]):
+			out.append(w.net_of[u])
 
 
 ## Every wire brick's copper band: dull, or glowing while its net is on.
