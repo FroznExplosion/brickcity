@@ -29,9 +29,16 @@ extends RefCounted
 ##             alarm. A real ground edit there: the alarm sounds and calls the
 ##             zombie 8 m off, which walks toward the alarm, not the player
 ##             (25 m the other way).
+##   sensors   (section 28) a motion sensor lights its lamp while the player
+##             stands in front, and a zombie walking into view sets off the
+##             arrow shooter beside it; a light sensor reads >= 12 at noon on
+##             a number display, less under a roof, 0 at midnight; water poured
+##             in front of a fluid sensor lights its lamp; a button pressed 3
+##             times through a counter flashes its lamp on the third only.
 ##   save      generated again: the gun still in the dispenser, the release
 ##             bricks holding, the alarm there.
-##   pictures  user://dev/wiring_traps.png, wiring_bridge_fell.png.
+##   pictures  user://dev/wiring_traps.png, wiring_bridge.png,
+##             wiring_bridge_fell.png, wiring_sensors.png.
 
 var g = null   # the wiring gate: check, _hold, _picture, w
 var w: Node = null
@@ -258,6 +265,119 @@ func run(gate) -> void:
 	g.check("the pulse over: the alarm quiet", not bool(wr.devices[al].on))
 	if zombie != null and is_instance_valid(zombie) and zombie.pawn != null:
 		zombie.pawn.health.apply_impact(1000.0, &"")
+
+	# --- sensors and the counter (Docs/MineWiring.md 28), x0+2..12, z0+24..31
+	var zs := z0 + 24
+	# Motion sensor facing +z, a lamp at its left, a shooter of arrows at its
+	# right facing the same way: what walks into view lights the lamp and
+	# takes an arrow.
+	var ms := Vector3i(x0 + 4, y, zs)
+	wr.place_device(ms, &"motion_sensor", false, false, 2)
+	var mlamp := Vector3i(x0 + 5, y, zs)
+	wr.place_device(mlamp, &"lamp")
+	var mshoot := Vector3i(x0 + 3, y, zs)
+	wr.place_device(mshoot, &"dispenser", false, false, 2)
+	wr.devices[mshoot].slots[0] = ItemStack.make(&"arrow", 8)
+	w._fly_to(Vector3((x0 + 4.5) * stud, y * plate + 1.5, (zs - 8.0) * stud), Vector3(0, 0, 1))
+	await w._frames(20)
+	g.check("motion sensor: nobody in front, the lamp dark", not wr.is_lit(mlamp) and wr.output_of(ms) == 0)
+	w._fly_to(Vector3((x0 + 4.5) * stud, y * plate, (zs + 3.5) * stud), Vector3(0, 0, -1))
+	await w._frames(16)
+	g.check("the player walks in front of it: the lamp lit (%d)" % wr.output_of(ms), wr.is_lit(mlamp))
+	w._fly_to(Vector3((x0 + 4.5) * stud, y * plate + 1.5, (zs - 8.0) * stud), Vector3(0, 0, 1))
+	var dark := false
+	for i in 40:   # its hold is 5 ticks, the lamp a tick after
+		await w._frames(3)
+		if not wr.is_lit(mlamp):
+			dark = true
+			break
+	g.check("gone: dark again", dark)
+	var mz = null
+	var fired0 := int(wr.devices[mshoot].get("fired", 0))
+	if w.mobs != null:
+		mz = w.mobs.spawn_zombie(Vector3((x0 + 3.5) * stud, y * plate, (zs + 5.5) * stud))
+	var seen_z := false
+	for i in 40:
+		await w._frames(3)
+		seen_z = seen_z or wr.output_of(ms) > 0
+		if seen_z and int(wr.devices[mshoot].get("fired", 0)) > fired0:
+			break
+	g.check("a zombie walking into view: seen, and the shooter beside it fired (%d arrow)" % (int(wr.devices[mshoot].get("fired", 0)) - fired0),
+			seen_z and int(wr.devices[mshoot].get("fired", 0)) > fired0)
+	await w._frames(20)
+	if mz != null and is_instance_valid(mz) and mz.pawn != null and not mz.dead:
+		mz.pawn.health.apply_impact(1000.0, &"")
+	# Light sensor -> number display, at noon, under a roof, at night.
+	var ls := Vector3i(x0 + 8, y, zs)
+	wr.place_device(ls, &"light_sensor")
+	var lsdisp := Vector3i(x0 + 9, y, zs)
+	wr.place_device(lsdisp, &"number_display", false, false, 3)
+	var t0: float = w._time
+	w._time = 0.5
+	await w._frames(30)
+	var noon: int = wr.output_of(ls)
+	g.check("light sensor at noon under the open sky: %d (the display shows %d)" % [noon, wr.output_of(lsdisp)],
+			noon >= 12 and wr.output_of(lsdisp) == noon)
+	# A second light sensor in a closed room: walls two courses high and ONE
+	# placed brick as its roof (loose roof bricks would fall to the collapse).
+	var ls2 := Vector3i(x0 + 13, y, zs + 3)
+	wr.place_device(ls2, &"light_sensor")
+	var rlo := Vector3i(x0 + 11, y, zs + 1)
+	var rhi := Vector3i(x0 + 15, y + 5, zs + 5)
+	for bx2 in [[rlo, Vector3i(rhi.x, rhi.y, rlo.z)], [Vector3i(rlo.x, rlo.y, rhi.z), rhi],
+			[rlo, Vector3i(rlo.x, rhi.y, rhi.z)], [Vector3i(rhi.x, rlo.y, rlo.z), rhi]]:
+		w.terrain_edited(BrickTerrain.fill_box(bx2[0], bx2[1], BrickTerrain.MAT_STONE, false))
+	var roof_lo := Vector3i(rlo.x, y + 6, rlo.z)
+	var roof_hi := Vector3i(rhi.x, y + 8, rhi.z)
+	var rres: Dictionary = BrickTerrain.fill_box(roof_lo, roof_hi, BrickTerrain.MAT_STONE, true)
+	BrickTerrain.mark_placed(roof_lo, roof_hi, BrickTerrain.MAT_STONE)
+	w.terrain_edited(rres)
+	var roofed := noon
+	for i in 100:   # the sky level is read from the rebaked tile: a few seconds
+		await w._frames(3)
+		roofed = wr.output_of(ls2)
+		if roofed < noon and roofed >= 0 and wr.devices.has(ls2):
+			break
+	g.check("one in a closed room: darker (%d against %d outside)" % [roofed, noon], wr.devices.has(ls2) and roofed < noon)
+	w._time = 0.0
+	await w._frames(80)   # it looks again every LIGHT_EVERY ticks (1 s)
+	g.check("midnight: 0 (%d)" % wr.output_of(ls), wr.output_of(ls) == 0)
+	w._time = t0
+	# Fluid sensor facing +z, a lamp at its side; water poured in front.
+	var fsn := Vector3i(x0 + 2, y, zs + 4)
+	wr.place_device(fsn, &"fluid_sensor", false, false, 2)
+	var flamp := Vector3i(x0 + 1, y, zs + 4)
+	wr.place_device(flamp, &"lamp")
+	await w._frames(16)
+	g.check("fluid sensor: dry in front, dark", not wr.is_lit(flamp))
+	BrickFluid.place(Vector3i(x0 + 2, floori(y / 3.0), zs + 5), 1, BrickFluid.STILL, 3)
+	var wet := 0
+	for i in 30:
+		await w._frames(3)
+		wet = wr.output_of(fsn)
+		if wet > 0 and wr.is_lit(flamp):
+			break
+	g.check("water poured in front: %d, the lamp lit" % wet, wet > 0 and wr.is_lit(flamp))
+	# Counter (N = 3): a button at its back, a lamp at its front.
+	var cnt := Vector3i(x0 + 8, y, zs + 4)
+	wr.place_device(cnt, &"counter", false, false, 2)
+	var cbtn := Vector3i(x0 + 8, y, zs + 3)
+	wr.place_device(cbtn, &"button")
+	var clamp_ := Vector3i(x0 + 8, y, zs + 5)
+	wr.place_device(clamp_, &"lamp")
+	await w._frames(14)
+	var lit := ""
+	for k in 3:
+		wr.use_device(cbtn)
+		var any := false
+		for i in 12:
+			await w._frames(2)
+			any = any or wr.is_lit(clamp_)
+		lit += "1" if any else "0"
+		for i in 30:   # the button is on for a second: let it go off
+			await w._frames(2)
+	g.check("the button pressed 3 times through a counter: its lamp flashes on the third only (%s)" % lit, lit == "001")
+	await g._picture(Vector3((x0 + 6) * stud, y * plate, (zs + 2) * stud), Vector3(-2.5, 2.8, -4.0), "wiring_sensors.png")
 
 	# --- release bricks under a bridge, a trip string on the way to it
 	var xb := x0 + 14

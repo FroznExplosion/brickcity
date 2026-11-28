@@ -403,6 +403,18 @@ static func _model(d: Dictionary) -> Node3D:
 				_part(inner, _cyl(0.18, 0.18, 0.15), _mat(col, 0.5), Vector3(0, 0.97, 0))
 				_part(inner, _box(Vector3(0.63, 0.22, 0.63)), _mat(Color(0.1, 0.1, 0.11), 0.6), Vector3(0, 0.45, 0))
 				_part(inner, _box(Vector3(0.65, 0.06, 0.65)), _mat(Color(1.0, 0.4, 0.15), 0.4, 1.0, true), Vector3(0, 0.45, 0))
+			elif dm == "motion" or dm == "fluidsense":
+				# A block with a lens (motion) or a window (fluid) on its front (+x).
+				_part(inner, _box(Vector3(0.8, 0.8, 0.8)), _mat(col, 0.6), Vector3(0, 0.4, 0))
+				if dm == "motion":
+					_part(inner, _cyl(0.22, 0.22, 0.04), _mat(Color(0.05, 0.05, 0.06), 0.15), Vector3(0.41, 0.45, 0),
+							Basis(Vector3.BACK, PI * 0.5))
+					_part(inner, _box(Vector3(0.04, 0.1, 0.1)), _mat(Color(0.95, 0.15, 0.1), 0.2, 1.0, true), Vector3(0.43, 0.45, 0))
+				else:
+					_part(inner, _box(Vector3(0.04, 0.3, 0.5)), _mat(Color(0.2, 0.5, 1.0), 0.2, 1.0, true), Vector3(0.41, 0.3, 0))
+			elif dm == "lightsense":
+				_part(inner, _box(Vector3(1.0, 0.22, 1.0)), _mat(Color(0.22, 0.2, 0.18), 0.6), Vector3(0, 0.11, 0))
+				_part(inner, _box(Vector3(0.8, 0.06, 0.8)), _mat(col, 0.2, 1.0, true), Vector3(0, 0.25, 0))
 			elif dm == "alarm":
 				_part(inner, _box(Vector3(0.9, 0.5, 0.9)), _mat(Color(0.2, 0.2, 0.22), 0.6), Vector3(0, 0.25, 0))
 				_part(inner, _cyl(0.3, 0.36, 0.45), _mat(col, 0.25, 1.0, true), Vector3(0, 0.72, 0))

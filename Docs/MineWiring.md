@@ -1131,6 +1131,51 @@ ok, `wiring_traps_probe` 49 ok, `inventory_probe` 164 ok, `-- --gate=wiring`
 alone). The gaps section starts flying (the save section before it ends on
 foot) on a patch of its own 60 studs west of the eye.
 
+## 28. Sensors and the counter, built (2026-11-27)
+
+The user, after stage 7: sensors first (before generated traps, hydraulics,
+placer and breaker). The traps so far could only be set off by a pressure tile,
+a trip string or an observer. Code in `scripts/wiring/wiring_traps.gd` with the
+traps kit (section 19); MineWiring has them in DEVICES and three one-line hooks
+(RMB, the counter's `_gate_next` and RMB step).
+
+| Device | Size | Gives | Does |
+|---|---|---|---|
+| motion sensor | 1 stud, a brick, faces | 15 out of every side | a body's feet (the player, a creature: the bodies the pressure tiles use, section 21) in the box in front: 1..reach studs out, a stud to each side, from a little under its feet to 1.2 m over them; the reach stops at the first solid stud in front (walls hide). RMB: reach 6, 10, 3 studs. Holds 5 ticks after the last body leaves. |
+| light sensor | 1 stud, a plate | a LEVEL 0-15, every side | the sky light over it (`BrickTerrain.sky_light_at`, how open it is to the sky) times the daylight from the mine world's hour (the sun's height, the same curve as the sky), rounded. RMB: a night sensor (15 minus). Looks again every 10 ticks. |
+| fluid sensor | 1 stud, a brick, faces | a level, every side | the water or lava in the stud in front, its course (`BrickFluid.cell_info`), 5 a tile, so 5/10/15. RMB: any, water only, lava only. Looks again every 5 ticks. |
+| counter | a gate, faces | 15 out of its front for 5 ticks | its back turning on counts; at N (RMB: 2..10, default 3) it pulses and starts again; its right side turning on sets the count to 0. Count and N saved. |
+
+- **Levels are real.** The light and fluid sensors give a level, not just on or
+  off: a number display shows it, and anything that reads "above 0" (a lamp, a
+  door, a shooter) reacts to any light or any fluid. Comparing levels (only at
+  10 or more) needs a comparator gate: not built.
+- **Always live.** A sensor keeps its timer above 0, so the wiring's tick keeps
+  running while one is placed (section 14's "only what changes runs" does not
+  hold for them). A motion sensor checks every tick (the bodies are a short
+  list); the light and fluid sensors every 10 and 5 ticks.
+- **Traps it makes:** a motion sensor beside an arrow shooter (an arrow wall
+  with nothing on the floor to spot); a night sensor turning on lamps over a
+  pressure-tile path (section 8's lamp lure); a fluid sensor at the bottom of a
+  room that shuts its doors as it fills; a counter that lets two people over a
+  release-brick bridge and drops the third.
+- **Disarmed** like the rest: shoot the sensor, cut its wire, or walk round the
+  motion sensor's box (it sees only in front, 3 studs wide).
+
+Not yet: a comparator (level against a setting), a sensor that tells the player
+from a creature, a counter's level output (its count as a level).
+
+Tests: `wiring_traps_probe` 90 ok (the motion sensor's box: in front yes,
+behind / beside / past its reach / past a wall no, the longer reach, the hold,
+a lamp beside it; the light sensor's 15 / 0 / 8 and night 7; the fluid sensor's
+10, water-only, lava-only 0, lava 15; the counter's 001, its short pulse, the
+reset, RMB's N, all saved). `--gate=wiring` sensors section in the real world:
+the player in front of a motion sensor lights its lamp, a zombie walking into
+view sets off the arrow shooter beside it; a light sensor reads 12 or more at
+noon on a number display, less under a roof, 0 at midnight; water poured in
+front of a fluid sensor lights its lamp; a button pressed three times through
+a counter flashes its lamp on the third only. Picture `user://dev/wiring_sensors.png`.
+
 ## Sources
 
 - Minecraft quasi-connectivity: <https://techmcdocs.github.io/pages/GameMechanics/QuasiConnectivity>,
